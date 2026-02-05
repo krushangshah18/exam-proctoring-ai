@@ -19,3 +19,6 @@ server/storage/evidence/*
 # OS files
 .DS_Store
 Thumbs.db
+
+#logs
+logs/
