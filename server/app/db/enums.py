@@ -49,3 +49,8 @@ class LateJoinPolicy(str, enum.Enum):
 class ModelVerdict(str, enum.Enum):
     PASS = "PASS"
     FAIL = "FAIL"
+
+class ApplicationStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"

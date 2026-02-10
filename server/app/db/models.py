@@ -23,7 +23,42 @@ class User(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     is_active = Column(Boolean, default=True)
     last_login = Column(DateTime)
 
+    last_profile_image_update = Column(DateTime, nullable=True)
+
+
     sessions = relationship("ExamSession", back_populates="user")
+
+
+class RefreshToken(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "refresh_tokens"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+
+    token = Column(Text, unique=True, nullable=False)
+
+    expires_at = Column(DateTime, nullable=False)
+
+    revoked = Column(Boolean, default=False)
+
+    user = relationship("User")
+
+
+class PasswordResetToken(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "password_reset_tokens"
+
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False
+    )
+
+    token_hash = Column(Text, nullable=False)
+
+    expires_at = Column(DateTime, nullable=False)
+
+    used = Column(Boolean, default=False)
+
+    user = relationship("User")
 
 
 class Exam(UUIDMixin, TimestampMixin, Base):
@@ -215,3 +250,34 @@ class ModelVerification(UUIDMixin, TimestampMixin, Base):
     verdict = Column(String, default=ModelVerdict.PASS.value, nullable=False)
 
     violation = relationship("Violation", back_populates="model_verifications")
+
+
+class AdminApplication(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "admin_applications"
+
+    full_name = Column(String, nullable=False)
+    email = Column(String, nullable=False, index=True)
+
+    organization = Column(String)
+    contact_number = Column(String)
+
+    reason = Column(Text, nullable=False)
+
+    status = Column(
+        String,
+        default=ApplicationStatus.PENDING.value,
+        nullable=False
+    )
+
+    reviewed_by = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=True
+    )
+
+    review_note = Column(Text)
+
+    approved_at = Column(DateTime)
+    rejected_at = Column(DateTime)
+
+    reviewer = relationship("User", foreign_keys=[reviewed_by])
