@@ -9,10 +9,9 @@ from app.auth.schemas import (
     AdminReviewRequest,
 )
 from app.auth.dependencies import get_current_user, require_role
-from app.db.enums import ApplicationStatus, UserRole
-from app.core import log
+from app.db.enums import ApplicationStatus, UserRole, SessionStatus
+from app.core import log, rate_limit, send_email 
 from app.auth.security import hash_password
-from app.core import send_email
 
 router = APIRouter(
     prefix="/admin-applications",
@@ -20,6 +19,7 @@ router = APIRouter(
 )
 
 @router.post("/apply", status_code=201)
+@rate_limit("admin_apply", 2, 3600)
 def apply_admin(
     data: AdminApplyRequest,
     request: Request,
@@ -265,3 +265,133 @@ def review_application(
 
     return {"message": "Review completed"}
 
+
+
+@router.get("/exams/active")
+def get_active_exams(
+    db: Session = Depends(get_db),
+    admin=Depends(require_role(UserRole.SYSADMIN))
+):
+    """
+    View all active exam sessions
+    """
+
+    sessions = (
+        db.query(models.ExamSession)
+        .filter(
+            models.ExamSession.status == SessionStatus.ACTIVE.value
+        )
+        .all()
+    )
+
+    return [
+        {
+            "session_id": str(s.id),
+            "user_id": str(s.user_id),
+            "exam_id": s.exam_id,
+            "device": s.device_fingerprint,
+            "started_at": s.started_at,
+            "ip": s.ip_address
+        }
+        for s in sessions
+    ]
+
+
+@router.post("/devices/revoke/{device_id}")
+def revoke_device(
+    device_id: str,
+    db: Session = Depends(get_db),
+    admin=Depends(require_role(UserRole.SYSADMIN))
+):
+    device = (
+        db.query(models.UserDevice)
+        .filter(models.UserDevice.id == device_id)
+        .first()
+    )
+
+    if not device:
+        raise HTTPException(404, "Device not found")
+
+    device.revoked = True
+    device.trusted = False
+    device.pending = False
+
+    db.commit()
+
+    return {"message": "Device revoked"}
+
+
+@router.post("/users/unlock/{user_id}")
+def admin_unlock_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    admin=Depends(require_role(UserRole.SYSADMIN))
+):
+
+    user = (
+        db.query(models.User)
+        .filter(models.User.id == user_id)
+        .first()
+    )
+
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.unlock_requests = 0
+
+    db.commit()
+
+    return {"message": "User unlocked"}
+
+
+@router.post("/exams/kill/{session_id}")
+def kill_exam_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    admin=Depends(require_role(UserRole.SYSADMIN))
+):
+    """
+    Force terminate exam session
+    """
+
+    session = (
+        db.query(models.ExamSession)
+        .filter(models.ExamSession.id == session_id)
+        .first()
+    )
+
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    # End session
+    session.status = SessionStatus.TERMINATED.value
+    session.ended_at = datetime.now()
+
+    # Revoke device
+    device = (
+        db.query(models.UserDevice)
+        .filter(
+            models.UserDevice.user_id == session.user_id,
+            models.UserDevice.fingerprint == session.device_fingerprint
+        )
+        .first()
+    )
+
+    if device:
+        device.revoked = True
+        device.trusted = False
+
+    # Revoke refresh tokens
+    db.query(models.RefreshToken).filter(
+        models.RefreshToken.user_id == session.user_id,
+        models.RefreshToken.device_fingerprint == session.device_fingerprint
+    ).update({"revoked": True})
+
+    db.commit()
+
+    return {
+        "message": "Session terminated",
+        "session_id": session_id
+    }

@@ -1,6 +1,8 @@
 # Pydantic models
 from pydantic import BaseModel, EmailStr, Field
 from fastapi import Form
+from datetime import datetime
+from uuid import UUID
 
 # BASE USER SCHEMAS
 class UserBase(BaseModel):
@@ -16,21 +18,26 @@ class UserCreate(UserBase):
     )
 
 class UserStudentCreate(UserCreate):
+    consent: bool
     @classmethod
     def as_form(
         cls,
         email: EmailStr = Form(...),
         full_name: str = Form(...),
         password: str = Form(...),
+        consent: bool = Form(...)
     ):
         return cls(
             email=email,
             full_name=full_name,
             password=password,
+            consent=consent
         )
 
 class UserAdminCreate(UserCreate):
-    pass
+    consent: bool
+
+
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -89,3 +96,50 @@ class AdminApplicationOut(BaseModel):
 
 class UpdateProfile(BaseModel):
     full_name: str = Field(..., min_length=2, max_length=100)
+
+
+class UnlockVerifyRequest(BaseModel):
+    email: EmailStr
+    otp: str
+
+
+# Device OTP
+
+class DeviceVerifyRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(..., min_length=6, max_length=6)
+
+
+class DeviceVerifyResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+
+class LoginOTPResponse(BaseModel):
+    otp_required: bool = True
+    message: str
+
+
+class LoginSuccessResponse(TokenResponse):
+    pass
+
+
+LoginResponse = LoginSuccessResponse | LoginOTPResponse
+
+
+class DeviceOut(BaseModel):
+    id: UUID
+    fingerprint: str
+    trusted: bool
+    pending: bool
+    revoked: bool
+
+    last_seen: datetime | None
+    ip_address: str | None
+    user_agent: str | None
+    created_at: datetime
+
+    class Config:
+        orm_mode = True

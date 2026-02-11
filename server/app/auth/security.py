@@ -43,7 +43,6 @@ def create_access_token(data, expires_delta = None):
     Create short-lived access token.
     """
     to_encode = data.copy()
-
     expire = datetime.now() + (
         expires_delta
         if expires_delta
@@ -61,10 +60,11 @@ def create_access_token(data, expires_delta = None):
     log.debug("Access token created")
     return token
 
-def create_refresh_token(user_id, db):
+def create_refresh_token(user_id, device_fingerprint, db):
     """
     Create and persist refresh token.
     """
+
     expire = datetime.now() + timedelta(
         days=settings.REFRESH_TOKEN_EXPIRE_DAYS
     )
@@ -74,11 +74,13 @@ def create_refresh_token(user_id, db):
     refresh = models.RefreshToken(
         user_id=user_id,
         token=token,
-        expires_at=expire
+        device_fingerprint=device_fingerprint,
+        expires_at=expire,
+        revoked=False
     )
 
     db.add(refresh)
-    db.commit()
+    db.flush()
 
     log.debug("Refresh token created")
     return token

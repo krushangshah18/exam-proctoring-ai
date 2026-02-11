@@ -1,4 +1,4 @@
-from sqlalchemy import (Column, Integer, String, Boolean, Text, Float, ForeignKey, DateTime, JSON)
+from sqlalchemy import (Column, Integer, String, Boolean, Text, Float, ForeignKey, DateTime, JSON, Index)
 from sqlalchemy.dialects.postgresql import UUID, INET
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -25,6 +25,15 @@ class User(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
 
     last_profile_image_update = Column(DateTime, nullable=True)
 
+    # Security
+    failed_login_attempts = Column(Integer, default=0,nullable=False)
+    locked_until = Column(DateTime, nullable=True)
+    unlock_requests = Column(Integer, default=0, nullable=False)
+
+    # Privacy / Consent
+    consent_given = Column(Boolean, default=False)
+    consent_at = Column(DateTime)
+    privacy_version = Column(String, default="v1.0-2026")
 
     sessions = relationship("ExamSession", back_populates="user")
 
@@ -35,6 +44,8 @@ class RefreshToken(UUIDMixin, TimestampMixin, Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
     token = Column(Text, unique=True, nullable=False)
+
+    device_fingerprint = Column(String, nullable=False)
 
     expires_at = Column(DateTime, nullable=False)
 
@@ -119,6 +130,11 @@ class ExamSession(UUIDMixin, TimestampMixin, Base):
 
     terminated_reason = Column(Text)
     terminated_by = Column(String)
+
+    device_fingerprint = Column(String, nullable=False)
+    ip_address = Column(String)
+    user_agent = Column(Text)
+
 
     user = relationship("User", back_populates="sessions")
     exam = relationship("Exam", back_populates="sessions")
@@ -281,3 +297,46 @@ class AdminApplication(UUIDMixin, TimestampMixin, Base):
     rejected_at = Column(DateTime)
 
     reviewer = relationship("User", foreign_keys=[reviewed_by])
+
+
+# class AccountUnlockToken(UUIDMixin, TimestampMixin, Base):
+#     __tablename__ = "account_unlock_tokens"
+
+#     user_id = Column(
+#         UUID(as_uuid=True),
+#         ForeignKey("users.id"),
+#         nullable=False
+#     )
+
+#     otp_hash = Column(String, nullable=False)
+
+#     expires_at = Column(DateTime, nullable=False)
+
+#     used = Column(Boolean, default=False)
+
+#     attempts = Column(Integer, default=0)
+
+#     user = relationship("User")
+
+
+
+class UserDevice(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "user_devices"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+
+    fingerprint = Column(Text, nullable=False)
+    user_agent = Column(Text)
+    ip_address = Column(INET)
+
+    last_seen = Column(DateTime)
+
+    trusted = Column(Boolean, default=False)
+    pending = Column(Boolean, default=True)
+    revoked = Column(Boolean, default=False)
+
+    user = relationship("User")
+    __table_args__ = (
+        Index("idx_user_device_user", "user_id"),
+        Index("idx_user_device_fp", "fingerprint"),
+    )

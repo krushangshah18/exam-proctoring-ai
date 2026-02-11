@@ -1,23 +1,32 @@
 # API endpoints
 import hashlib
-from datetime import datetime
+from pydantic import EmailStr
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File
 from sqlalchemy.orm import Session
 
+from app.core.device_otp import store_device_otp, verify_device_otp
+from app.core.otp import(generate_otp, store_otp, verify_otp)
 from app.db import get_db
 from app.db import models
 from app.db.enums import UserRole, SessionStatus
 
 from app.auth.schemas import (
     UserAdminCreate,
+    UnlockVerifyRequest,
+    DeviceOut,
     UpdateProfile,
     UserLogin,
     TokenResponse,
+    LoginResponse,
+    LoginOTPResponse,
     ChangePassword,
     RefreshRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
-    UserStudentCreate
+    UserStudentCreate,
+    DeviceVerifyRequest, 
+    DeviceVerifyResponse
 )
 
 from app.auth.security import (
@@ -31,7 +40,7 @@ from app.auth.service import(
     create_reset_token,
     send_reset_email
 )
-from app.core import log, load_image, validate_single_face, generate_embedding, save_profile_image, can_update_profile_image, verify_same_person
+from app.core import log, settings, generate_fingerprint, rate_limit, send_email, validate_single_face, generate_embedding, save_profile_image, can_update_profile_image, verify_same_person
 from app.auth.dependencies import (get_current_user,require_role)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -93,6 +102,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 #     }
 
 @router.post("/register/student",status_code=status.HTTP_201_CREATED)
+@rate_limit("register_student", limit=3, window=600)
 async def register_student(
     request: Request,
     user: UserStudentCreate = Depends(UserStudentCreate.as_form),
@@ -129,7 +139,13 @@ async def register_student(
         db.commit()
 
         return {"message": "Account reactivated"}
-
+    
+    #Consent in Registration
+    if not user.consent:
+        raise HTTPException(
+            status_code=400,
+            detail="You must accept privacy policy"
+        )
 
     # Read image
     data = await selfie.read()
@@ -170,6 +186,10 @@ async def register_student(
         role=UserRole.STUDENT.value,
         is_active=True,
         face_embedding=embedding,
+        consent_given=True,
+        consent_at=datetime.now(),
+        privacy_version="v1.0-2026"
+
     )
 
     db.add(new_user)
@@ -193,7 +213,8 @@ async def register_student(
 
 
 # LOGIN
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=LoginResponse)
+@rate_limit("login", limit=3, window=60)
 def login_user(data: UserLogin, request: Request, db: Session = Depends(get_db)):
     """
     Authenticate user and return tokens.
@@ -203,7 +224,8 @@ def login_user(data: UserLogin, request: Request, db: Session = Depends(get_db))
     user = (
         db.query(models.User)
         .filter(models.User.email == data.email,
-                models.User.is_active == True
+                models.User.is_active == True,
+                models.User.deleted_at.is_(None),
         )
         .first()
     )
@@ -219,11 +241,19 @@ def login_user(data: UserLogin, request: Request, db: Session = Depends(get_db))
             status_code=401,
             detail="Invalid credentials"
         )
+    
+    now = datetime.now()
+    if user.locked_until and user.locked_until > now:
+        raise HTTPException(
+            status_code=403,
+            detail="Account locked. Try again later."
+        )
+
 
     if not verify_password(
         data.password,
         user.password_hash
-    ):
+        ):
 
         log.warning(
             "Login failed: bad password (%s) ip=%s",
@@ -231,21 +261,166 @@ def login_user(data: UserLogin, request: Request, db: Session = Depends(get_db))
             ip
         )
 
+        user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+        if user.failed_login_attempts >= settings.MAX_LOGIN_ATTEMPTS:
+            user.locked_until = now + timedelta(minutes=settings.ACCOUNT_LOCK_FAILED_LOGIN_MINUTES)
+            user.unlock_requests = 0
+
+            audit = models.AuditLog(
+                actor_id=user.id,
+                action="ACCOUNT_LOCKED",
+                target=f"user:{user.email}",
+                ip_address=request.client.host
+            )
+            db.add(audit)
+            db.commit()
+            send_email(
+            to=user.email,
+            subject="Security Alert: Account Locked",
+            body=f"""
+                Multiple failed login attempts detected.
+
+                Your account is locked for {settings.ACCOUNT_LOCK_FAILED_LOGIN_MINUTES} minutes.
+
+                If this wasn't you, reset your password.
+                """
+                    )
+        db.commit()
+
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials"
         )
+    
+    fingerprint = generate_fingerprint(request)
+    # Always compute active devices first
+    active_devices = (
+        db.query(models.UserDevice)
+        .filter(
+            models.UserDevice.user_id == user.id,
+            models.UserDevice.revoked == False
+        )
+        .count()
+    )
+    log.info(
+        "Login device check user=%s devices=%s fingerprint=%s",
+        user.id,
+        active_devices,
+        fingerprint[:8]
+    )
+    device = (
+        db.query(models.UserDevice)
+        .filter(
+            models.UserDevice.user_id == user.id,
+            models.UserDevice.fingerprint == fingerprint,
+            models.UserDevice.revoked == False
+        )
+        .first()
+    )
+
+
+# ---------------- FIRST DEVICE → AUTO TRUST ----------------
+    if active_devices == 0:
+
+        device = models.UserDevice(
+            user_id=user.id,
+            fingerprint=fingerprint,
+            trusted=True,
+            pending=False,
+            revoked=False,
+            user_agent=request.headers.get("user-agent"),
+            ip_address=request.client.host,
+            last_seen=datetime.now()
+        )
+
+        db.add(device)
+        db.commit()
+
+    # ---------------- EXISTING DEVICE ----------------
+    elif device and not device.pending:
+
+        device.last_seen = datetime.now()
+        db.commit()
+
+    # ---------------- NEW DEVICE → OTP ----------------
+    else:
+        trusted_count = (
+            db.query(models.UserDevice)
+            .filter(
+                models.UserDevice.user_id == user.id,
+                models.UserDevice.trusted == True,
+                models.UserDevice.revoked == False
+            )
+            .count()
+        )
+
+        if trusted_count >= settings.MAX_TRUSTED_DEVICES:
+
+            # revoke oldest
+            old = (
+                db.query(models.UserDevice)
+                .filter(
+                    models.UserDevice.user_id == user.id,
+                    models.UserDevice.trusted == True,
+                    models.UserDevice.revoked == False
+                )
+                .order_by(models.UserDevice.created_at.asc())
+                .first()
+            )
+
+            if old:
+                old.revoked = True
+
+        device = models.UserDevice(
+            user_id=user.id,
+            fingerprint=fingerprint,
+            trusted=False,
+            pending=True,
+            revoked=False,
+            user_agent=request.headers.get("user-agent"),
+            ip_address=request.client.host,
+            last_seen=datetime.now()
+        )
+        db.add(device)
+        db.commit()
+
+
+        otp = generate_otp()
+
+        store_device_otp(
+            user.id,
+            fingerprint,
+            otp
+        )
+
+        send_email(
+            to=user.email,
+            subject="New Device Verification",
+            body=f"""
+        Your login attempt requires verification.
+
+        OTP: {otp}
+
+        Valid for {settings.OTP_EXPIRE_MINUTES} minutes.
+        """
+        )
+
+        return LoginOTPResponse(
+            message="OTP sent to your email"
+        )
 
     access = create_access_token(
-        data={"sub": str(user.id)}
+        data={  "sub": str(user.id),
+                "device": fingerprint
+             }
     )
 
-    refresh = create_refresh_token(
-        user_id=str(user.id),
-        db=db
-    )
+    refresh = create_refresh_token(user_id= user.id, device_fingerprint=fingerprint, db=db)
 
-    user.last_login = datetime.now()
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.last_login = now
+
     db.commit()
 
     log.info(
@@ -305,38 +480,35 @@ def get_me(current_user=Depends(get_current_user)):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-def refresh_token(data: RefreshRequest, db: Session = Depends(get_db)):
+def refresh_token(data: RefreshRequest, request: Request, db: Session = Depends(get_db)):
     """
     Issue new access token using refresh token.
     """
-    token_value = data.refresh_token
+    now = datetime.now()
+    fingerprint = generate_fingerprint(request)
 
     token_obj = (
         db.query(models.RefreshToken)
         .filter(
-            models.RefreshToken.token == token_value,
+            models.RefreshToken.token == data.refresh_token,
             models.RefreshToken.revoked == False
         )
         .first()
     )
 
     if not token_obj:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid refresh token"
-        )
-
-    if token_obj.expires_at < datetime.now():
-        raise HTTPException(
-            status_code=401,
-            detail="Refresh token expired"
-        )
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    if token_obj.expires_at < now:
+        raise HTTPException(status_code=401,detail="Refresh token expired")
+    if token_obj.device_fingerprint != fingerprint:
+        raise HTTPException(403, "Device mismatch")
 
     user = (
         db.query(models.User)
         .filter(
             models.User.id == token_obj.user_id,
-            models.User.is_active == True
+            models.User.is_active == True,
+            models.User.deleted_at.is_(None)
         )
         .first()
     )
@@ -347,17 +519,23 @@ def refresh_token(data: RefreshRequest, db: Session = Depends(get_db)):
             detail="User inactive"
         )
 
+    if user.locked_until and user.locked_until > now:
+        raise HTTPException(403, "Account locked")
+    
+    token_obj.revoked = True
+
     access = create_access_token(
-        data={"sub": str(user.id)}
+        data={"sub": str(user.id),
+              "device": token_obj.device_fingerprint
+              }
     )
 
     refresh = create_refresh_token(
         user_id=str(user.id),
+        device_fingerprint=fingerprint,
         db=db
     )
 
-    # Revoke old
-    token_obj.revoked = True
     db.commit()
 
     return TokenResponse(
@@ -368,6 +546,7 @@ def refresh_token(data: RefreshRequest, db: Session = Depends(get_db)):
 
 #Forgot Password
 @router.post("/forgot-password")
+@rate_limit("forgot", limit=3, window=300)
 def forgot_password(
     data: ForgotPasswordRequest,
     db: Session = Depends(get_db)
@@ -428,6 +607,7 @@ def reset_password(
 
 @router.post("/logout")
 def logout(
+    request: Request,
     data: RefreshRequest,
     db: Session = Depends(get_db),
     user=Depends(get_current_user)
@@ -448,6 +628,19 @@ def logout(
 
     if token:
         token.is_active = False
+
+    device = (
+        db.query(models.UserDevice)
+        .filter(
+            models.UserDevice.user_id == user.id,
+            models.UserDevice.fingerprint == request.state.device_id
+        )
+        .first()
+    )
+
+    if device:
+        device.revoked = True
+
 
     db.commit()
 
@@ -660,3 +853,263 @@ async def update_profile_image(
     return {"message": "Profile image updated successfully"}
 
 
+@router.post("/unlock/request")
+def request_unlock(
+    data: ForgotPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    user = (
+        db.query(models.User)
+        .filter(
+            models.User.email == data.email,
+            models.User.is_active == True
+        )
+        .first()
+    )
+
+    if not user:
+        return {"message": "If account exists, OTP sent"}
+
+    if not user.locked_until:
+        raise HTTPException(400, "Account not locked")
+
+    if user.unlock_requests >= settings.MAX_UNLOCK_REQUESTS:
+        raise HTTPException(
+            403,
+            "Max unlock attempts exceeded. Contact admin."
+        )
+
+    otp = generate_otp()
+    # otp_hash = hash_otp(otp)
+
+    # token = models.AccountUnlockToken(
+    #     user_id=user.id,
+    #     otp_hash=otp_hash,
+    #     expires_at=get_expiry()
+    # )
+    store_otp("unlock", str(user.id), otp)
+
+    # db.add(token)
+    user.unlock_requests += 1
+
+
+    # Audit
+    audit = models.AuditLog(
+        actor_id=user.id,
+        action="UNLOCK_OTP_SENT",
+        target=f"user:{user.id}",
+        ip_address=request.client.host
+    )
+
+    db.add(audit)
+
+    db.commit()
+
+    send_email(
+        to=user.email,
+        subject="Unlock OTP",
+        body=f"""
+            Your OTP: {otp}
+
+            Valid for 10 minutes.
+            """
+        )
+
+    return {"message": "OTP sent"}
+
+
+@router.post("/unlock/verify")
+def verify_unlock(
+    data: UnlockVerifyRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    email, otp = data.email, data.otp
+    user = (
+        db.query(models.User)
+        .filter(
+            models.User.email == email,
+            models.User.is_active == True
+        )
+        .first()
+    )
+
+    if not user:
+        raise HTTPException(400, "Invalid OTP")
+
+    is_valid = verify_otp("unlock", str(user.id), otp)
+
+    if not is_valid:
+        raise HTTPException(400, "Invalid or expired OTP")
+
+    # token = (
+    #     db.query(models.AccountUnlockToken)
+    #     .filter(
+    #         models.AccountUnlockToken.user_id == user.id,
+    #         models.AccountUnlockToken.used == False,
+    #         models.AccountUnlockToken.expires_at > datetime.utcnow()
+    #     )
+    #     .order_by(models.AccountUnlockToken.created_at.desc())
+    #     .first()
+    # )
+
+    # if not token:
+    #     raise HTTPException(400, "OTP expired")
+
+    # if token.attempts >= settings.MAX_OTP_ATTEMPTS:
+    #     raise HTTPException(403, "OTP locked")
+
+    # if not verify_otp(otp, token.otp_hash):
+
+    #     token.attempts += 1
+
+    #     db.commit()
+
+    #     raise HTTPException(400, "Invalid OTP")
+
+    # ---------------- SUCCESS ----------------
+
+    # token.used = True
+
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.unlock_requests = 0
+
+    audit = models.AuditLog(
+        actor_id=user.id,
+        action="ACCOUNT_UNLOCKED",
+        target=f"user:{user.id}",
+        ip_address=request.client.host
+    )
+
+    db.add(audit)
+
+    db.commit()
+
+    return {"message": "Account unlocked"}
+
+
+@router.post(
+    "/device/verify",
+    response_model=DeviceVerifyResponse
+)
+def verify_device(
+    data: DeviceVerifyRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Verify new device via OTP
+    """
+
+    user = (
+        db.query(models.User)
+        .filter(
+            models.User.email == data.email,
+            models.User.is_active == True
+        )
+        .first()
+    )
+
+    if not user:
+        raise HTTPException(400, "Invalid request")
+
+    fingerprint = generate_fingerprint(request)
+
+    if not verify_device_otp(
+        str(user.id),
+        fingerprint,
+        data.otp
+    ):
+        raise HTTPException(400, "Invalid OTP")
+
+    device = (
+        db.query(models.UserDevice)
+        .filter(
+            models.UserDevice.user_id == user.id,
+            models.UserDevice.fingerprint == fingerprint,
+            models.UserDevice.pending == True,
+            models.UserDevice.revoked == False
+        )
+        .first()
+    )
+
+    if not device:
+        raise HTTPException(400, "Device not found")
+
+    # Approve device
+    device.trusted = True
+    device.pending = False
+    device.last_seen = datetime.utcnow()
+
+    # Tokens
+    access = create_access_token(
+        {
+            "sub": str(user.id),
+            "type": "access",
+            "device": fingerprint
+        }
+    )
+
+    refresh = create_refresh_token(user_id= user.id, device_fingerprint=fingerprint, db=db)
+
+    # Audit
+    audit = models.AuditLog(
+        actor_id=user.id,
+        action="DEVICE_VERIFIED",
+        target=f"device:{fingerprint}",
+        ip_address=request.client.host
+    )
+
+    db.add(audit)
+    db.commit()
+
+    return DeviceVerifyResponse(
+        access_token=access,
+        refresh_token=refresh
+    )
+
+
+@router.get("/devices/me", response_model=list[DeviceOut])
+def my_devices(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """
+    Get all active devices for current user
+    """
+
+    devices = (
+        db.query(models.UserDevice)
+        .filter(
+            models.UserDevice.user_id == current_user.id,
+            models.UserDevice.revoked == False
+        )
+        .order_by(models.UserDevice.created_at.desc())
+        .all()
+    )
+
+    return devices
+
+
+@router.get("/devices/user/{user_id}", response_model=list[DeviceOut])
+def get_user_devices(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role(UserRole.SYSADMIN))
+):
+    """
+    Admin: Get devices of any user
+    """
+
+    devices = (
+        db.query(models.UserDevice)
+        .filter(
+            models.UserDevice.user_id == user_id
+        )
+        .order_by(models.UserDevice.created_at.desc())
+        .all()
+    )
+
+    return devices

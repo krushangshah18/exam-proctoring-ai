@@ -24,7 +24,19 @@ class Settings:
     FRONTEND_URL=os.getenv("FRONTEND_URL","http://localhost:3000")
 
     PROFILE_IMAGE_UPDATE_DAYS = int(os.getenv("PROFILE_IMAGE_UPDATE_DAYS", 30))
+    ACCOUNT_LOCK_FAILED_LOGIN_MINUTES = int(os.getenv("ACCOUNT_LOCK_FAILED_LOGIN_MINUTES",15))
 
+    REDIS_HOST=os.getenv("REDIS_HOST","localhost")
+    REDIS_PORT=int(os.getenv("REDIS_PORT",6379))
+    REDIS_DB=int(os.getenv("REDIS_DB",0))
+    REDIS_PASSWORD=os.getenv("REDIS_PASSWORD")
 
+    MAX_LOGIN_ATTEMPTS=int(os.getenv("MAX_LOGIN_ATTEMPTS",5))
+    OTP_EXPIRE_MINUTES=int(os.getenv("OTP_EXPIRE_MINUTES",10))
+    MAX_OTP_ATTEMPTS=int(os.getenv("MAX_OTP_ATTEMPTS",3))
+    MAX_UNLOCK_REQUESTS=int(os.getenv("MAX_UNLOCK_REQUESTS",2))
+    OTP_SECRET=os.getenv("OTP_SECRET")
+
+    MAX_TRUSTED_DEVICES=int(os.getenv("MAX_TRUSTED_DEVICES",3))
 
 settings = Settings()
