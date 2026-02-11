@@ -14,8 +14,16 @@ dist/
 
 # Evidence storage (do not commit private files)
 server/storage/evidence/*
+server/storage/profiles/*
 !server/storage/evidence/.gitkeep
 
 # OS files
 .DS_Store
 Thumbs.db
+
+#logs
+logs/
+
+Proctoring_Brand_and_Design.md
+Proctoring_System_Guidelines_And_Features.md
+Proctoring_System_DB_Design.md
