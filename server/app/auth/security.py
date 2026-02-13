@@ -8,7 +8,6 @@ This file will handle:
 """
 
 from datetime import datetime, timedelta
-from fastapi import HTTPException, status
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -104,9 +103,4 @@ def decode_token(token):
 
     except JWTError as e:
         log.warning("Invalid JWT token: %s", str(e))
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
+        raise ValueError("Invalid or expired token")

@@ -15,7 +15,6 @@ from app.auth.schemas import (
     UserAdminCreate,
     UnlockVerifyRequest,
     DeviceOut,
-    DeviceRevokeResponse,
     UpdateProfile,
     UserLogin,
     TokenResponse,
@@ -294,66 +293,6 @@ def login_user(data: UserLogin, request: Request, db: Session = Depends(get_db))
         )
     
     fingerprint = generate_fingerprint(request)
-
-
-    # ---------------- ADMIN / SYSADMIN BYPASS ----------------
-    if user.role in [UserRole.ADMIN.value, UserRole.SYSADMIN.value]:
-
-        device = (
-            db.query(models.UserDevice)
-            .filter(
-                models.UserDevice.user_id == user.id,
-                models.UserDevice.fingerprint == fingerprint,
-                models.UserDevice.revoked == False
-            )
-            .first()
-        )
-
-        if not device:
-            device = models.UserDevice(
-                user_id=user.id,
-                fingerprint=fingerprint,
-                trusted=True,
-                pending=False,
-                revoked=False,
-                user_agent=request.headers.get("user-agent"),
-                ip_address=request.client.host,
-                last_seen=now
-            )
-            db.add(device)
-        else:
-            device.last_seen = now
-
-        db.commit()
-
-        # Skip OTP + limits
-        access = create_access_token(
-            data={
-                "sub": str(user.id),
-                "device": fingerprint,
-                "role": user.role
-            }
-        )
-
-        refresh = create_refresh_token(
-            user_id=user.id,
-            device_fingerprint=fingerprint,
-            db=db
-        )
-
-        user.failed_login_attempts = 0
-        user.locked_until = None
-        user.last_login = now
-
-        db.commit()
-
-        return TokenResponse(
-            access_token=access,
-            refresh_token=refresh
-        )
-
-
-
     # Always compute active devices first
     active_devices = (
         db.query(models.UserDevice)
@@ -472,8 +411,7 @@ def login_user(data: UserLogin, request: Request, db: Session = Depends(get_db))
 
     access = create_access_token(
         data={  "sub": str(user.id),
-                "device": fingerprint,
-                "role": user.role
+                "device": fingerprint
              }
     )
 
@@ -537,8 +475,7 @@ def get_me(current_user=Depends(get_current_user)):
         "id": current_user.id,
         "email": current_user.email,
         "full_name": current_user.full_name,
-        "role": current_user.role,
-        "profile_image_path": current_user.profile_image_path
+        "role": current_user.role
     }
 
 
@@ -589,8 +526,7 @@ def refresh_token(data: RefreshRequest, request: Request, db: Session = Depends(
 
     access = create_access_token(
         data={"sub": str(user.id),
-              "device": token_obj.device_fingerprint,
-              "role": user.role
+              "device": token_obj.device_fingerprint
               }
     )
 
@@ -613,7 +549,6 @@ def refresh_token(data: RefreshRequest, request: Request, db: Session = Depends(
 @rate_limit("forgot", limit=3, window=300)
 def forgot_password(
     data: ForgotPasswordRequest,
-    request: Request,
     db: Session = Depends(get_db)
     ):
 
@@ -1112,8 +1047,8 @@ def verify_device(
     access = create_access_token(
         {
             "sub": str(user.id),
-            "device": fingerprint,
-            "role": user.role
+            "type": "access",
+            "device": fingerprint
         }
     )
 
@@ -1178,59 +1113,3 @@ def get_user_devices(
     )
 
     return devices
-
-
-@router.post("/devices/{device_id}/revoke", response_model=DeviceRevokeResponse)
-def revoke_device(
-    device_id: str,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
-):
-    """
-    Revoke one of user's devices
-    """
-
-    device = (
-        db.query(models.UserDevice)
-        .filter(
-            models.UserDevice.id == device_id,
-            models.UserDevice.user_id == current_user.id,
-            models.UserDevice.revoked == False
-        )
-        .first()
-    )
-
-    if not device:
-        raise HTTPException(404, "Device not found")
-
-    # Cannot revoke current device (optional but recommended)
-    if device.fingerprint == request.state.device_id:
-        raise HTTPException(
-            400,
-            "Cannot revoke current device"
-        )
-
-    device.revoked = True
-
-    # Kill related refresh tokens
-    db.query(models.RefreshToken).filter(
-        models.RefreshToken.user_id == current_user.id,
-        models.RefreshToken.device_fingerprint == device.fingerprint,
-        models.RefreshToken.revoked == False
-    ).update({"revoked": True})
-
-    # Audit
-    audit = models.AuditLog(
-        actor_id=current_user.id,
-        action="DEVICE_REVOKED",
-        target=f"device:{device.id}",
-        ip_address=request.client.host
-    )
-
-    db.add(audit)
-    db.commit()
-
-    return {
-        "message": "Device revoked successfully"
-    }

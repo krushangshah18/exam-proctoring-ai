@@ -2,7 +2,6 @@ from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from jose import JWTError
-from urllib3 import request
 
 from app.db import get_db
 from app.db import models
@@ -29,7 +28,7 @@ def get_current_user(request: Request,token = Depends(oauth2_scheme), db: Sessio
 
     try:
         payload = decode_token(token)
-        request.state.role = payload.get("role")
+
         # Token type check
         if payload.get("type") != "access":
             raise credentials_exception

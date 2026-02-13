@@ -39,7 +39,7 @@ def send_reset_email(user: models.User, token: str):
 
     link = (
         f"{settings.FRONTEND_URL}"
-        f"/auth/reset-password?token={token}"
+        f"/reset-password?token={token}"
     )
 
     body = f"""
