@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from app.core import settings, log
 from app.core.face_detector import FaceDetector
 from PIL import Image
@@ -16,7 +16,7 @@ def can_update_profile_image(user) -> bool:
         days=settings.PROFILE_IMAGE_UPDATE_DAYS
     )
 
-    return datetime.now() >= next_allowed
+    return datetime.now(UTC) >= next_allowed
 
 
 def _parse_embedding(emb):

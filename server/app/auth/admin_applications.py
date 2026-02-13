@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, UTC
 
 from app.db import models
 from app.db import get_db
@@ -218,7 +218,7 @@ def review_application(
 
         app.status = ApplicationStatus.APPROVED.value
         app.reviewed_by = current_user.id
-        app.approved_at = datetime.now()
+        app.approved_at = datetime.now(UTC)
         app.review_note = data.review_note
 
         audit = models.AuditLog(
@@ -243,7 +243,7 @@ def review_application(
 
         app.status = ApplicationStatus.REJECTED.value
         app.reviewed_by = current_user.id
-        app.rejected_at = datetime.now()
+        app.rejected_at = datetime.now(UTC)
         app.review_note = data.review_note
 
         audit = models.AuditLog(
@@ -367,7 +367,7 @@ def kill_exam_session(
 
     # End session
     session.status = SessionStatus.TERMINATED.value
-    session.ended_at = datetime.now()
+    session.ended_at = datetime.now(UTC)
 
     # Revoke device
     device = (

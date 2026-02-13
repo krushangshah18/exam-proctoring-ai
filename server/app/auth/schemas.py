@@ -143,3 +143,7 @@ class DeviceOut(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+class DeviceRevokeResponse(BaseModel):
+    message: str

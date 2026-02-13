@@ -7,7 +7,7 @@ from app.db import get_db
 from app.db import models
 from app.auth.security import decode_token
 from app.core import log
-from datetime import datetime
+from datetime import datetime, UTC
 
 # Token comes from:
 # Authorization: Bearer <token>
@@ -18,7 +18,7 @@ def get_current_user(request: Request,token = Depends(oauth2_scheme), db: Sessio
     """
     Validate JWT and return user.
     """
-    now = datetime.now()
+    now = datetime.now(UTC)
 
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -28,6 +28,7 @@ def get_current_user(request: Request,token = Depends(oauth2_scheme), db: Sessio
 
     try:
         payload = decode_token(token)
+        request.state.role = payload.get("role")
 
         # Token type check
         if payload.get("type") != "access":
@@ -99,20 +100,26 @@ def require_role(*allowed_roles: str):
 def verify_device(payload, db):
 
     device_id = payload.get("device")
+    user_id = payload.get("sub")
 
-    if not device_id:
+    if not device_id or not user_id:
         raise HTTPException(401, "Invalid token")
 
     device = (
         db.query(models.UserDevice)
         .filter(
+            models.UserDevice.user_id == user_id,
             models.UserDevice.fingerprint == device_id,
-            models.UserDevice.revoked == False
+            models.UserDevice.revoked == False,
+            models.UserDevice.trusted == True
         )
         .first()
     )
 
     if not device:
-        raise HTTPException(401, "Device revoked")
+        raise HTTPException(
+            status_code=401,
+            detail="Device revoked. Please login again."
+        )
 
     return device

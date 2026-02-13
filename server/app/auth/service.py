@@ -1,7 +1,7 @@
 # Business logic
 import secrets
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
 from sqlalchemy.orm import Session
 
@@ -19,7 +19,7 @@ def create_reset_token(db: Session, user: models.User):
         raw_token.encode()
     ).hexdigest()
 
-    expires = datetime.now() + timedelta(
+    expires = datetime.now(UTC) + timedelta(
         minutes=settings.RESET_TOKEN_EXPIRE_MINUTES
     )
 

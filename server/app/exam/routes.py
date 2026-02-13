@@ -1,6 +1,6 @@
 # app/exam/routes.py
 
-from datetime import datetime
+from datetime import datetime, UTC
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -84,7 +84,7 @@ def start_exam(
         exam_id=exam_id,
 
         status=SessionStatus.ACTIVE.value,
-        started_at=datetime.now(),
+        started_at=datetime.now(UTC),
 
         device_fingerprint=device_fp,
         ip_address=request.client.host,
@@ -150,7 +150,7 @@ def heartbeat(
     Keep exam session alive
     """
 
-    session.last_seen = datetime.now()
+    session.last_seen = datetime.now(UTC)
     db.commit()
 
     return {
@@ -174,7 +174,7 @@ def end_exam(
     """
 
     session.status = SessionStatus.ENDED.value
-    session.ended_at = datetime.now()
+    session.ended_at = datetime.now(UTC)
 
     db.commit()
 

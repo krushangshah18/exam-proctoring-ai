@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import datetime
+from datetime import datetime , UTC
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
@@ -16,7 +16,7 @@ def get_today_dir():
     """
     Returns today's log directory path
     """
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     path = BASE_LOG_DIR / today
     path.mkdir(parents=True, exist_ok=True)
     return path

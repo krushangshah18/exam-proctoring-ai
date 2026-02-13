@@ -7,7 +7,8 @@ This file will handle:
 ✔ JWT validation
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
+from fastapi import HTTPException, status
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -43,7 +44,7 @@ def create_access_token(data, expires_delta = None):
     Create short-lived access token.
     """
     to_encode = data.copy()
-    expire = datetime.now() + (
+    expire = datetime.now(UTC) + (
         expires_delta
         if expires_delta
         else timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -65,7 +66,7 @@ def create_refresh_token(user_id, device_fingerprint, db):
     Create and persist refresh token.
     """
 
-    expire = datetime.now() + timedelta(
+    expire = datetime.now(UTC) + timedelta(
         days=settings.REFRESH_TOKEN_EXPIRE_DAYS
     )
 
@@ -101,6 +102,10 @@ def decode_token(token):
 
         return payload
 
-    except JWTError as e:
-        log.warning("Invalid JWT token: %s", str(e))
-        raise ValueError("Invalid or expired token")
+    except ((JWTError, ValueError, HTTPException)):
+        log.warning("Invalid JWT token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )

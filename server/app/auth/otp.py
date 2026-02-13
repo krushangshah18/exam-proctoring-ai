@@ -19,6 +19,6 @@
 
 
 # def get_expiry():
-#     return datetime.now() + timedelta(
+#     return datetime.now(datetime.UTC) + timedelta(
 #         minutes=settings.OTP_EXPIRE_MINUTES
 #     )
