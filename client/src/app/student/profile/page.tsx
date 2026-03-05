@@ -205,9 +205,9 @@ export default function StudentProfile() {
                 <Avatar className="h-24 w-24">
                   {user?.profile_image_path ? (
                     <img 
-                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/${user.profile_image_path}`} 
+                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/${user.profile_image_path}?v=${user.last_profile_image_update || Date.now()}`} 
                       alt="Profile" 
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-cover rounded-full"
                       onError={(e) => {
                         // Fallback to avatar if image fails to load
                         e.currentTarget.style.display = 'none';
@@ -215,7 +215,7 @@ export default function StudentProfile() {
                     />
                   ) : null}
                   {!user?.profile_image_path && (
-                    <div className="w-full h-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-3xl font-bold">
+                    <div className="w-full h-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-3xl font-bold rounded-full">
                       {user?.full_name?.charAt(0) || 'S'}
                     </div>
                   )}

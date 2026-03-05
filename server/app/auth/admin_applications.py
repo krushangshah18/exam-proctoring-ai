@@ -259,7 +259,24 @@ def review_application(
             "Admin rejected email=%s by=%s",
             app.email,
             current_user.id
-        )    
+        )
+
+        send_email(
+            to=app.email,
+            subject="Admin Application Status Update",
+            body=f"""
+Hello {app.full_name},
+
+We appreciate your interest in joining as an admin/teacher.
+
+After careful review, we regret to inform you that your application has been declined at this time.
+Rejection Reason: {data.review_note or 'Internal policy criteria not met'}
+
+If you have any questions or would like to appeal, please contact support.
+
+- Exam Proctoring Team
+"""
+        )
 
     db.commit()
 

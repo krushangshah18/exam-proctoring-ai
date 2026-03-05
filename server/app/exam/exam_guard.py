@@ -2,7 +2,7 @@
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, UTC
 
 from app.db.session import get_db
 from app.auth.dependencies import get_current_user
@@ -70,14 +70,21 @@ def exam_guard(
         )
 
     # 5️⃣ Session expiry check (optional)
-    if session.expires_at and session.expires_at < datetime.utcnow():
-        session.status = SessionStatus.ENDED.value
-        db.commit()
+    if session.expires_at:
+        # Make expires_at timezone-aware if needed
+        expires_at = session.expires_at
+        if expires_at.tzinfo is None:
+            from datetime import UTC
+            expires_at = expires_at.replace(tzinfo=UTC)
+        
+        if expires_at < datetime.now(UTC):
+            session.status = SessionStatus.ENDED.value
+            db.commit()
 
-        raise HTTPException(
-            status_code=403,
-            detail="Exam session expired"
-        )
+            raise HTTPException(
+                status_code=403,
+                detail="Exam session expired"
+            )
 
     # 6️⃣ Store for route usage
     request.state.exam_session = session

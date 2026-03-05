@@ -14,6 +14,9 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
 
+
+import { jwtDecode } from 'jwt-decode';
+
 interface Device {
   id: string;
   fingerprint: string;
@@ -25,9 +28,14 @@ interface Device {
   created_at: string;
 }
 
+interface JWTPayload {
+  device: string;
+}
+
 export default function DeviceManagement() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
+  const [currentFingerprint, setCurrentFingerprint] = useState<string | null>(null);
 
   const fetchDevices = async () => {
     try {
@@ -41,6 +49,16 @@ export default function DeviceManagement() {
   };
 
   useEffect(() => {
+    // Get current device fingerprint from token
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      try {
+        const decoded = jwtDecode<JWTPayload>(token);
+        setCurrentFingerprint(decoded.device);
+      } catch (e) {
+        console.error("Failed to decode token", e);
+      }
+    }
     fetchDevices();
   }, []);
 
@@ -50,8 +68,7 @@ export default function DeviceManagement() {
     try {
       await api.post(`/auth/devices/${deviceId}/revoke`);
       toast.success("Device revoked successfully");
-      // Refresh list
-      fetchDevices();
+      fetchDevices(); // Refresh list
     } catch (error: any) {
       console.error(error);
       toast.error(error.response?.data?.detail || "Failed to revoke device");
@@ -78,19 +95,26 @@ export default function DeviceManagement() {
       <CardContent>
         <div className="space-y-4">
           {devices.map((device) => {
-             const isCurrent = false; // We can't easily tell without comparing fingerprint from token, but backend prevents self-revoke
+             const isCurrent = device.fingerprint === currentFingerprint;
              return (
             <div
               key={device.id}
-              className="flex items-center justify-between p-4 border rounded-lg bg-card hover:bg-accent/10 transition-colors"
+              className={`flex items-center justify-between p-4 border rounded-lg transition-colors ${
+                isCurrent 
+                  ? 'bg-primary/5 border-primary/20' 
+                  : 'bg-card hover:bg-accent/10'
+              }`}
             >
               <div className="flex items-start gap-4">
-                <div className="p-2 bg-secondary rounded-full">
+                <div className={`p-2 rounded-full ${isCurrent ? 'bg-primary/10 text-primary' : 'bg-secondary'}`}>
                    {device.user_agent.toLowerCase().includes('mobile') ? <Smartphone className="h-5 w-5" /> : <Laptop className="h-5 w-5" />}
                 </div>
                 <div>
                   <div className="font-medium flex items-center gap-2">
                     {device.ip_address}
+                    {isCurrent && (
+                      <Badge className="bg-primary hover:bg-primary/90">Current Device</Badge>
+                    )}
                     {device.trusted ? (
                       <Badge variant="secondary" className="text-green-600 bg-green-100 dark:bg-green-900/30">
                         <ShieldCheck className="w-3 h-3 mr-1" /> Trusted
@@ -109,7 +133,7 @@ export default function DeviceManagement() {
                 </div>
               </div>
               
-              {!device.revoked && (
+              {!device.revoked && !isCurrent && (
                 <Button 
                   variant="destructive" 
                   size="sm"

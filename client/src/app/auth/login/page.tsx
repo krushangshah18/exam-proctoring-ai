@@ -159,6 +159,10 @@ export default function LoginPage() {
             <a href="/auth/register" className="font-medium text-blue-600 hover:text-blue-500">
               Register
             </a>
+            <span className="mx-2 text-gray-400">|</span>
+            <a href="/auth/teacher-apply" className="font-medium text-blue-600 hover:text-blue-500">
+              Apply as Teacher
+            </a>
           </p>
         </CardFooter>
       </Card>

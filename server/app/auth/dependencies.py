@@ -62,11 +62,18 @@ def get_current_user(request: Request,token = Depends(oauth2_scheme), db: Sessio
         log.warning("JWT user not found: %s", user_id)
         raise credentials_exception
     
-    if user.locked_until and user.locked_until > now:
-        raise HTTPException(
-            403,
-            "Account locked"
-        )
+    
+    # Check account lock with timezone handling
+    if user.locked_until:
+        locked_until = user.locked_until
+        if locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=UTC)
+        
+        if locked_until > now:
+            raise HTTPException(
+                403,
+                "Account locked"
+            )
 
     request.state.user = user
     request.state.device_id = payload["device"]

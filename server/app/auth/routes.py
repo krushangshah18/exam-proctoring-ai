@@ -243,12 +243,20 @@ def login_user(data: UserLogin, request: Request, db: Session = Depends(get_db))
             detail="Invalid credentials"
         )
     
+    
     now = datetime.now(UTC)
-    if user.locked_until and user.locked_until > now:
-        raise HTTPException(
-            status_code=403,
-            detail="Account locked. Try again later."
-        )
+    
+    # Check account lock with timezone handling
+    if user.locked_until:
+        locked_until = user.locked_until
+        if locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=UTC)
+        
+        if locked_until > now:
+            raise HTTPException(
+                status_code=403,
+                detail="Account locked. Try again later."
+            )
 
 
     if not verify_password(
@@ -536,7 +544,8 @@ def get_me(current_user=Depends(get_current_user)):
         "email": current_user.email,
         "full_name": current_user.full_name,
         "role": current_user.role,
-        "profile_image_path": current_user.profile_image_path
+        "profile_image_path": current_user.profile_image_path,
+        "last_profile_image_update": current_user.last_profile_image_update.isoformat() if current_user.last_profile_image_update else None
     }
 
 
@@ -559,7 +568,13 @@ def refresh_token(data: RefreshRequest, request: Request, db: Session = Depends(
 
     if not token_obj:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
-    if token_obj.expires_at < now:
+    
+    # Check expiry with timezone handling
+    expires_at = token_obj.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    
+    if expires_at < now:
         raise HTTPException(status_code=401,detail="Refresh token expired")
     if token_obj.device_fingerprint != fingerprint:
         raise HTTPException(403, "Device mismatch")
@@ -643,19 +658,31 @@ def reset_password(
         data.token.encode()
     ).hexdigest()
 
+    # Get the token first
     record = db.query(models.PasswordResetToken).filter(
         models.PasswordResetToken.token_hash == token_hash,
-        models.PasswordResetToken.used == False,
-        models.PasswordResetToken.expires_at > datetime.now(UTC)
+        models.PasswordResetToken.used == False
     ).first()
 
     if not record:
         log.warning(f"Invalid reset attempt: {data.token[:6]}")
-
         raise HTTPException(
             status_code=400,
             detail="Invalid or expired token"
         )
+    
+    # Check expiry with timezone handling
+    expires_at = record.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    
+    if expires_at <= datetime.now(UTC):
+        log.warning(f"Expired reset attempt: {data.token[:6]}")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired token"
+        )
+
 
     user = db.query(models.User).get(record.user_id)
 

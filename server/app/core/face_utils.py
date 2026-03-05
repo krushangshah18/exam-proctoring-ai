@@ -12,7 +12,12 @@ def can_update_profile_image(user) -> bool:
     if not user.last_profile_image_update:
         return True
 
-    next_allowed = user.last_profile_image_update + timedelta(
+    # Make the database datetime timezone-aware (assume UTC)
+    last_update = user.last_profile_image_update
+    if last_update.tzinfo is None:
+        last_update = last_update.replace(tzinfo=UTC)
+    
+    next_allowed = last_update + timedelta(
         days=settings.PROFILE_IMAGE_UPDATE_DAYS
     )
 

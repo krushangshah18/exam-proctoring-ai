@@ -79,7 +79,8 @@ class AdminApplyRequest(BaseModel):
     email: EmailStr
 
     organization: str | None = None
-    contact_number: str | None = None
+    organization: str | None = None
+    contact_number: str | None = Field(None, pattern=r"^\d{10}$", description="10-digit contact number")
 
     reason: str = Field(..., min_length=10)
 
