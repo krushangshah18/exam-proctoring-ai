@@ -711,13 +711,13 @@ def logout(
         .filter(
             models.RefreshToken.token == data.refresh_token,
             models.RefreshToken.user_id == user.id,
-            models.RefreshToken.is_active == True
+            models.RefreshToken.revoked == False
         )
         .first()
     )
 
     if token:
-        token.is_active = False
+        token.revoked = True
 
     device = (
         db.query(models.UserDevice)
@@ -775,9 +775,9 @@ def delete_account(
         db.query(models.RefreshToken)
         .filter(
             models.RefreshToken.user_id == user.id,
-            models.RefreshToken.is_active == True
+            models.RefreshToken.revoked == False
         )
-        .update({"is_active": False})
+        .update({"revoked": True})
     )
 
     db.commit()
