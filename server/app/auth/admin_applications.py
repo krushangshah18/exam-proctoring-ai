@@ -1,16 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from datetime import datetime, UTC
+from typing import Optional
+from sqlalchemy import or_
 
-from app.db import models
-from app.db import get_db
+from app.db import models, get_db
 from app.auth.schemas import (
     AdminApplyRequest,
     AdminReviewRequest,
 )
 from app.auth.dependencies import get_current_user, require_role
 from app.db.enums import ApplicationStatus, UserRole, SessionStatus
-from app.core import log, rate_limit, send_email 
+from app.core import log, rate_limit, send_email, paginate
 from app.auth.security import hash_password
 
 router = APIRouter(
@@ -19,7 +20,7 @@ router = APIRouter(
 )
 
 @router.post("/apply", status_code=201)
-@rate_limit("admin_apply", 2, 3600)
+@rate_limit("admin_apply", 5, 60) # Temporarily reduced for testing
 def apply_admin(
     data: AdminApplyRequest,
     request: Request,
@@ -73,16 +74,39 @@ def apply_admin(
 
 
 @router.get("",dependencies=[Depends(require_role(UserRole.SYSADMIN))])
-def list_applications(db: Session = Depends(get_db)):
+def list_applications(
+    page: int = 1,
+    size: int = 10,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = "created_at",
+    sort_order: Optional[str] = "desc",
+    db: Session = Depends(get_db)
+):
     """
     SYSADMIN: View all admin applications
     """
+    query = db.query(models.AdminApplication)
+    
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            or_(
+                models.AdminApplication.full_name.ilike(search_term),
+                models.AdminApplication.email.ilike(search_term),
+                models.AdminApplication.organization.ilike(search_term)
+            )
+        )
+        
+    if sort_by and hasattr(models.AdminApplication, sort_by):
+        column = getattr(models.AdminApplication, sort_by)
+        if sort_order == "asc":
+            query = query.order_by(column.asc())
+        else:
+            query = query.order_by(column.desc())
+    else:
+        query = query.order_by(models.AdminApplication.created_at.desc())
 
-    return (
-        db.query(models.AdminApplication)
-        .order_by(models.AdminApplication.created_at.desc())
-        .all()
-    )
+    return paginate(query, page, size)
 
 
 def _generate_temp_password() -> str:
@@ -190,7 +214,8 @@ def review_application(
                 full_name=app.full_name,
                 password_hash=hashed,
                 role=UserRole.ADMIN.value,
-                is_active=True
+                is_active=True,
+                must_change_password=True
             )
 
             db.add(admin)
@@ -307,7 +332,7 @@ def get_active_exams(
             "user_id": str(s.user_id),
             "exam_id": s.exam_id,
             "device": s.device_fingerprint,
-            "started_at": s.started_at,
+            "started_at": s.start_time,
             "ip": s.ip_address
         }
         for s in sessions
@@ -384,7 +409,7 @@ def kill_exam_session(
 
     # End session
     session.status = SessionStatus.TERMINATED.value
-    session.ended_at = datetime.now(UTC)
+    session.end_time = datetime.now(UTC)
 
     # Revoke device
     device = (
@@ -405,10 +430,54 @@ def kill_exam_session(
         models.RefreshToken.user_id == session.user_id,
         models.RefreshToken.device_fingerprint == session.device_fingerprint
     ).update({"revoked": True})
-
+    
     db.commit()
 
-    return {
-        "message": "Session terminated",
-        "session_id": session_id
-    }
+    # Log action
+    log.warning(
+        "Exam session %s killed securely by %s",
+        session.id, admin.id
+    )
+    return {"message": "Session terminated and device blacklisted"}
+
+
+@router.post("/exams/unsubmit/{session_id}")
+def unsubmit_exam_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    admin=Depends(require_role(UserRole.ADMIN, UserRole.SYSADMIN))
+):
+    """
+    Unsubmit a student's exam. Reverts the session status to TERMINATED
+    and automatically issues an APPROVED resume ticket so the student can rejoin natively.
+    """
+    session = (
+        db.query(models.ExamSession)
+        .filter(models.ExamSession.id == session_id)
+        .first()
+    )
+
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    if session.status != SessionStatus.ENDED.value:
+         raise HTTPException(400, "Only fully ENDED/submitted exams can be unsubmitted.")
+
+    # Revert session state
+    session.status = SessionStatus.TERMINATED.value
+    session.end_time = None
+    session.terminated_reason = "Exam unsubmitted by Administrator to allow resumption."
+
+    # Create approved resume ticket
+    rr = models.ResumeRequest(
+        session_id=session.id,
+        reason="Admin Override - Unsubmit",
+        status=ResumeStatus.APPROVED.value,
+        review_note="Administrator unsubmitted your exam. Please resume immediately."
+    )
+    db.add(rr)
+    
+    db.commit()
+
+    log.info(f"Exam session {session.id} unsubmitted by Admin {admin.id}")
+    return {"message": "Exam unsubmitted successfully. Student can now rejoin."}

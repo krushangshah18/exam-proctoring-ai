@@ -11,8 +11,9 @@ class ExamMode(str,enum.Enum):
 
 class ExamStatus(str,enum.Enum):
     DRAFT = "DRAFT"
-    LIVE = "LIVE"
-    ENDED = "ENDED"
+    SCHEDULED = "SCHEDULED"   # Published, awaiting start_window
+    LIVE = "LIVE"              # start_window passed, exam in progress
+    ENDED = "ENDED"            # end_window passed, exam over
     CANCELLED = "CANCELLED"
 
 class SessionStatus(str,enum.Enum):

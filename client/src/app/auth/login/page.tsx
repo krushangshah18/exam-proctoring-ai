@@ -65,10 +65,12 @@ export default function LoginPage() {
 
         // 2. Fetch User Role
         const meResponse = await api.get('/auth/me');
-        const role = meResponse.data.role; // "STUDENT", "ADMIN", "SYSADMIN"
+        const { role, must_change_password } = meResponse.data; // "STUDENT", "ADMIN", "SYSADMIN"
         
-        // 3. Redirect based on role
-        if (role === 'SYSADMIN') {
+        // 3. Redirect based on role and setup requirements
+        if (must_change_password) {
+           router.push('/auth/setup-password');
+        } else if (role === 'SYSADMIN') {
            router.push('/sys/dashboard');
         } else if (role === 'ADMIN') {
            router.push('/admin/dashboard');

@@ -11,6 +11,14 @@ def get_redis():
             password=settings.REDIS_PASSWORD or None,
             decode_responses=True,
             socket_connect_timeout=3,
+            connection_pool=redis.ConnectionPool(
+                host=settings.REDIS_HOST,
+                port=settings.REDIS_PORT,
+                db=settings.REDIS_DB,
+                password=settings.REDIS_PASSWORD or None,
+                max_connections=50,
+                decode_responses=True
+            )
         )
 
         # Health check

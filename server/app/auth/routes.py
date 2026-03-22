@@ -22,6 +22,7 @@ from app.auth.schemas import (
     LoginResponse,
     LoginOTPResponse,
     ChangePassword,
+    SetupPasswordRequest,
     RefreshRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
@@ -533,6 +534,30 @@ def change_password(
     return {"message": "Password changed successfully"}
 
 
+@router.post("/setup-password")
+def setup_password(
+    data: SetupPasswordRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Setup password for first-time admin login.
+    """
+    if not current_user.must_change_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Password setup not required for this account"
+        )
+
+    current_user.password_hash = hash_password(data.new_password)
+    current_user.must_change_password = False
+
+    db.commit()
+    log.info(f"Admin completed initial password setup: {current_user.email}")
+
+    return {"message": "Password setup completed successfully"}
+
+
 @router.get("/me")
 def get_me(current_user=Depends(get_current_user)):
     """
@@ -544,6 +569,7 @@ def get_me(current_user=Depends(get_current_user)):
         "email": current_user.email,
         "full_name": current_user.full_name,
         "role": current_user.role,
+        "must_change_password": current_user.must_change_password,
         "profile_image_path": current_user.profile_image_path,
         "last_profile_image_update": current_user.last_profile_image_update.isoformat() if current_user.last_profile_image_update else None
     }

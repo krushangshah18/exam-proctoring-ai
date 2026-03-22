@@ -134,7 +134,7 @@ def validate_single_face(image_bytes: bytes):
     width = x2 - x1
     height = y2 - y1
 
-    if width < 80 or height < 80:
+    if width < 40 or height < 40:
         raise ValueError("Face too small. Move closer to camera.")
 
     return boxes[0]

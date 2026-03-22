@@ -70,9 +70,9 @@ def exam_guard(
         )
 
     # 5️⃣ Session expiry check (optional)
-    if session.expires_at:
+    if session.exam.end_window:
         # Make expires_at timezone-aware if needed
-        expires_at = session.expires_at
+        expires_at = session.exam.end_window
         if expires_at.tzinfo is None:
             from datetime import UTC
             expires_at = expires_at.replace(tzinfo=UTC)

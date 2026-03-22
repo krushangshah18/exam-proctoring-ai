@@ -43,17 +43,31 @@ def rate_limit(name, limit, window, by = "ip"):  # ip | user | both
 
                 if count == 1:
                     redis_client.expire(key, window)
+                else:
+                    # Check if key got stuck without an expiration (due to a race condition)
+                    ttl = redis_client.ttl(key)
+                    if ttl == -1:
+                        redis_client.expire(key, window)
 
                 # ---------------- Block ----------------
                 if count > limit:
 
                     ttl = redis_client.ttl(key)
+                    if ttl < 0:
+                        ttl = window
 
-                    log.warning("Rate limit hit key=%s count=%s",key,count)
+                    if ttl > 60:
+                        mins = ttl // 60
+                        secs = ttl % 60
+                        time_str = f"{mins}m {secs}s" if secs > 0 else f"{mins}m"
+                    else:
+                        time_str = f"{ttl}s"
+
+                    log.warning("Rate limit hit key=%s count=%s", key, count)
 
                     raise HTTPException(
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        detail=f"Too many requests. Try again in {ttl}s"
+                        detail=f"Too many requests. Try again in {time_str}"
                     )
 
             except HTTPException:

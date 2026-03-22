@@ -21,6 +21,8 @@ class User(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     face_embedding = Column(Text)
 
     is_active = Column(Boolean, default=True)
+    must_change_password = Column(Boolean, default=False, server_default='false', nullable=False)
+    
     last_login = Column(DateTime)
 
     last_profile_image_update = Column(DateTime, nullable=True)
@@ -72,7 +74,7 @@ class PasswordResetToken(UUIDMixin, TimestampMixin, Base):
     user = relationship("User")
 
 
-class Exam(UUIDMixin, TimestampMixin, Base):
+class Exam(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "exams"
 
     title = Column(String, nullable=False)
@@ -89,7 +91,6 @@ class Exam(UUIDMixin, TimestampMixin, Base):
     hard_join_deadline = Column(DateTime)
 
     flag_threshold = Column(Integer)
-    terminate_threshold = Column(Integer)
 
     late_join_policy = Column(String, default=LateJoinPolicy.REVIEW.value, nullable=False)
 
@@ -98,7 +99,8 @@ class Exam(UUIDMixin, TimestampMixin, Base):
 
     config = Column(JSON)
 
-    sessions = relationship("ExamSession", back_populates="exam")
+    sessions = relationship("ExamSession", back_populates="exam", cascade="all, delete-orphan")
+    invites = relationship("ExamInvite", back_populates="exam", cascade="all, delete-orphan")
 
 
 class ExamInvite(UUIDMixin, TimestampMixin, Base):
@@ -111,6 +113,8 @@ class ExamInvite(UUIDMixin, TimestampMixin, Base):
     expires_at = Column(DateTime)
 
     used = Column(Boolean, default=False)
+
+    exam = relationship("Exam", back_populates="invites")
 
 
 class ExamSession(UUIDMixin, TimestampMixin, Base):
@@ -130,6 +134,9 @@ class ExamSession(UUIDMixin, TimestampMixin, Base):
 
     terminated_reason = Column(Text)
     terminated_by = Column(String)
+    terminated_at = Column(DateTime, nullable=True)
+
+    time_extension_seconds = Column(Integer, default=0, server_default='0', nullable=False)
 
     device_fingerprint = Column(String, nullable=False)
     ip_address = Column(String)
@@ -139,8 +146,10 @@ class ExamSession(UUIDMixin, TimestampMixin, Base):
     user = relationship("User", back_populates="sessions")
     exam = relationship("Exam", back_populates="sessions")
 
-    violations = relationship("Violation", back_populates="session")
-    devices = relationship("SessionDevice", back_populates="session")
+    violations = relationship("Violation", back_populates="session", cascade="all, delete-orphan")
+    devices = relationship("SessionDevice", back_populates="session", cascade="all, delete-orphan")
+    risk_snapshots = relationship("RiskSnapshot", back_populates="session", cascade="all, delete-orphan")
+    resume_requests = relationship("ResumeRequest", back_populates="session", cascade="all, delete-orphan")
 
 
 class SessionDevice(UUIDMixin, TimestampMixin, Base):
@@ -188,7 +197,7 @@ class Violation(UUIDMixin, TimestampMixin, Base):
     session = relationship("ExamSession", back_populates="violations")
     type = relationship("ViolationType", back_populates="violations")
 
-    evidences = relationship("Evidence", back_populates="violation")
+    evidences = relationship("Evidence", back_populates="violation", cascade="all, delete-orphan")
     model_verifications = relationship("ModelVerification", back_populates="violation", cascade="all, delete-orphan")
 
 
@@ -215,6 +224,8 @@ class RiskSnapshot(UUIDMixin, TimestampMixin, Base):
     risk_score = Column(Integer)
     reason = Column(Text)
 
+    session = relationship("ExamSession", back_populates="risk_snapshots")
+
 
 class ResumeRequest(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "resume_requests"
@@ -226,8 +237,12 @@ class ResumeRequest(UUIDMixin, TimestampMixin, Base):
     status = Column(String, default=ResumeStatus.PENDING.value)
 
     reviewed_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
 
     review_note = Column(Text)
+    time_extension_minutes = Column(Integer, nullable=True)
+
+    session = relationship("ExamSession", back_populates="resume_requests")
 
 
 class TerminationReason(UUIDMixin, TimestampMixin, Base):

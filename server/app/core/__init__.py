@@ -7,6 +7,8 @@ from .storage import save_profile_image
 from .redis import redis_client
 from .rate_limiter import rate_limit
 from .device import generate_fingerprint
+from .pagination import paginate, PaginatedResponse
+
 __all__ = ["log",
            "system_logger", 
            "settings", 
@@ -20,5 +22,7 @@ __all__ = ["log",
            "verify_same_person",
            "redis_client",
            "rate_limit",
-           "generate_fingerprint"
+           "generate_fingerprint",
+           "paginate",
+           "PaginatedResponse"
            ]

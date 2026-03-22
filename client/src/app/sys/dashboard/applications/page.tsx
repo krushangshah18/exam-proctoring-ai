@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -8,18 +8,16 @@ import { toast } from 'sonner';
 import { 
   Check, 
   X, 
-  Search, 
-  MoreHorizontal, 
   Loader2,
   Building,
-  Phone,
   Calendar,
-  User
+  User,
+  MoreHorizontal
 } from 'lucide-react';
+import { format } from "date-fns";
 
 import api from '@/lib/axios';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   Card,
   CardContent,
@@ -27,14 +25,6 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import {
   Form,
   FormControl,
@@ -50,18 +40,18 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
+
+// New Shared Components
+import { DataTable } from '@/components/common/DataTable';
+import { SearchInput } from '@/components/common/SearchInput';
+import { StatusBadge } from '@/components/common/StatusBadge';
+import { Breadcrumbs } from '@/components/common/Breadcrumbs';
+import { useTableURLState } from '@/hooks/useTableURLState';
+
+// React Table
+import { ColumnDef, PaginationState, SortingState } from "@tanstack/react-table";
 
 interface AdminApplication {
   id: string;
@@ -83,9 +73,17 @@ const reviewSchema = z.object({
 type ReviewFormValues = z.infer<typeof reviewSchema>;
 
 export default function ApplicationsPage() {
+  const { 
+    page, size, search, sortBy, sortOrder, 
+    setPage, setPageSize, setSearch, setSorting, clearSorting 
+  } = useTableURLState();
+
   const [applications, setApplications] = useState<AdminApplication[]>([]);
+  const [totalItems, setTotalItems] = useState(0);
+  const [pageCount, setPageCount] = useState(0);
+  
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
+  
   const [selectedApp, setSelectedApp] = useState<AdminApplication | null>(null);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [reviewAction, setReviewAction] = useState<'approve' | 'reject' | null>(null);
@@ -98,10 +96,23 @@ export default function ApplicationsPage() {
     },
   });
 
+  const [searchTrigger, setSearchTrigger] = useState(0);
+
   const fetchApplications = async () => {
+    setLoading(true);
     try {
-      const res = await api.get('/admin-applications');
-      setApplications(res.data);
+      const res = await api.get('/admin-applications', {
+        params: {
+          page,
+          size,
+          search: search || undefined,
+          sort_by: sortBy || undefined,
+          sort_order: sortOrder || 'desc'
+        }
+      });
+      setApplications(res.data.items);
+      setTotalItems(res.data.total);
+      setPageCount(res.data.pages);
     } catch (error) {
       console.error('Failed to fetch applications', error);
       toast.error('Failed to load applications');
@@ -112,7 +123,7 @@ export default function ApplicationsPage() {
 
   useEffect(() => {
     fetchApplications();
-  }, []);
+  }, [page, size, search, sortBy, sortOrder, searchTrigger]);
 
   const handleReview = async (data: ReviewFormValues) => {
     if (!selectedApp || !reviewAction) return;
@@ -127,7 +138,7 @@ export default function ApplicationsPage() {
       toast.success(`Application ${reviewAction === 'approve' ? 'approved' : 'rejected'} successfully`);
       setIsReviewOpen(false);
       resetReview();
-      fetchApplications();
+      fetchApplications(); // Refresh data
     } catch (error: any) {
       console.error(error);
       toast.error(error.response?.data?.detail || 'Failed to process application');
@@ -136,7 +147,7 @@ export default function ApplicationsPage() {
     }
   };
 
-  const openReviewDialog = (app: AdminApplication, action: 'approve' | 'reject') => {
+  const openReviewDialog = (app: AdminApplication, action: 'approve' | 'reject' | null) => {
     setSelectedApp(app);
     setReviewAction(action);
     setIsReviewOpen(true);
@@ -148,34 +159,144 @@ export default function ApplicationsPage() {
     form.reset();
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'APPROVED':
-        return <Badge className="bg-green-100 text-green-800 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400">Approved</Badge>;
-      case 'REJECTED':
-        return <Badge variant="destructive">Rejected</Badge>;
-      default:
-        return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100 dark:bg-yellow-900/30 dark:text-yellow-400">Pending</Badge>;
+  // React Table State Mappers - wrap in useMemo to avoid reference churn
+  const pagination: PaginationState = useMemo(() => ({
+    pageIndex: page - 1,
+    pageSize: size,
+  }), [page, size]);
+
+  const handlePaginationChange = (updater: any) => {
+    const newPagination =
+      typeof updater === 'function' ? updater(pagination) : updater;
+
+    const newPage = newPagination.pageIndex + 1;
+    const newSize = newPagination.pageSize;
+
+    if (newSize !== size) {
+      setPageSize(newSize);
+      return; 
+    }
+
+    if (newPage !== page) {
+      setPage(newPage);
     }
   };
 
-  const filteredApplications = applications.filter(app => 
-    app.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    app.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (app.organization && app.organization.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  const sortingState: SortingState = useMemo(() => {
+    return sortBy ? [{ id: sortBy, desc: sortOrder === 'desc' }] : [];
+  }, [sortBy, sortOrder]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
-  }
+  const handleSortingChange = (updater: any) => {
+    const newSorting = typeof updater === 'function' ? updater(sortingState) : updater;
+    if (newSorting.length > 0) {
+      setSorting(newSorting[0].id, newSorting[0].desc ? 'desc' : 'asc');
+    } else {
+      clearSorting();
+    }
+  };
+
+  const columns = useMemo<ColumnDef<AdminApplication>[]>(() => [
+    {
+      accessorKey: 'full_name',
+      header: 'Applicant',
+      cell: ({ row }) => (
+        <div className="flex flex-col">
+          <span className="font-medium">{row.original.full_name}</span>
+          <span className="text-xs text-muted-foreground">{row.original.email}</span>
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'organization',
+      header: 'Organization',
+      cell: ({ row }) => (
+        row.original.organization ? (
+          <div className="flex items-center gap-1">
+            <Building className="h-3 w-3 text-muted-foreground" />
+            <span>{row.original.organization}</span>
+          </div>
+        ) : (
+          <span className="text-muted-foreground italic">--</span>
+        )
+      )
+    },
+    {
+      accessorKey: 'created_at',
+      header: 'Applied On',
+      cell: ({ row }) => {
+        try {
+          return (
+            <div className="flex items-center gap-1 text-muted-foreground whitespace-nowrap">
+              <Calendar className="h-3 w-3" />
+              <span>{format(new Date(row.original.created_at), 'MMM dd, yyyy')}</span>
+            </div>
+          );
+        } catch {
+          return <span>Invalid Date</span>;
+        }
+      }
+    },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      cell: ({ row }) => <StatusBadge status={row.original.status} />
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const app = row.original;
+        
+        if (app.status === 'PENDING') {
+          return (
+            <div className="flex justify-start gap-2">
+              <Button 
+                size="sm" 
+                variant="outline" 
+                className="text-green-600 hover:text-green-700 hover:bg-green-50 dark:hover:bg-green-900/10"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openReviewDialog(app, 'approve');
+                }}
+              >
+                <Check className="h-4 w-4 mr-1" /> Approve
+              </Button>
+              <Button 
+                size="sm" 
+                variant="outline"
+                className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/10"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openReviewDialog(app, 'reject');
+                }}
+              >
+                <X className="h-4 w-4 mr-1" /> Reject
+              </Button>
+            </div>
+          );
+        }
+        
+        return (
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            onClick={(e) => {
+              e.stopPropagation();
+              openReviewDialog(app, null); // Just viewing
+            }}
+          >
+            View Details
+          </Button>
+        );
+      }
+    }
+  ], []);
 
   return (
     <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
+      <Breadcrumbs />
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Admin Applications</h1>
           <p className="text-muted-foreground mt-2">
@@ -185,104 +306,34 @@ export default function ApplicationsPage() {
       </div>
 
       <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
+        <CardHeader className="pb-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <CardTitle>All Applications</CardTitle>
-            <div className="relative w-64">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search applications..."
-                className="pl-8"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
+            <SearchInput 
+              initialValue={search} 
+              onSearch={setSearch} 
+              placeholder="Search by name, email, or org..."
+              isLoading={loading}
+              debounceMs={600}
+            />
           </div>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Applicant</TableHead>
-                <TableHead>Organization</TableHead>
-                <TableHead>Applied On</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredApplications.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="h-24 text-center">
-                    No applications found.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredApplications.map((app) => (
-                  <TableRow key={app.id}>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        <span className="font-medium">{app.full_name}</span>
-                        <span className="text-xs text-muted-foreground">{app.email}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {app.organization ? (
-                        <div className="flex items-center gap-1">
-                          <Building className="h-3 w-3 text-muted-foreground" />
-                          <span>{app.organization}</span>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground italic">--</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1 text-muted-foreground">
-                        <Calendar className="h-3 w-3" />
-                        <span>{new Date(app.created_at).toLocaleDateString()}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>{getStatusBadge(app.status)}</TableCell>
-                    <TableCell className="text-right">
-                      {app.status === 'PENDING' ? (
-                        <div className="flex justify-end gap-2">
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
-                            className="text-green-600 hover:text-green-700 hover:bg-green-50 dark:hover:bg-green-900/10"
-                            onClick={() => openReviewDialog(app, 'approve')}
-                          >
-                            <Check className="h-4 w-4 mr-1" /> Approve
-                          </Button>
-                          <Button 
-                            size="sm" 
-                            variant="outline"
-                            className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/10"
-                            onClick={() => openReviewDialog(app, 'reject')}
-                          >
-                            <X className="h-4 w-4 mr-1" /> Reject
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="flex justify-end">
-                            <Button variant="ghost" size="sm" onClick={() => {
-                                setSelectedApp(app);
-                                setIsReviewOpen(true);
-                                setReviewAction(null); // Just viewing
-                            }}>
-                                View Details
-                            </Button>
-                        </div>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+          <DataTable
+            columns={columns}
+            data={applications}
+            pageCount={pageCount}
+            totalItems={totalItems}
+            isLoading={loading}
+            pagination={pagination}
+            onPaginationChange={handlePaginationChange}
+            sorting={sortingState}
+            onSortingChange={handleSortingChange}
+          />
         </CardContent>
       </Card>
 
+      {/* Review Dialog */}
       <Dialog open={isReviewOpen} onOpenChange={(open) => {
           if (!open) resetReview();
           setIsReviewOpen(open);
@@ -301,7 +352,6 @@ export default function ApplicationsPage() {
             {selectedApp && (
                 <div className="grid gap-4 py-4">
                     <div className="grid grid-cols-2 gap-4 text-sm">
-                        {/* Details... */}
                         <div>
                             <span className="text-muted-foreground block mb-1">Full Name</span>
                             <div className="flex items-center gap-2 font-medium">
@@ -310,7 +360,7 @@ export default function ApplicationsPage() {
                         </div>
                         <div>
                             <span className="text-muted-foreground block mb-1">Applying For</span>
-                            <Badge variant="outline">Admin / Teacher</Badge>
+                            <StatusBadge status="ADMIN" className="bg-purple-100 text-purple-800 border-purple-200" />
                         </div>
                         <div>
                             <span className="text-muted-foreground block mb-1">Organization</span>
@@ -365,7 +415,7 @@ export default function ApplicationsPage() {
                     {!reviewAction && selectedApp.review_note && (
                         <div>
                             <span className="text-muted-foreground block mb-2 text-sm">Review Note</span>
-                            <div className="bg-muted p-3 rounded-md text-sm italic">
+                            <div className="bg-muted p-3 rounded-md text-sm italic border-l-4 border-primary/50">
                                 "{selectedApp.review_note}"
                             </div>
                         </div>

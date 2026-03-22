@@ -38,6 +38,11 @@ export default function SystemAdminLayout({
   const fetchUserProfile = async () => {
     try {
       const res = await api.get('/auth/me');
+      if (res.data.must_change_password) {
+        toast.info("Please set up your new password first.");
+        router.push('/auth/setup-password');
+        return;
+      }
       setUser(res.data);
     } catch (error) {
       console.error('Failed to fetch user profile', error);

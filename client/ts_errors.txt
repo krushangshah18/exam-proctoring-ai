@@ -1,0 +1,1 @@
+src/app/admin/dashboard/exams/new/page.tsx(20,57): error TS2307: Cannot find module '@/components/ui/popover' or its corresponding type declarations.
