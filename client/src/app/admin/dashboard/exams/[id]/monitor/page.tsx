@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Loader2, RefreshCw, Users, Activity,
@@ -82,13 +82,95 @@ function RiskBar({ score }: { score: number }) {
   );
 }
 
+// SSE helper (fetch-based, supports Authorization header)
+function openSSE(url: string, token: string, handlers: Record<string, (d: any) => void>): () => void {
+  let cancelled = false;
+  const controller = new AbortController();
+  (async () => {
+    try {
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (!cancelled) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        let ev = 'message';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) ev = line.slice(7).trim();
+          else if (line.startsWith('data: ')) {
+            try { handlers[ev]?.(JSON.parse(line.slice(6))); } catch {}
+            ev = 'message';
+          }
+        }
+      }
+    } catch {}
+  })();
+  return () => { cancelled = true; controller.abort(); };
+}
+
 // ──────────────────────────────────────────────
-// Live Monitor panel (UI only)
+// Live Monitor panel
 // ──────────────────────────────────────────────
 
 function LiveMonitorPanel({ session, examId }: { session: SessionCard; examId: string }) {
   const [extMinutes, setExtMinutes] = useState("");
   const [extending, setExtending] = useState(false);
+  const [frameUrl, setFrameUrl] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState<{ message: string; alert_type?: string; ts: number }[]>([]);
+  const [debugMode, setDebugMode] = useState(false);
+  const [togglingDebug, setTogglingDebug] = useState(false);
+  const sseCloseRef = useRef<(() => void) | null>(null);
+  const frameIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevFrameUrl = useRef<string | null>(null);
+
+  const fetchFrame = useCallback(async () => {
+    const token = localStorage.getItem('access_token') || '';
+    const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    try {
+      const res = await fetch(
+        `${base}/admin/exams/${examId}/sessions/${session.session_id}/live-frame`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (prevFrameUrl.current) URL.revokeObjectURL(prevFrameUrl.current);
+      prevFrameUrl.current = url;
+      setFrameUrl(url);
+    } catch {}
+  }, [examId, session.session_id]);
+
+  useEffect(() => {
+    if (session.status !== 'ACTIVE') return;
+
+    fetchFrame();
+    frameIntervalRef.current = setInterval(fetchFrame, 2000);
+
+    const token = localStorage.getItem('access_token') || '';
+    const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    sseCloseRef.current = openSSE(
+      `${base}/admin/exams/${examId}/sessions/${session.session_id}/live-stream`,
+      token,
+      {
+        message: (d: any) => {
+          if (d?.type === 'alert' || d?.type === 'warning') {
+            setAlerts(prev => [{ message: d.message || d.alert_type || 'Alert', alert_type: d.alert_type || d.type, ts: Date.now() }, ...prev].slice(0, 50));
+          }
+        },
+      }
+    );
+
+    return () => {
+      if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+      sseCloseRef.current?.();
+      if (prevFrameUrl.current) URL.revokeObjectURL(prevFrameUrl.current);
+    };
+  }, [session.session_id, session.status, fetchFrame]);
 
   const handleExtend = async () => {
     const m = parseInt(extMinutes);
@@ -105,32 +187,60 @@ function LiveMonitorPanel({ session, examId }: { session: SessionCard; examId: s
     }
   };
 
+  const handleDebugToggle = async () => {
+    setTogglingDebug(true);
+    try {
+      await api.post(`/admin/exams/${examId}/sessions/${session.session_id}/debug-mode`, { enabled: !debugMode });
+      setDebugMode(d => !d);
+      toast.success(`Debug overlay ${!debugMode ? 'enabled' : 'disabled'}`);
+    } catch {
+      toast.error('Failed to toggle debug mode');
+    } finally {
+      setTogglingDebug(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
-      {/* AI Feed Placeholder */}
+      {/* Live Camera Feed */}
       <Card className="bg-slate-900 border-slate-800">
         <CardHeader className="pb-3">
-          <CardTitle className="text-sm text-slate-300 flex items-center gap-2">
-            <Bot className="h-4 w-4 text-indigo-400" /> AI Proctoring Feed
-          </CardTitle>
-          <CardDescription className="text-slate-500 text-xs">
-            Live video analysis and alerts — AI/ML integration pending
-          </CardDescription>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm text-slate-300 flex items-center gap-2">
+              <Bot className="h-4 w-4 text-indigo-400" /> AI Proctoring Feed
+            </CardTitle>
+            {session.status === 'ACTIVE' && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleDebugToggle}
+                disabled={togglingDebug}
+                className={`text-xs h-7 ${debugMode ? 'bg-indigo-900/50 border-indigo-700 text-indigo-300' : 'border-slate-700 text-slate-400'}`}
+              >
+                {togglingDebug ? <Loader2 className="h-3 w-3 animate-spin" /> : debugMode ? 'Debug: ON' : 'Debug: OFF'}
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
-          <div className="aspect-video bg-slate-800 rounded-lg flex flex-col items-center justify-center gap-3 border border-slate-700">
-            <Bot className="h-12 w-12 text-slate-600" />
-            <p className="text-slate-500 text-sm text-center max-w-xs">
-              Live monitoring feed will appear here once the AI/ML model is integrated.
-            </p>
-            <Badge variant="outline" className="bg-indigo-950/50 text-indigo-400 border-indigo-800 text-xs">
-              Model Integration Pending
-            </Badge>
-          </div>
+          {frameUrl ? (
+            <img
+              src={frameUrl}
+              alt="Live proctoring frame"
+              className="w-full aspect-video rounded-lg object-cover bg-slate-800"
+            />
+          ) : (
+            <div className="aspect-video bg-slate-800 rounded-lg flex flex-col items-center justify-center gap-3 border border-slate-700">
+              <Bot className="h-12 w-12 text-slate-600" />
+              <p className="text-slate-500 text-sm text-center max-w-xs">
+                {session.status === 'ACTIVE' ? 'Waiting for engine frame…' : 'Session not active'}
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
-      {/* Scores & Stats (UI only, from AI/ML) */}
+      {/* Scores & Stats */}
       <Card>
         <CardHeader className="pb-3 border-b border-slate-100">
           <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
@@ -155,20 +265,35 @@ function LiveMonitorPanel({ session, examId }: { session: SessionCard; examId: s
         </CardContent>
       </Card>
 
-      {/* Alerts placeholder */}
+      {/* Live Alerts */}
       <Card>
         <CardHeader className="pb-3 border-b border-slate-100">
           <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-500" /> Alerts & Warnings
+            <AlertTriangle className="h-4 w-4 text-amber-500" /> Live Alerts
+            {alerts.length > 0 && (
+              <Badge className="ml-auto bg-amber-100 text-amber-700 border-amber-200 text-xs">{alerts.length}</Badge>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-4">
-          <div className="bg-slate-50 rounded-lg p-6 text-center">
-            <Bot className="h-8 w-8 text-slate-300 mx-auto mb-2" />
-            <p className="text-sm text-slate-400">
-              Real-time violation alerts will populate here when the AI/ML model is integrated.
-            </p>
-          </div>
+          {alerts.length === 0 ? (
+            <div className="bg-slate-50 rounded-lg p-4 text-center">
+              <p className="text-sm text-slate-400">No alerts yet</p>
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-48 overflow-y-auto">
+              {alerts.map((a, i) => (
+                <div key={i} className="flex items-start gap-2 p-2 bg-amber-50 rounded-md border border-amber-100 text-xs">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold text-amber-800">{a.alert_type || 'Alert'}</p>
+                    <p className="text-amber-700">{a.message}</p>
+                    <p className="text-amber-400 mt-0.5">{new Date(a.ts).toLocaleTimeString()}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 

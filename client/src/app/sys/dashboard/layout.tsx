@@ -3,16 +3,17 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { 
-  LayoutDashboard, 
-  Users, 
-  Settings, 
-  LogOut, 
-  Shield, 
+import {
+  LayoutDashboard,
+  Users,
+  Settings,
+  LogOut,
+  Shield,
   FileText,
   User,
   Menu,
-  X
+  X,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -68,10 +69,11 @@ export default function SystemAdminLayout({
   };
 
   const navigation = [
-    { name: 'Dashboard', href: '/sys/dashboard', icon: LayoutDashboard },
-    { name: 'Applications', href: '/sys/dashboard/applications', icon: FileText },
-    { name: 'Users', href: '/sys/dashboard/users', icon: Users },
-    { name: 'Settings', href: '/sys/dashboard/settings', icon: Settings },
+    { name: 'Dashboard',        href: '/sys/dashboard',                 icon: LayoutDashboard    },
+    { name: 'Applications',     href: '/sys/dashboard/applications',    icon: FileText           },
+    { name: 'Users',            href: '/sys/dashboard/users',           icon: Users              },
+    { name: 'Engine Settings',  href: '/sys/dashboard/system-settings', icon: SlidersHorizontal  },
+    { name: 'Settings',         href: '/sys/dashboard/settings',        icon: Settings           },
   ];
 
   return (

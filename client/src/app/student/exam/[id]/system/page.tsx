@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { Loader2, ArrowRight, Monitor, LogOut, CheckCircle2, ShieldAlert, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
+import { parseUTC } from '@/lib/fmt-date';
 
 type CheckStatus = 'pending' | 'checking' | 'pass' | 'fail';
 
@@ -27,16 +28,38 @@ export default function SystemCheckPage() {
 
   const [isExamReady, setIsExamReady] = useState(false);
   const [countdown, setCountdown] = useState<number>(0);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownEndRef = useRef<number>(0);
 
   useEffect(() => {
     const initSystem = async () => {
       try {
         const res = await api.get(`/exam/${examId}/status`);
-        setExam(res.data);
-        setIsExamReady(res.data.allowed_to_start);
-        if (!res.data.allowed_to_start && res.data.time_until_open_ms > 0) {
-          setCountdown(Math.ceil(res.data.time_until_open_ms / 1000));
+        const data = res.data;
+        setExam(data);
+        setIsExamReady(data.allowed_to_start);
+
+        // If exam hasn't started yet, start a countdown to the actual start_window
+        if (!data.allowed_to_start && data.start_window) {
+          const startMs = parseUTC(data.start_window).getTime();
+          const msUntilStart = Math.max(0, startMs - Date.now());
+
+          if (msUntilStart > 0) {
+            countdownEndRef.current = startMs;
+            setCountdown(Math.ceil(msUntilStart / 1000));
+
+            countdownIntervalRef.current = setInterval(() => {
+              const remaining = Math.max(0, Math.ceil((countdownEndRef.current - Date.now()) / 1000));
+              setCountdown(remaining);
+              if (remaining <= 0) {
+                clearInterval(countdownIntervalRef.current!);
+                countdownIntervalRef.current = null;
+                setIsExamReady(true);
+              }
+            }, 1000);
+          }
         }
+
         setLoading(false);
         runSystemChecks();
       } catch {
@@ -45,23 +68,10 @@ export default function SystemCheckPage() {
       }
     };
     initSystem();
+    return () => {
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    };
   }, [examId]);
-
-  useEffect(() => {
-    if (countdown > 0) {
-      const timer = setInterval(() => {
-        setCountdown((prev) => {
-          if (prev <= 1) {
-            clearInterval(timer);
-            setIsExamReady(true);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-      return () => clearInterval(timer);
-    }
-  }, [countdown]);
 
   const runSystemChecks = async () => {
     // 1. Cross-device lock
@@ -111,8 +121,10 @@ export default function SystemCheckPage() {
   const anyFailed = fsStatus === 'fail' || sessionStatus === 'fail';
 
   const formatCountdown = (secs: number) => {
-    const m = Math.floor(secs / 60);
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
     const s = secs % 60;
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 

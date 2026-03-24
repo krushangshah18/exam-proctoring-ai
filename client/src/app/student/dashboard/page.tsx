@@ -13,6 +13,7 @@ import {
 import { useRouter } from 'next/navigation';
 import api from '@/lib/axios';
 import { toast } from 'sonner';
+import { parseUTC } from '@/lib/fmt-date';
 
 interface UpcomingExam {
   id: string;
@@ -40,7 +41,7 @@ const STATUS_CONFIG: Record<string, { label: string; classes: string; dot: strin
 
 function ExamCard({ exam, onClick }: { exam: UpcomingExam; onClick: () => void }) {
   const cfg = STATUS_CONFIG[exam.status] ?? STATUS_CONFIG.SCHEDULED;
-  const startDate = new Date(exam.start_window);
+  const startDate = parseUTC(exam.start_window);
   const isToday = startDate.toDateString() === new Date().toDateString();
   const isTomorrow =
     startDate.toDateString() === new Date(Date.now() + 86400000).toDateString();
@@ -83,7 +84,7 @@ function ExamCard({ exam, onClick }: { exam: UpcomingExam; onClick: () => void }
             <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
             <span>
               Deadline:{' '}
-              {new Date(exam.hard_join_deadline).toLocaleTimeString(undefined, {
+              {parseUTC(exam.hard_join_deadline).toLocaleTimeString(undefined, {
                 hour: '2-digit',
                 minute: '2-digit',
               })}

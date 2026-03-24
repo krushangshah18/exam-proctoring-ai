@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
 import RoleGuard from '@/components/auth/role-guard';
+import { parseUTC } from '@/lib/fmt-date';
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -150,7 +151,7 @@ export default function ExamHistoryPage() {
                   classes: 'bg-slate-100 text-slate-500 border-slate-200',
                 };
                 const submittedAt = exam.session_end_time
-                  ? new Date(exam.session_end_time)
+                  ? parseUTC(exam.session_end_time)
                   : null;
 
                 return (
@@ -194,14 +195,14 @@ export default function ExamHistoryPage() {
                         <div className="text-right shrink-0">
                           <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Exam Date</p>
                           <p className="text-sm font-semibold text-slate-700 mt-0.5">
-                            {new Date(exam.start_window).toLocaleDateString(undefined, {
+                            {parseUTC(exam.start_window).toLocaleDateString(undefined, {
                               month: 'short',
                               day: 'numeric',
                               year: 'numeric',
                             })}
                           </p>
                           <p className="text-xs text-slate-400">
-                            {new Date(exam.start_window).toLocaleTimeString(undefined, {
+                            {parseUTC(exam.start_window).toLocaleTimeString(undefined, {
                               hour: '2-digit',
                               minute: '2-digit',
                             })}

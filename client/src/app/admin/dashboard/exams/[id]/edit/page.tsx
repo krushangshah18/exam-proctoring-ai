@@ -71,6 +71,22 @@ const examSchema = z.object({
     tab_switching: z.boolean(),
   }),
 
+  detection_config: z.object({
+    DETECT_LOOKING_AWAY:    z.boolean(),
+    DETECT_LOOKING_DOWN:    z.boolean(),
+    DETECT_LOOKING_UP:      z.boolean(),
+    DETECT_LOOKING_SIDE:    z.boolean(),
+    DETECT_FACE_HIDDEN:     z.boolean(),
+    DETECT_PARTIAL_FACE:    z.boolean(),
+    DETECT_FAKE_PRESENCE:   z.boolean(),
+    DETECT_SPEAKER_AUDIO:   z.boolean(),
+    DETECT_PHONE:           z.boolean(),
+    DETECT_BOOK:            z.boolean(),
+    DETECT_HEADPHONE:       z.boolean(),
+    DETECT_EARBUD:          z.boolean(),
+    DETECT_MULTIPLE_PEOPLE: z.boolean(),
+  }),
+
   invites_text: z.string().optional(),
 }).refine(data => {
   const startD = new Date(data.start_window);
@@ -120,7 +136,15 @@ export default function EditExamPage() {
       hard_join_deadline: '', late_join_policy: 'REVIEW',
       allow_late_extension: false, max_late_minutes: 0,
       flag_threshold: 30, preset: 'CUSTOM',
-      config: PRESETS.MEDIUM, invites_text: '',
+      config: PRESETS.MEDIUM,
+      detection_config: {
+        DETECT_LOOKING_AWAY: true, DETECT_LOOKING_DOWN: true, DETECT_LOOKING_UP: true,
+        DETECT_LOOKING_SIDE: true, DETECT_FACE_HIDDEN: true, DETECT_PARTIAL_FACE: true,
+        DETECT_FAKE_PRESENCE: true, DETECT_SPEAKER_AUDIO: true, DETECT_PHONE: true,
+        DETECT_BOOK: true, DETECT_HEADPHONE: true, DETECT_EARBUD: true,
+        DETECT_MULTIPLE_PEOPLE: true,
+      },
+      invites_text: '',
     } as any,
   });
 
@@ -161,6 +185,13 @@ export default function EditExamPage() {
           flag_threshold:      data.flag_threshold,
           preset:              'CUSTOM',
           config:              data.config,
+          detection_config:    data.detection_config ?? {
+            DETECT_LOOKING_AWAY: true, DETECT_LOOKING_DOWN: true, DETECT_LOOKING_UP: true,
+            DETECT_LOOKING_SIDE: true, DETECT_FACE_HIDDEN: true, DETECT_PARTIAL_FACE: true,
+            DETECT_FAKE_PRESENCE: true, DETECT_SPEAKER_AUDIO: true, DETECT_PHONE: true,
+            DETECT_BOOK: true, DETECT_HEADPHONE: true, DETECT_EARBUD: true,
+            DETECT_MULTIPLE_PEOPLE: true,
+          },
           invites_text:        '',
         });
 
@@ -274,6 +305,7 @@ export default function EditExamPage() {
         allow_late_extension: values.allow_late_extension,
         max_late_minutes: values.max_late_minutes,
         config: values.config,
+        detection_config: values.detection_config,
         invites: emails,
       });
       toast.success('Exam updated successfully. Changes are being dispatched.');
@@ -520,6 +552,37 @@ export default function EditExamPage() {
                     </FormItem>
                   )} />
                 ))}
+              </div>
+
+              {/* ── AI Engine Detection Toggles ── */}
+              <div className="pt-4 border-t space-y-3">
+                <p className="uppercase text-xs font-bold text-muted-foreground tracking-wider">AI Engine Detection</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-6 bg-gray-50 dark:bg-gray-800/50 rounded-lg border">
+                  {[
+                    { id: 'DETECT_LOOKING_AWAY',    label: 'Looking Away'          },
+                    { id: 'DETECT_LOOKING_DOWN',    label: 'Looking Down'          },
+                    { id: 'DETECT_LOOKING_UP',      label: 'Looking Up'            },
+                    { id: 'DETECT_LOOKING_SIDE',    label: 'Looking Side'          },
+                    { id: 'DETECT_FACE_HIDDEN',     label: 'Face Hidden'           },
+                    { id: 'DETECT_PARTIAL_FACE',    label: 'Partial Face'          },
+                    { id: 'DETECT_FAKE_PRESENCE',   label: 'Fake Presence (Photo)' },
+                    { id: 'DETECT_SPEAKER_AUDIO',   label: 'Speaker Audio'         },
+                    { id: 'DETECT_PHONE',           label: 'Phone'                 },
+                    { id: 'DETECT_BOOK',            label: 'Book'                  },
+                    { id: 'DETECT_HEADPHONE',       label: 'Headphone'             },
+                    { id: 'DETECT_EARBUD',          label: 'Earbud'                },
+                    { id: 'DETECT_MULTIPLE_PEOPLE', label: 'Multiple People'       },
+                  ].map(item => (
+                    <FormField key={item.id} control={form.control} name={`detection_config.${item.id}` as any} render={({ field }) => (
+                      <FormItem className="flex items-center gap-3 space-y-0">
+                        <FormControl>
+                          <Switch checked={field.value} onCheckedChange={field.onChange} />
+                        </FormControl>
+                        <FormLabel className="text-sm font-medium">{item.label}</FormLabel>
+                      </FormItem>
+                    )} />
+                  ))}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t">

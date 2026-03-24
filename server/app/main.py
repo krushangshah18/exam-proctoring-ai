@@ -11,6 +11,7 @@ from app.core import log, settings
 from app.auth.routes import router as auth_router
 from app.auth.admin_applications import router as admin_app_router
 from app.exam.admin_routes import router as admin_exams_router
+from app.exam.admin_routes import _system_settings_router
 from app.exam.routes import router as student_exams_router
 
 
@@ -41,8 +42,19 @@ async def _exam_status_scheduler():
                     )
                     .all()
                 )
+                from app.exam.engine_allocator import allocate_for_exam, EngineCapacityError
                 for exam in scheduled_to_live:
-                    exam.status = ExamStatus.LIVE.value
+                    # Allocate engine containers before going LIVE
+                    try:
+                        urls = allocate_for_exam(exam.id, db)
+                        exam.status = ExamStatus.LIVE.value
+                        log.info("Exam %s → LIVE. Engine containers: %s", exam.id, urls)
+                    except EngineCapacityError as _cap_err:
+                        log.error(
+                            "Exam %s CANNOT go LIVE — no engine capacity: %s",
+                            exam.id, _cap_err,
+                        )
+                        # Leave as SCHEDULED — will retry next tick
 
                 live_to_ended = (
                     db.query(models.Exam)
@@ -55,6 +67,9 @@ async def _exam_status_scheduler():
                 )
                 for exam in live_to_ended:
                     exam.status = ExamStatus.ENDED.value
+                    # Release engine containers back to the pool
+                    from app.exam.engine_allocator import release_for_exam
+                    release_for_exam(exam.id, db)
 
                 # Detect disconnected sessions (no heartbeat for > 5 minutes)
                 heartbeat_cutoff = now - timedelta(minutes=5)
@@ -92,6 +107,10 @@ async def _exam_status_scheduler():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Seed engine containers + ensure settings row exist
+    from app.exam.proctor_startup import run_all as _proctor_startup
+    _proctor_startup()
+
     scheduler = asyncio.create_task(_exam_status_scheduler())
     log.info("Exam status scheduler started.")
     yield
@@ -144,6 +163,7 @@ async def add_security_headers(request: Request, call_next):
 app.include_router(auth_router)
 app.include_router(admin_app_router)
 app.include_router(admin_exams_router)
+app.include_router(_system_settings_router)
 app.include_router(student_exams_router)
 
 

@@ -200,6 +200,7 @@ def create_exam(
         allow_late_extension=data.allow_late_extension,
         max_late_minutes=data.max_late_minutes,
         config=data.config.model_dump(),
+        detection_config=data.detection_config.model_dump(),
     )
     db.add(new_exam)
     db.commit()
@@ -319,6 +320,7 @@ def get_exam_detail(
         "allow_late_extension": exam.allow_late_extension,
         "max_late_minutes": exam.max_late_minutes,
         "config": exam.config,
+        "detection_config": exam.detection_config,
         "invites": [
             {
                 "id": str(inv.id),
@@ -396,6 +398,7 @@ def update_exam(
     exam.allow_late_extension = data.allow_late_extension
     exam.max_late_minutes = data.max_late_minutes
     exam.config = data.config.model_dump()
+    exam.detection_config = data.detection_config.model_dump()
 
     # Sync invites — emails already lowercased by schema
     current_invites = (
@@ -816,3 +819,215 @@ def bulk_extend_time(
         "message": f"Extended {len(active_sessions)} active session(s) by {data.minutes} minute(s).",
         "sessions_extended": len(active_sessions),
     }
+
+
+# =====================================================
+# PROCTOR ENGINE — ADMIN PROXY ROUTES
+# =====================================================
+
+@router.get("/{exam_id}/sessions/{session_id}/live-frame")
+async def admin_live_frame(
+    exam_id: str,
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role("ADMIN")),
+):
+    """Proxy JPEG snapshot from the engine for admin live monitoring view."""
+    from fastapi.responses import Response as _Response
+    from app.exam.proctor_proxy import fetch_snapshot
+
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.id == session_id,
+        models.ExamSession.exam_id == exam_id,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.proctor_pc_id or not session.proctor_engine_url:
+        raise HTTPException(status_code=404, detail="No proctoring engine session for this student")
+
+    try:
+        jpeg_bytes = await fetch_snapshot(session.proctor_engine_url, session.proctor_pc_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Engine snapshot unavailable: {e}")
+
+    return _Response(content=jpeg_bytes, media_type="image/jpeg")
+
+
+@router.get("/{exam_id}/sessions/{session_id}/live-stream")
+async def admin_live_stream(
+    exam_id: str,
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role("ADMIN")),
+):
+    """
+    SSE proxy from the engine — streams live violation alerts to the admin monitor panel.
+    """
+    from fastapi.responses import StreamingResponse as _SR
+    from app.exam.proctor_proxy import stream_engine_events
+
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.id == session_id,
+        models.ExamSession.exam_id == exam_id,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.proctor_pc_id or not session.proctor_engine_url:
+        raise HTTPException(status_code=404, detail="No proctoring engine session for this student")
+
+    return _SR(
+        stream_engine_events(session.proctor_engine_url, session.proctor_pc_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+class DebugModeBody(BaseModel):
+    enabled: bool
+
+
+@router.post("/{exam_id}/sessions/{session_id}/debug-mode")
+async def admin_debug_mode(
+    exam_id: str,
+    session_id: str,
+    body: DebugModeBody,
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role("ADMIN")),
+):
+    """Toggle CV2 debug overlay on the engine's live snapshot for this student."""
+    from app.exam.proctor_proxy import proxy_debug_toggle
+
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.id == session_id,
+        models.ExamSession.exam_id == exam_id,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.proctor_pc_id or not session.proctor_engine_url:
+        raise HTTPException(status_code=404, detail="No proctoring engine session for this student")
+
+    try:
+        result = await proxy_debug_toggle(
+            session.proctor_engine_url, session.proctor_pc_id, body.enabled
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Engine debug toggle failed: {e}")
+
+    return result
+
+
+# =====================================================
+# SYSTEM ADMIN — ENGINE SETTINGS
+# =====================================================
+
+_system_settings_router = APIRouter(prefix="/admin", tags=["System Admin"])
+
+
+class EngineSettingsUpdate(BaseModel):
+    # Head pose
+    look_away_yaw: float | None = None
+    look_down_pitch: float | None = None
+    look_up_pitch: float | None = None
+    gaze_left: float | None = None
+    gaze_right: float | None = None
+    # Duration gates
+    looking_away_threshold: float | None = None
+    gaze_threshold: float | None = None
+    fake_window: float | None = None
+    # Risk scores
+    gaze_score: float | None = None
+    phone_score_2nd: float | None = None
+    phone_score_3rd: float | None = None
+    book_score: float | None = None
+    headphone_score: float | None = None
+    earbud_score: float | None = None
+    tab_switch_score: float | None = None
+    multi_people_score_2nd: float | None = None
+    multi_people_score_3rd: float | None = None
+    no_person_score_1: float | None = None
+    no_person_score_2: float | None = None
+    fake_presence_score_1: float | None = None
+    fake_presence_score_2: float | None = None
+    # State thresholds
+    state_warning: float | None = None
+    state_high_risk: float | None = None
+    state_admin_review: float | None = None
+    # Decay
+    decay_amount: float | None = None
+    # Termination
+    tab_switch_terminate_count: int | None = None
+    multi_people_terminate_s: float | None = None
+    no_person_terminate_s: float | None = None
+    # YOLO confidence
+    yolo_phone_conf: float | None = None
+    yolo_book_conf: float | None = None
+    yolo_audio_conf: float | None = None
+    yolo_person_conf: float | None = None
+
+
+@_system_settings_router.get("/system-settings")
+def get_system_settings(
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role("SYSADMIN")),
+):
+    """Read current engine system settings (system admin only)."""
+    row = db.query(models.EngineSettings).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Engine settings not initialised")
+    return {
+        "id": str(row.id),
+        "look_away_yaw":              row.look_away_yaw,
+        "look_down_pitch":            row.look_down_pitch,
+        "look_up_pitch":              row.look_up_pitch,
+        "gaze_left":                  row.gaze_left,
+        "gaze_right":                 row.gaze_right,
+        "looking_away_threshold":     row.looking_away_threshold,
+        "gaze_threshold":             row.gaze_threshold,
+        "fake_window":                row.fake_window,
+        "gaze_score":                 row.gaze_score,
+        "phone_score_2nd":            row.phone_score_2nd,
+        "phone_score_3rd":            row.phone_score_3rd,
+        "book_score":                 row.book_score,
+        "headphone_score":            row.headphone_score,
+        "earbud_score":               row.earbud_score,
+        "tab_switch_score":           row.tab_switch_score,
+        "multi_people_score_2nd":     row.multi_people_score_2nd,
+        "multi_people_score_3rd":     row.multi_people_score_3rd,
+        "no_person_score_1":          row.no_person_score_1,
+        "no_person_score_2":          row.no_person_score_2,
+        "fake_presence_score_1":      row.fake_presence_score_1,
+        "fake_presence_score_2":      row.fake_presence_score_2,
+        "state_warning":              row.state_warning,
+        "state_high_risk":            row.state_high_risk,
+        "state_admin_review":         row.state_admin_review,
+        "decay_amount":               row.decay_amount,
+        "tab_switch_terminate_count": row.tab_switch_terminate_count,
+        "multi_people_terminate_s":   row.multi_people_terminate_s,
+        "no_person_terminate_s":      row.no_person_terminate_s,
+        "yolo_phone_conf":            row.yolo_phone_conf,
+        "yolo_book_conf":             row.yolo_book_conf,
+        "yolo_audio_conf":            row.yolo_audio_conf,
+        "yolo_person_conf":           row.yolo_person_conf,
+        "updated_at":                 row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@_system_settings_router.post("/system-settings")
+def update_system_settings(
+    data: EngineSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role("SYSADMIN")),
+):
+    """Update engine system settings (system admin only). Only provided fields are changed."""
+    row = db.query(models.EngineSettings).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Engine settings not initialised")
+
+    patch = data.model_dump(exclude_none=True)
+    for field, value in patch.items():
+        setattr(row, field, value)
+
+    db.commit()
+    db.refresh(row)
+    log.info("System admin %s updated EngineSettings: %s", current_admin.email, list(patch.keys()))
+    return {"message": "Settings updated", "changed": list(patch.keys())}

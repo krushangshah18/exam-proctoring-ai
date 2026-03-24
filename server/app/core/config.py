@@ -39,4 +39,13 @@ class Settings:
 
     MAX_TRUSTED_DEVICES=int(os.getenv("MAX_TRUSTED_DEVICES",3))
 
+    # Proctoring engine containers — comma-separated list of base URLs
+    # e.g. "http://13.201.166.165:8000,http://13.201.166.165:8001"
+    PROCTOR_ENGINE_URLS: str = os.getenv("PROCTOR_ENGINE_URLS", "http://13.201.166.165:8000,http://13.201.166.165:8001")
+    PROCTOR_ENGINE_MAX_SESSIONS: int = int(os.getenv("PROCTOR_ENGINE_MAX_SESSIONS", 3))
+
+    @property
+    def proctor_engine_url_list(self) -> list[str]:
+        return [u.strip() for u in self.PROCTOR_ENGINE_URLS.split(",") if u.strip()]
+
 settings = Settings()

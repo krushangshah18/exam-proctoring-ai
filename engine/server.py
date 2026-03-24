@@ -1,0 +1,1159 @@
+import asyncio
+import collections
+import json
+import logging
+import os
+import platform
+import shutil
+import sys
+import time
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+import av
+import cv2
+import numpy as np
+import psutil
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer, MediaStreamTrack, RTCRtpReceiver
+
+# STUN: helps the server discover its public IP when deployed on EC2/cloud.
+# On localhost both sides are 127.0.0.1 so STUN is a no-op but harmless.
+# TURN is NOT needed — on EC2 UDP ports are open in the security group.
+_ICE_SERVERS = RTCConfiguration(iceServers=[
+    RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
+    RTCIceServer(urls=["stun:stun1.l.google.com:19302"]),
+])
+
+from core.proctor_coordinator import ProctorCoordinator
+from core.proctor_session import ProctorSession
+from core.metrics import metrics as _metrics
+
+# Logging is set up in main.py via setup_logging().
+# Fall back to basicConfig so server.py also works when run directly.
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("server")
+
+coordinator:     "ProctorCoordinator | None" = None
+_session_config: dict                        = {}
+MAX_CONNECTIONS: int                         = 40
+
+
+def _build_config() -> dict:
+    import config as _cfg_module
+    return {k: getattr(_cfg_module, k) for k in dir(_cfg_module) if k.isupper()}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global coordinator, _session_config, MAX_CONNECTIONS
+    _session_config = _build_config()
+    MAX_CONNECTIONS = _session_config.get("MAX_SESSIONS", 40)
+    # CLI --half / --warmup override config.py values (set by main.py via env vars)
+    _half    = os.getenv("PROCTOR_HALF")    == "1" if os.getenv("PROCTOR_HALF") else _session_config.get("YOLO_HALF",         True)
+    _warmup  = int(os.getenv("PROCTOR_WARMUP")) if os.getenv("PROCTOR_WARMUP") else _session_config.get("YOLO_WARMUP_FRAMES", 3)
+
+    coordinator = ProctorCoordinator(
+        model_path        = _session_config["YOLO_MODEL_PATH"],
+        max_sessions      = MAX_CONNECTIONS,
+        tick_rate         = _session_config.get("TICK_RATE", 10),
+        default_conf      = _session_config.get("YOLO_DEFAULT_CONF", 0.50),
+        person_conf       = _session_config.get("YOLO_PERSON_CONF",  0.30),
+        phone_conf        = _session_config.get("YOLO_PHONE_CONF",   0.65),
+        book_conf         = _session_config.get("YOLO_BOOK_CONF",    0.70),
+        audio_conf        = _session_config.get("YOLO_AUDIO_CONF",   0.41),
+        half              = _half,
+        warmup_frames     = _warmup,
+        min_vram_gb       = _session_config.get("YOLO_MIN_VRAM_GB",    2.0),
+        imgsz             = _session_config.get("YOLO_IMGSZ",          640),
+        mediapipe_stride  = _session_config.get("MEDIAPIPE_STRIDE",    1),
+    )
+    await coordinator.start()
+    logger.info("ProctorCoordinator started (max=%d  half=%s  warmup=%d)",
+                MAX_CONNECTIONS, _half, _warmup)
+    yield
+    if coordinator is not None:
+        await coordinator.stop()
+    _metrics.stop()
+
+
+app = FastAPI(lifespan=lifespan)
+
+# ── Request tracking middleware ───────────────────────────────────────────────
+# Normalises path parameters so /snapshot/abc123 → /snapshot/{pc_id}
+# and records count + latency per normalised endpoint.
+
+_PATH_PARAMS = [
+    # (prefix, replacement)
+    ("/snapshot/",   "/snapshot/{pc_id}"),
+    ("/stream/",     "/stream/{pc_id}"),
+    ("/risk/",       "/risk/{pc_id}"),
+    ("/alerts/",     "/alerts/{pc_id}"),
+    ("/tab_switch/", "/tab_switch/{pc_id}"),
+    ("/debug/",      "/debug/{pc_id}"),
+    ("/session/",    "/session/{pc_id}/log"),
+    ("/report/",     "/report/{report_id}"),
+    ("/proof/",      "/proof/{path}"),
+]
+
+
+def _normalise_path(path: str) -> str:
+    for prefix, template in _PATH_PARAMS:
+        if path.startswith(prefix):
+            return template
+    return path
+
+
+class RequestMetricsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        t0       = time.perf_counter()
+        response = await call_next(request)
+        latency  = (time.perf_counter() - t0) * 1000
+        endpoint = f"{request.method} {_normalise_path(request.url.path)}"
+        _metrics.record_request(endpoint, response.status_code, latency)
+        return response
+
+
+app.add_middleware(RequestMetricsMiddleware)
+
+# ── CORS ─────────────────────────────────────────────────────────────────────
+# Set CORS_ORIGINS env var to a comma-separated list of allowed origins.
+# e.g. CORS_ORIGINS=https://proctor.example.com,https://admin.example.com
+# Defaults to localhost:3000 for local development.
+_cors_origins = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins     = _cors_origins,
+    allow_methods     = ["GET", "POST", "DELETE"],
+    allow_headers     = ["Content-Type", "Cache-Control"],
+    allow_credentials = False,
+)
+
+
+# ── Global exception handler — ensures CORS headers on 500 errors ────────────
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    origin = request.headers.get("origin", "")
+    cors_header = origin if origin in _cors_origins else _cors_origins[0]
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
+        headers={"Access-Control-Allow-Origin": cors_header},
+    )
+
+pcs: set = set()
+stream_stats: dict[str, dict] = {}
+snapshots:    dict[str, bytes] = {}
+fps_log:      list[dict]       = []
+_device_counter = 0
+_pcs_by_id: dict[str, RTCPeerConnection] = {}   # pc_id → pc (for trickle ICE)
+
+
+# ── Tracks ────────────────────────────────────────────────────────────────────
+
+class VideoAnalyzerTrack(MediaStreamTrack):
+    kind = "video"
+
+    def __init__(self, track, pc_id, stats, label, session=None):
+        super().__init__()
+        self.track   = track
+        self.pc_id   = pc_id
+        self.stats   = stats
+        self.label   = label
+        self.session = session
+
+        self._frame_times: collections.deque = collections.deque(maxlen=60)
+        self._last_log      = time.time()
+        self._last_sample   = time.time()
+        self._last_snapshot = 0.0
+        self._frame_count   = 0
+
+    async def recv(self):
+        frame = await self.track.recv()
+        now   = time.time()
+        self._frame_times.append(now)
+        self._frame_count += 1
+
+        fps = 0.0
+        if len(self._frame_times) >= 2:
+            span = self._frame_times[-1] - self._frame_times[0]
+            fps  = (len(self._frame_times) - 1) / span if span > 0 else 0.0
+            intervals = [
+                (self._frame_times[i] - self._frame_times[i - 1]) * 1000
+                for i in range(1, len(self._frame_times))
+            ]
+            mean_iv = sum(intervals) / len(intervals)
+            jitter  = (sum((x - mean_iv) ** 2 for x in intervals) / len(intervals)) ** 0.5
+            self.stats.update({
+                "fps"             : round(fps, 2),
+                "jitter_ms"       : round(jitter, 2),
+                "mean_interval_ms": round(mean_iv, 2),
+                "total_frames"    : self.stats.get("total_frames", 0) + 1,
+                "resolution"      : f"{frame.width}x{frame.height}",
+            })
+        else:
+            self.stats["total_frames"] = self.stats.get("total_frames", 0) + 1
+
+        try:
+            img = frame.to_ndarray(format="bgr24")
+            img = np.ascontiguousarray(img)
+            # Downscale to 480p if larger — reduces MediaPipe BGR→RGB cost (~2.25×
+            # fewer pixels) and YOLO resize work. YOLO internally letterboxes to 640
+            # regardless, so detection quality is unaffected. Earbud detection should
+            # be retested after this change.
+            if img.shape[0] > 480:
+                img = cv2.resize(img, (854, 480), interpolation=cv2.INTER_LINEAR)
+        except Exception as exc:
+            logger.debug("[%s] frame decode error (skipping frame): %s", self.pc_id, exc)
+            return frame  # keep latest_frame at last good value
+
+        # Encode raw JPEG snapshot at ~10 Hz for admin live-view
+        # 480p frames are ~2× cheaper to encode so 10 Hz is safe.
+        if now - self._last_snapshot >= 0.1:
+            self._last_snapshot = now
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                snapshots[self.pc_id] = buf.tobytes()
+
+        if fps > 0 and now - self._last_sample >= 2.0:
+            self._last_sample = now
+            fps_log.append({"t": round(now, 3), "fps": round(fps, 2),
+                             "concurrent": len(pcs), "label": self.label})
+
+        if self.session is not None:
+            self.session.latest_frame = img
+            self.session.observed_fps = fps if fps > 0 else self.session.observed_fps
+
+        if now - self._last_log >= 5.0:
+            self._last_log = now
+            logger.info("[%s] fps=%.2f  jitter=%s ms  res=%s  concurrent=%d",
+                        self.label, fps, self.stats.get("jitter_ms", "?"),
+                        self.stats.get("resolution", "?"), len(pcs))
+        return frame
+
+
+class AudioAnalyzerTrack(MediaStreamTrack):
+    kind = "audio"
+
+    def __init__(self, track, stats, session=None):
+        super().__init__()
+        self.track      = track
+        self.stats      = stats
+        self.session    = session
+        self._packet_times: collections.deque = collections.deque(maxlen=100)
+        self._resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+
+    async def recv(self):
+        frame = await self.track.recv()
+        now   = time.time()
+        self._packet_times.append(now)
+
+        if len(self._packet_times) >= 2:
+            span = self._packet_times[-1] - self._packet_times[0]
+            rate = (len(self._packet_times) - 1) / span if span > 0 else 0.0
+            self.stats.update({
+                "audio_packet_rate"  : round(rate, 2),
+                "audio_total_packets": self.stats.get("audio_total_packets", 0) + 1,
+                "audio_sample_rate"  : frame.sample_rate,
+                "audio_channels"     : len(frame.layout.channels),
+            })
+        else:
+            self.stats["audio_total_packets"] = self.stats.get("audio_total_packets", 0) + 1
+
+        for r_frame in self._resampler.resample(frame):
+            pcm       = r_frame.to_ndarray()
+            pcm_int16 = pcm.astype(np.int16)
+            if self.session is not None:
+                self.session.push_audio_chunk(pcm_int16.T.flatten().tobytes(), now)
+        return frame
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.get("/stats")
+async def get_stats():
+    return JSONResponse({
+        pc_id: {k: v for k, v in s.items()}
+        for pc_id, s in stream_stats.items()
+    })
+
+@app.get("/sessions")
+async def list_sessions():
+    """Active sessions list for the admin dashboard cards."""
+    sessions_data = []
+    for pc_id, stats in stream_stats.items():
+        entry = {
+            "pc_id"           : pc_id,
+            "label"           : stats.get("label"),
+            "connection_state": stats.get("connection_state"),
+            "fps"             : stats.get("fps"),
+            "resolution"      : stats.get("resolution"),
+        }
+        if coordinator and pc_id in coordinator.sessions:
+            session   = coordinator.sessions[pc_id]
+            risk_info = session.risk.get_display()
+            entry.update({
+                "risk_score"      : risk_info["score"],
+                "risk_state"      : risk_info["state"],
+                "alert_count"     : len(session.alert_log),
+                "warning_count"   : len(session.warning_log),
+                "terminated"      : risk_info.get("terminated", False),
+            })
+        sessions_data.append(entry)
+    return JSONResponse(sessions_data)
+
+@app.get("/snapshot/{pc_id}")
+async def get_snapshot(pc_id: str):
+    # When debug mode is on, produce an annotated frame on the fly
+    if coordinator and pc_id in coordinator.sessions:
+        session = coordinator.sessions[pc_id]
+        if session.debug_mode:
+            debug_frame = session.get_debug_frame()
+            if debug_frame is not None:
+                ok, buf = cv2.imencode(".jpg", debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ok:
+                    return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+    data = snapshots.get(pc_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="No snapshot yet")
+    return Response(content=data, media_type="image/jpeg")
+
+
+@app.post("/debug/{pc_id}")
+async def toggle_debug(pc_id: str, request: Request):
+    """Toggle annotated debug overlay on the admin live snapshot."""
+    if coordinator is None or pc_id not in coordinator.sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    body    = await request.json()
+    enabled = bool(body.get("enabled", True))
+    coordinator.sessions[pc_id].set_debug(enabled)
+    return JSONResponse({"ok": True, "debug": enabled})
+
+@app.get("/risk/{pc_id}")
+async def get_risk(pc_id: str):
+    if coordinator is None or pc_id not in coordinator.sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return JSONResponse(coordinator.sessions[pc_id].risk.get_display())
+
+@app.get("/session/{pc_id}/log")
+async def get_session_log(pc_id: str):
+    """Return full alert/warning history + current risk for a live session."""
+    if coordinator is None or pc_id not in coordinator.sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = coordinator.sessions[pc_id]
+    return JSONResponse({
+        "alert_log"  : session.alert_log,
+        "warning_log": session.warning_log,
+        "risk"       : session.risk.get_display(),
+    })
+
+@app.post("/tab_switch/{pc_id}")
+async def report_tab_switch(pc_id: str):
+    """
+    Called by the candidate frontend whenever they leave the exam tab.
+    Scoring: occ=1 → warning, occ=2 → alert +15pts, occ>=3 → TERMINATED.
+    """
+    if coordinator is None or pc_id not in coordinator.sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = coordinator.sessions[pc_id]
+    session.report_tab_switch(now=time.time())
+    return JSONResponse({"ok": True, "risk": session.risk.get_display()})
+
+@app.get("/alerts/{pc_id}")
+async def get_alerts(pc_id: str):
+    if coordinator is None or pc_id not in coordinator.sessions:
+        return JSONResponse({"warnings": [], "alerts": []})
+    session = coordinator.sessions[pc_id]
+    return JSONResponse({
+        "warnings": session._alert_manager.get_active_warnings(),
+        "alerts"  : session._alert_manager.get_active_alerts(),
+    })
+
+@app.get("/capacity")
+async def capacity():
+    active = len(pcs)
+    return JSONResponse({"active": active, "max": MAX_CONNECTIONS,
+                         "available": active < MAX_CONNECTIONS})
+
+@app.get("/coordinator/stats")
+async def coordinator_stats():
+    if coordinator is None:
+        return JSONResponse({"enabled": False})
+    return JSONResponse({"enabled": True, **coordinator.diagnostics()})
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """
+    Live metrics snapshot — request counts, latency percentiles,
+    session counts, alert/warning totals, YOLO timing, system resources.
+    """
+    snap = _metrics.snapshot()
+    # Attach live coordinator diagnostics
+    if coordinator is not None:
+        snap["coordinator"].update(coordinator.diagnostics())
+    return JSONResponse(snap)
+
+
+@app.get("/system/report")
+async def system_report():
+    """
+    Comprehensive system performance report.
+    Combines metrics, coordinator diagnostics, active session details,
+    hardware info, and runtime environment into one JSON document.
+    """
+    import torch
+
+    snap    = _metrics.snapshot()
+    now_utc = datetime.now(timezone.utc)
+    proc    = psutil.Process()
+
+    # ── Runtime environment ───────────────────────────────────────────────────
+    env = {
+        "python_version" : sys.version.split()[0],
+        "platform"       : platform.platform(),
+        "hostname"       : platform.node(),
+        "pid"            : proc.pid,
+        "cpu_count"      : psutil.cpu_count(logical=True),
+        "cpu_phys"       : psutil.cpu_count(logical=False),
+        "ram_total_gb"   : round(psutil.virtual_memory().total / 1e9, 1),
+        "ram_avail_gb"   : round(psutil.virtual_memory().available / 1e9, 1),
+    }
+
+    # ── Detector / model info ─────────────────────────────────────────────────
+    detector_info: dict = {}
+    if coordinator is not None:
+        detector_info.update(coordinator.detector.device_info)
+
+    # ── Coordinator ───────────────────────────────────────────────────────────
+    coord_info: dict = {"enabled": coordinator is not None}
+    if coordinator is not None:
+        coord_info.update(coordinator.diagnostics())
+        coord_info.update(snap.get("coordinator", {}))
+
+    # ── Active sessions summary ───────────────────────────────────────────────
+    active_sessions = []
+    if coordinator is not None:
+        for pc_id, session in list(coordinator.sessions.items()):
+            risk      = session.risk.get_display()
+            s_stats   = stream_stats.get(pc_id, {})
+            active_sessions.append({
+                "pc_id"          : pc_id,
+                "label"          : s_stats.get("label", "?"),
+                "state"          : s_stats.get("connection_state", "?"),
+                "fps"            : s_stats.get("fps"),
+                "resolution"     : s_stats.get("resolution"),
+                "alerts"         : len(session.alert_log),
+                "warnings"       : len(session.warning_log),
+                "risk_score"     : risk["score"],
+                "risk_state"     : risk["state"],
+                "terminated"     : risk["terminated"],
+                "debug_mode"     : session.debug_mode,
+            })
+
+    # ── GPU info ──────────────────────────────────────────────────────────────
+    gpu_info: dict = {"cuda_available": torch.cuda.is_available()}
+    if torch.cuda.is_available():
+        props = torch.cuda.get_device_properties(0)
+        gpu_info.update({
+            "name"           : props.name,
+            "vram_total_gb"  : round(props.total_memory / 1e9, 1),
+            "vram_alloc_mb"  : round(torch.cuda.memory_allocated(0) / 1e6, 1),
+            "vram_reserved_mb": round(torch.cuda.memory_reserved(0) / 1e6, 1),
+            "compute_cap"    : f"{props.major}.{props.minor}",
+            "torch_version"  : torch.__version__,
+        })
+
+    # ── Session config snapshot ───────────────────────────────────────────────
+    safe_cfg = {
+        k: v for k, v in _session_config.items()
+        if isinstance(v, (int, float, bool, str))
+    }
+
+    report = {
+        "generated_at"     : now_utc.isoformat(),
+        "uptime"           : snap["uptime"],
+        "uptime_s"         : snap["uptime_s"],
+        "environment"      : env,
+        "gpu"              : gpu_info,
+        "detector"         : detector_info,
+        "coordinator"      : coord_info,
+        "requests"         : snap["requests"],
+        "sessions"         : {
+            **snap["sessions"],
+            "max_concurrent" : MAX_CONNECTIONS,
+            "active_details" : active_sessions,
+        },
+        "events"           : snap["events"],
+        "yolo_performance" : snap["yolo"],
+        "system_resources" : snap["system"],
+        "config"           : safe_cfg,
+    }
+
+    return JSONResponse(report)
+
+
+# ── SSE alert stream ───────────────────────────────────────────────────────────
+
+@app.get("/stream/{pc_id}")
+async def stream_alerts(pc_id: str):
+    """
+    Server-Sent Events stream for a candidate session.
+    Pushes: alert | warning | risk_update | session_end events.
+    Frontend connects once and receives all subsequent events.
+    """
+    async def generate():
+        if coordinator is None or pc_id not in coordinator.sessions:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'session not found'})}\n\n"
+            return
+
+        session = coordinator.sessions[pc_id]
+        queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+        session.subscribe_sse(queue)
+
+        # Send current state snapshot on connect
+        yield f"data: {json.dumps({'type': 'connected', 'pc_id': pc_id, 'risk': session.risk.get_display()})}\n\n"
+
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=25.0)
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+                    continue
+
+                if event is None:        # sentinel — session ended
+                    break
+
+                yield f"data: {json.dumps(event)}\n\n"
+
+                if event.get("type") == "session_end":
+                    break
+        finally:
+            session.unsubscribe_sse(queue)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control"    : "no-cache",
+            "X-Accel-Buffering": "no",   # disable nginx buffering
+        },
+    )
+
+
+# ── Proof file serving ────────────────────────────────────────────────────────
+
+@app.get("/proof/{path:path}")
+async def serve_proof(path: str):
+    """Serve proof files (JPEG images, WAV audio) from the reports directory."""
+    full_path = (Path("reports") / path).resolve()
+    reports_root = Path("reports").resolve()
+
+    # Safety: prevent path traversal outside reports/
+    if not str(full_path).startswith(str(reports_root)):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not full_path.exists() or not full_path.is_file():
+        raise HTTPException(status_code=404, detail="Proof file not found")
+
+    media_type = "audio/wav" if full_path.suffix == ".wav" else "image/jpeg"
+    return FileResponse(str(full_path), media_type=media_type)
+
+
+# ── Report endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/reports")
+async def list_reports():
+    """List all completed session report IDs."""
+    reports_dir = Path("reports")
+    if not reports_dir.exists():
+        return JSONResponse([])
+    reports = []
+    for d in sorted(reports_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if d.is_dir() and (d / "report.json").exists():
+            reports.append(d.name)
+    return JSONResponse(reports)
+
+@app.get("/reports/meta")
+async def list_reports_meta():
+    """List reports with metadata: risk state, counts, disk size, proof count."""
+    reports_dir = Path("reports")
+    if not reports_dir.exists():
+        return JSONResponse([])
+    result = []
+    for d in sorted(reports_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        rj = d / "report.json"
+        if not d.is_dir() or not rj.exists():
+            continue
+        try:
+            with open(rj) as f:
+                r = json.load(f)
+            # Compute directory size and proof file count
+            size_bytes = sum(p.stat().st_size for p in d.rglob("*") if p.is_file())
+            proof_count = sum(1 for p in (d / "proof").rglob("*") if p.is_file()) if (d / "proof").exists() else 0
+            result.append({
+                "id"           : d.name,
+                "session_id"   : r.get("session_id", d.name),
+                "session_start": r.get("session_start", ""),
+                "session_end"  : r.get("session_end", ""),
+                "duration_s"   : r.get("duration_s", 0),
+                "risk_state"   : r.get("risk", {}).get("final_state", "NORMAL"),
+                "final_score"  : r.get("risk", {}).get("final_score", 0),
+                "terminated"   : r.get("risk", {}).get("terminated", False),
+                "alert_count"  : r.get("total_api_alerts", 0),
+                "warning_count": r.get("total_warnings", 0),
+                "size_kb"      : round(size_bytes / 1024, 1),
+                "proof_count"  : proof_count,
+            })
+        except Exception:
+            pass
+    return JSONResponse(result)
+
+@app.get("/report/{report_id}")
+async def get_report(report_id: str):
+    """Get the JSON report for a completed session."""
+    # Sanitize: only allow directory names, no path separators
+    if "/" in report_id or "\\" in report_id or ".." in report_id:
+        raise HTTPException(status_code=400, detail="Invalid report ID")
+    path = Path("reports") / report_id / "report.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Report not found")
+    with open(path) as f:
+        return JSONResponse(json.load(f))
+
+@app.delete("/report/{report_id}")
+async def delete_report(report_id: str):
+    """Delete a completed session report directory (report.json + all proof files)."""
+    if "/" in report_id or "\\" in report_id or ".." in report_id:
+        raise HTTPException(status_code=400, detail="Invalid report ID")
+    report_dir = (Path("reports") / report_id).resolve()
+    reports_root = Path("reports").resolve()
+    if not str(report_dir).startswith(str(reports_root)):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not report_dir.exists() or not report_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Report not found")
+    shutil.rmtree(report_dir)
+    logger.info("Deleted report %s", report_id)
+    return JSONResponse({"ok": True, "deleted": report_id})
+
+
+# ── Exam config (admin-controlled detection toggles) ─────────────────────────
+
+@app.get("/exam/config")
+async def get_exam_config():
+    """
+    Return current detection toggles.
+    Shows global defaults merged with any admin overrides.
+    """
+    defaults = {k: v for k, v in _session_config.items() if k.startswith("DETECT_")}
+    if coordinator is not None:
+        defaults.update(coordinator.exam_config)
+    return JSONResponse(defaults)
+
+@app.post("/exam/config")
+async def set_exam_config(request: Request):
+    """
+    Update detection toggles at runtime.
+    Changes apply immediately to all active sessions.
+    Disabled detections skip both computation and scoring — saves CPU/GPU.
+    """
+    body    = await request.json()
+    if coordinator is None:
+        raise HTTPException(status_code=503, detail="Coordinator not running")
+    updated = coordinator.update_exam_config(body)
+    return JSONResponse({"updated": updated})
+
+# ── Admin settings (full tunable config) ─────────────────────────────────────
+
+def _get_all_settings() -> dict:
+    """
+    Build the full settings payload served by GET /admin/settings.
+    Merges config.py values with any runtime_settings / exam_config overrides
+    and annotates each key with type, label, category metadata for the UI.
+    """
+    import settings.scoring as S
+    import settings.alerts  as A
+
+    base = dict(_session_config)
+    rt   = coordinator.runtime_settings if coordinator else {}
+    ec   = coordinator.exam_config       if coordinator else {}
+
+    def _v(key, fallback=None):
+        # Priority: exam_config > runtime_settings > base config
+        if key in ec:   return ec[key]
+        if key in rt:   return rt[key]
+        return base.get(key, fallback)
+
+    return {
+        "detection": {
+            "DETECT_LOOKING_AWAY"   : _v("DETECT_LOOKING_AWAY",    True),
+            "DETECT_LOOKING_DOWN"   : _v("DETECT_LOOKING_DOWN",    True),
+            "DETECT_LOOKING_UP"     : _v("DETECT_LOOKING_UP",      True),
+            "DETECT_LOOKING_SIDE"   : _v("DETECT_LOOKING_SIDE",    True),
+            "DETECT_FACE_HIDDEN"    : _v("DETECT_FACE_HIDDEN",     True),
+            "DETECT_PARTIAL_FACE"   : _v("DETECT_PARTIAL_FACE",    True),
+            "DETECT_FAKE_PRESENCE"  : _v("DETECT_FAKE_PRESENCE",   True),
+            "DETECT_SPEAKER_AUDIO"  : _v("DETECT_SPEAKER_AUDIO",   True),
+            "DETECT_PHONE"          : _v("DETECT_PHONE",           True),
+            "DETECT_BOOK"           : _v("DETECT_BOOK",            True),
+            "DETECT_HEADPHONE"      : _v("DETECT_HEADPHONE",       True),
+            "DETECT_EARBUD"         : _v("DETECT_EARBUD",          True),
+            "DETECT_MULTIPLE_PEOPLE": _v("DETECT_MULTIPLE_PEOPLE", True),
+        },
+        "thresholds": {
+            "LOOKING_AWAY_THRESHOLD": _v("LOOKING_AWAY_THRESHOLD", 2.0),
+            "GAZE_THRESHOLD"        : _v("GAZE_THRESHOLD",         1.5),
+            "LOOK_AWAY_YAW"         : _v("LOOK_AWAY_YAW",          0.20),
+            "LOOK_DOWN_PITCH"       : _v("LOOK_DOWN_PITCH",        0.13),
+            "LOOK_UP_PITCH"         : _v("LOOK_UP_PITCH",         -0.10),
+            "GAZE_LEFT"             : _v("GAZE_LEFT",             -0.13),
+            "GAZE_RIGHT"            : _v("GAZE_RIGHT",             0.13),
+            "EAR_THRESHOLD"         : _v("EAR_THRESHOLD",          0.20),
+            "BLINK_MIN_DURATION_S"  : _v("BLINK_MIN_DURATION_S",   0.05),
+            "BLINK_MAX_DURATION_S"  : _v("BLINK_MAX_DURATION_S",   0.40),
+            "MIN_FACE_WIDTH"        : _v("MIN_FACE_WIDTH",          110),
+            "MIN_FACE_HEIGHT"       : _v("MIN_FACE_HEIGHT",         120),
+            "FACE_HIDDEN_RECENCY_S" : _v("FACE_HIDDEN_RECENCY_S",   4.0),
+        },
+        "objects": {
+            "OBJECT_WINDOW"         : _v("OBJECT_WINDOW",          15),
+            "PHONE_MIN_VOTES"       : _v("PHONE_MIN_VOTES",         9),
+            "BOOK_MIN_VOTES"        : _v("BOOK_MIN_VOTES",         10),
+            "HEADPHONE_MIN_VOTES"   : _v("HEADPHONE_MIN_VOTES",     9),
+            "EARBUD_MIN_VOTES"      : _v("EARBUD_MIN_VOTES",        9),
+            "OBJECT_MIN_VOTES"      : _v("OBJECT_MIN_VOTES",        5),
+            "YOLO_DEFAULT_CONF"     : _v("YOLO_DEFAULT_CONF",      0.50),
+            "YOLO_PHONE_CONF"       : _v("YOLO_PHONE_CONF",        0.65),
+            "YOLO_BOOK_CONF"        : _v("YOLO_BOOK_CONF",         0.70),
+            "YOLO_AUDIO_CONF"       : _v("YOLO_AUDIO_CONF",        0.41),
+        },
+        "scoring": {
+            "STATE_WARNING"              : S.STATE_WARNING,
+            "STATE_HIGH_RISK"            : S.STATE_HIGH_RISK,
+            "STATE_ADMIN"                : S.STATE_ADMIN,
+            "DECAY_AMOUNT"               : S.DECAY_AMOUNT,
+            "TAB_SWITCH_SCORE"           : S.TAB_SWITCH_SCORE,
+            "TAB_SWITCH_TERMINATE_COUNT" : S.TAB_SWITCH_TERMINATE_COUNT,
+            "GAZE_SCORE"                 : S.GAZE_SCORE,
+            "PHONE_SCORE_2ND"            : S.PHONE_SCORE_2ND,
+            "PHONE_SCORE_3RD"            : S.PHONE_SCORE_3RD,
+            "BOOK_SCORE"                 : S.BOOK_SCORE,
+            "HEADPHONE_SCORE"            : S.HEADPHONE_SCORE,
+            "EARBUD_SCORE"               : S.EARBUD_SCORE,
+            "MULTI_PEOPLE_SCORE_2ND"     : S.MULTI_PEOPLE_SCORE_2ND,
+            "MULTI_PEOPLE_SCORE_3RD"     : S.MULTI_PEOPLE_SCORE_3RD,
+            "NO_PERSON_SCORE_1"          : S.NO_PERSON_SCORE_1,
+            "NO_PERSON_SCORE_2"          : S.NO_PERSON_SCORE_2,
+            "NO_PERSON_DUR_1"            : S.NO_PERSON_DUR_1,
+            "NO_PERSON_DUR_2"            : S.NO_PERSON_DUR_2,
+            "MULTI_PEOPLE_TERMINATE_S"   : S.MULTI_PEOPLE_TERMINATE_S,
+            "NO_PERSON_TERMINATE_S"      : S.NO_PERSON_TERMINATE_S,
+            "FAKE_PRESENCE_SCORE_1"      : S.FAKE_PRESENCE_SCORE_1,
+            "FAKE_PRESENCE_SCORE_2"      : S.FAKE_PRESENCE_SCORE_2,
+            "FAKE_PRESENCE_DUR_1"        : S.FAKE_PRESENCE_DUR_1,
+            "FAKE_PRESENCE_DUR_2"        : S.FAKE_PRESENCE_DUR_2,
+        },
+        "cooldowns": {
+            "score" : dict(S.SCORE_COOLDOWNS),
+            "warn"  : dict(A.WARN_COOLDOWNS),
+            "api"   : dict(A.API_COOLDOWNS),
+        },
+    }
+
+
+@app.get("/admin/settings")
+async def get_admin_settings():
+    """Return all tunable settings, categorised for the admin UI."""
+    return JSONResponse(_get_all_settings())
+
+
+@app.post("/admin/settings")
+async def post_admin_settings(request: Request):
+    """
+    Apply admin setting changes.
+
+    Body shape:
+      { "detection": {...}, "thresholds": {...}, "objects": {...},
+        "scoring": {...}, "cooldowns": {"score": {...}, "warn": {...}, "api": {...}} }
+
+    - detection keys  → coordinator.exam_config   (immediate, all sessions)
+    - threshold/object keys → coordinator.runtime_settings (new sessions)
+    - scoring keys    → mutate settings.scoring module (immediate, all score events)
+    - cooldown keys   → mutate settings.alerts dicts  (immediate)
+    """
+    import settings.scoring as S
+    import settings.alerts  as A
+
+    body = await request.json()
+    changed: dict = {}
+
+    # ── Detection toggles (immediate) ────────────────────────────────────────
+    if "detection" in body and coordinator is not None:
+        updated = coordinator.update_exam_config(body["detection"])
+        changed["detection"] = updated
+
+    # ── Thresholds — live update on all active sessions + new sessions ──────────
+    # HeadPoseDetector now accepts explicit constructor params (min_face_width etc.)
+    # which are sourced from session_cfg at session creation.  So:
+    #   (1) coordinator.runtime_settings → new sessions pick up the value automatically
+    #   (2) direct setattr on each active session.head_detector → immediate live effect
+    # No module-level patching needed.
+    _HEAD_DETECTOR_ATTRS = {
+        "MIN_FACE_WIDTH", "MIN_FACE_HEIGHT",
+        "LOOK_AWAY_YAW", "LOOK_DOWN_PITCH", "LOOK_UP_PITCH",
+        "GAZE_LEFT", "GAZE_RIGHT", "EAR_THRESHOLD",
+        "BLINK_MIN_DURATION_S", "BLINK_MAX_DURATION_S",
+    }
+    if "thresholds" in body and coordinator is not None:
+        for k, v in body["thresholds"].items():
+            v = float(v)
+            # New sessions: stored in runtime_settings and merged into session_cfg at creation.
+            coordinator.runtime_settings[k] = v
+            # Active sessions: patch head_detector instance directly for immediate effect.
+            for session in coordinator.sessions.values():
+                hd = session.head_detector
+                if k in _HEAD_DETECTOR_ATTRS and hasattr(hd, k):
+                    setattr(hd, k, v)
+                elif k == "LOOKING_AWAY_THRESHOLD":
+                    session.head_tracker.threshold = v
+                elif k == "GAZE_THRESHOLD":
+                    session._cfg["GAZE_THRESHOLD"] = v
+                elif k == "FACE_HIDDEN_RECENCY_S":
+                    session._face_hidden_recency_s = v
+        changed["thresholds"] = {k: float(v) for k, v in body["thresholds"].items()}
+
+    # ── Object settings (new sessions only — obj_tracker built at session init) ─
+    if "objects" in body and coordinator is not None:
+        for k, v in body["objects"].items():
+            coordinator.runtime_settings[k] = v
+        changed["objects"] = {k: v for k, v in body["objects"].items()}
+
+    # ── Scoring constants (immediate via module mutation) ─────────────────────
+    _SCORE_FLOATS = {
+        "STATE_WARNING", "STATE_HIGH_RISK", "STATE_ADMIN", "DECAY_AMOUNT",
+        "TAB_SWITCH_SCORE", "GAZE_SCORE", "PHONE_SCORE_2ND", "PHONE_SCORE_3RD",
+        "BOOK_SCORE", "HEADPHONE_SCORE", "EARBUD_SCORE",
+        "MULTI_PEOPLE_SCORE_2ND", "MULTI_PEOPLE_SCORE_3RD",
+        "NO_PERSON_SCORE_1", "NO_PERSON_SCORE_2",
+        "NO_PERSON_DUR_1", "NO_PERSON_DUR_2",
+        "MULTI_PEOPLE_TERMINATE_S", "NO_PERSON_TERMINATE_S",
+        "FAKE_PRESENCE_SCORE_1", "FAKE_PRESENCE_SCORE_2",
+        "FAKE_PRESENCE_DUR_1", "FAKE_PRESENCE_DUR_2",
+    }
+    _SCORE_INTS = {"TAB_SWITCH_TERMINATE_COUNT"}
+    if "scoring" in body:
+        for k, v in body["scoring"].items():
+            if k in _SCORE_FLOATS and hasattr(S, k):
+                setattr(S, k, float(v))
+                changed.setdefault("scoring", {})[k] = float(v)
+            elif k in _SCORE_INTS and hasattr(S, k):
+                setattr(S, k, int(v))
+                changed.setdefault("scoring", {})[k] = int(v)
+
+    # ── Cooldowns (immediate via dict mutation) ───────────────────────────────
+    if "cooldowns" in body:
+        cd = body["cooldowns"]
+        if "score" in cd:
+            S.SCORE_COOLDOWNS.update({k: float(v) for k, v in cd["score"].items()})
+            changed.setdefault("cooldowns", {})["score"] = dict(cd["score"])
+        if "warn" in cd:
+            A.WARN_COOLDOWNS.update({k: float(v) for k, v in cd["warn"].items()})
+            changed.setdefault("cooldowns", {})["warn"] = dict(cd["warn"])
+        if "api" in cd:
+            A.API_COOLDOWNS.update({k: float(v) for k, v in cd["api"].items()})
+            changed.setdefault("cooldowns", {})["api"] = dict(cd["api"])
+
+    logger.info("Admin settings updated: %s", list(changed.keys()))
+    return JSONResponse({"ok": True, "changed": changed})
+
+
+@app.get("/analysis")
+async def analysis():
+    buckets: dict[int, list[float]] = {}
+    for entry in fps_log:
+        buckets.setdefault(entry["concurrent"], []).append(entry["fps"])
+    by_concurrent = {
+        c: {"avg_fps": round(sum(v) / len(v), 2), "min_fps": round(min(v), 2),
+            "max_fps": round(max(v), 2), "samples": len(v)}
+        for c, v in sorted(buckets.items())
+    }
+    return JSONResponse({"raw_log": fps_log, "by_concurrent": by_concurrent})
+
+
+# ── WebRTC offer ──────────────────────────────────────────────────────────────
+
+def _strip_rtx_from_sdp(sdp_str: str) -> str:
+    """
+    Remove all video/rtx payload-type references from an SDP string.
+
+    Why: aiortc's codecs module has no handler for 'video/rtx'.  When the
+    browser negotiates RTX (RTP retransmission, RFC 4588) alongside VP8,
+    aiortc still accepts it and eventually starts a decoder_worker thread for
+    the RTX payload type.  That thread crashes immediately:
+        ValueError: No decoder found for MIME type `video/rtx`
+    The crash kills the video-decoder thread, recv() blocks forever, and the
+    frame feed freezes.
+
+    Stripping RTX from the offer before setRemoteDescription means aiortc
+    never creates RTX receivers, the answer SDP omits RTX, and the browser
+    stops sending RTX packets — so the decoder thread is never triggered.
+    """
+    sep   = "\r\n" if "\r\n" in sdp_str else "\n"
+    lines = sdp_str.split(sep)
+
+    # Pass 1 — collect RTX payload types  (e.g. "a=rtpmap:97 rtx/90000")
+    rtx_pts: set[str] = set()
+    for line in lines:
+        if line.startswith("a=rtpmap:"):
+            rest = line[len("a=rtpmap:"):]
+            pt, _, codec = rest.partition(" ")
+            if codec.lower().startswith("rtx/"):
+                rtx_pts.add(pt.strip())
+
+    if not rtx_pts:
+        return sdp_str   # nothing to strip
+
+    logger.debug("Stripping RTX payload types from offer SDP: %s", rtx_pts)
+
+    # Pass 2 — drop lines that reference RTX PTs, rewrite m= lines
+    out: list[str] = []
+    for line in lines:
+        # Drop rtpmap / fmtp / rtcp-fb lines for RTX PTs
+        if any(
+            line.startswith(f"a=rtpmap:{pt} ")
+            or line.startswith(f"a=fmtp:{pt} ")
+            or line.startswith(f"a=rtcp-fb:{pt} ")
+            for pt in rtx_pts
+        ):
+            continue
+        # Rewrite "m=video ... PT1 PT2 PT3" to remove RTX PTs
+        if line.startswith("m="):
+            parts = line.split()
+            kept  = [p for p in parts[3:] if p not in rtx_pts]
+            out.append(" ".join(parts[:3] + kept))
+        else:
+            out.append(line)
+
+    return sep.join(out)
+
+
+@app.post("/ice-candidate/{pc_id}")
+async def add_ice_candidate(pc_id: str, request: Request):
+    """Receive a trickle ICE candidate from the browser and add it to the peer connection."""
+    pc = _pcs_by_id.get(pc_id)
+    if pc is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    params = await request.json()
+    candidate_str = params.get("candidate", "")
+    if not candidate_str:
+        return {"ok": True}   # end-of-candidates signal — nothing to do
+
+    try:
+        from aiortc.sdp import candidate_from_sdp
+        # Browser sends "candidate:..." — strip the prefix for the parser
+        sdp_value = candidate_str[len("candidate:"):] if candidate_str.startswith("candidate:") else candidate_str
+        ice_candidate = candidate_from_sdp(sdp_value)
+        ice_candidate.sdpMid       = params.get("sdpMid")
+        ice_candidate.sdpMLineIndex = params.get("sdpMLineIndex", 0)
+        await pc.addIceCandidate(ice_candidate)
+    except Exception as exc:
+        logger.warning("Failed to add ICE candidate for %s: %s", pc_id, exc)
+
+    return {"ok": True}
+
+
+@app.post("/offer")
+async def offer(request: Request):
+    if len(pcs) >= MAX_CONNECTIONS:
+        return JSONResponse(
+            {"error": f"Server at capacity ({MAX_CONNECTIONS} sessions)."},
+            status_code=503,
+        )
+
+    global _device_counter
+    _device_counter += 1
+    device_label = f"Candidate_{_device_counter}"
+
+    params = await request.json()
+    # Strip video/rtx before aiortc sees the offer — prevents the decoder_worker
+    # thread from crashing on "No decoder found for MIME type `video/rtx`" which
+    # kills all video decoding and freezes the frame feed.
+    clean_sdp = _strip_rtx_from_sdp(params["sdp"])
+    offer_sdp = RTCSessionDescription(sdp=clean_sdp, type=params["type"])
+
+    # Per-session detection overrides (from exam-level config set by admin)
+    detection_override = params.get("detection_config", {})
+
+    pc    = RTCPeerConnection(configuration=_ICE_SERVERS)
+    pc_id = str(id(pc))
+    pcs.add(pc)
+    _pcs_by_id[pc_id] = pc
+    stream_stats[pc_id] = {"label": device_label, "connection_state": "new"}
+    _metrics.inc_session()
+
+    ts          = time.strftime("%Y%m%d_%H%M%S")
+    file_prefix = f"{ts}_{device_label}"
+
+    session: "ProctorSession | None" = None
+    if coordinator is not None:
+        session_cfg = {**_session_config, **coordinator.runtime_settings, **detection_override}
+        reports_dir = Path("reports") / file_prefix
+        session = ProctorSession(
+            session_id       = device_label,
+            session_dir      = reports_dir,
+            config           = session_cfg,
+        )
+        coordinator.add_session(pc_id, session)
+        logger.info("[%s] ProctorSession created (report_id=%s)", device_label, file_prefix)
+
+    video_track: VideoAnalyzerTrack | None = None
+    audio_track: AudioAnalyzerTrack | None = None
+
+    logger.info("[%s] New connection — %d/%d slots", device_label, len(pcs), MAX_CONNECTIONS)
+
+    @pc.on("track")
+    async def on_track(track):
+        nonlocal video_track, audio_track
+        if track.kind == "video":
+            video_track = VideoAnalyzerTrack(
+                track, pc_id, stream_stats[pc_id], device_label, session=session,
+            )
+            async def _video_loop():
+                """
+                Uses asyncio.wait() — NOT asyncio.wait_for() — so a stalled aiortc
+                jitter-buffer never silently blocks this loop.
+                asyncio.wait_for cancels the recv() task and corrupts aiortc internal
+                jitter state; asyncio.wait simply returns after the timeout leaving the
+                task alive so we can keep waiting on it without any corruption.
+                """
+                recv_task  = asyncio.ensure_future(video_track.recv())
+                stall_n    = 0
+
+                while True:
+                    done, _ = await asyncio.wait({recv_task}, timeout=10.0)
+
+                    if recv_task in done:
+                        stall_n = 0
+                        exc = recv_task.exception()
+                        if exc is not None:
+                            exc_name = type(exc).__name__
+                            if exc_name == "MediaStreamError" or "ended" in str(exc).lower():
+                                logger.info("[%s] video track ended: %s", device_label, exc)
+                                break
+                            logger.warning("[%s] video recv error (%s): %s",
+                                           device_label, exc_name, exc)
+                            await asyncio.sleep(0.033)
+                        recv_task = asyncio.ensure_future(video_track.recv())
+
+                    else:
+                        stall_n += 1
+                        logger.warning(
+                            "[%s] video recv stalled >%ds (stall #%d) — "
+                            "pc_state=%s  track_ready=%s",
+                            device_label, 10 * stall_n, stall_n,
+                            pc.connectionState,
+                            getattr(video_track.track, "readyState", "?"),
+                        )
+                        # Send RTCP PLI to browser — requests a fresh keyframe which
+                        # can unblock the jitter buffer.  The task stays alive (no cancel).
+                        try:
+                            for _t in pc.getTransceivers():
+                                if _t.kind == "video":
+                                    _r    = _t.receiver
+                                    _pfn  = getattr(_r, "_send_pli", None) \
+                                            or getattr(_r, "send_pli", None)
+                                    if _pfn:
+                                        asyncio.ensure_future(_pfn())
+                        except Exception:
+                            pass
+                        # Keep waiting on the same recv_task — do NOT cancel it
+
+                logger.info("[%s] _video_loop exited", device_label)
+            asyncio.ensure_future(_video_loop())
+
+        elif track.kind == "audio":
+            audio_track = AudioAnalyzerTrack(track, stream_stats[pc_id], session=session)
+            async def _audio_loop():
+                recv_task = asyncio.ensure_future(audio_track.recv())
+                while True:
+                    done, _ = await asyncio.wait({recv_task}, timeout=15.0)
+                    if recv_task in done:
+                        exc = recv_task.exception()
+                        if exc is not None:
+                            exc_name = type(exc).__name__
+                            if exc_name == "MediaStreamError" or "ended" in str(exc).lower():
+                                logger.info("[%s] audio track ended: %s", device_label, exc)
+                                break
+                            logger.warning("[%s] audio recv error (%s): %s",
+                                           device_label, exc_name, exc)
+                            await asyncio.sleep(0.033)
+                        recv_task = asyncio.ensure_future(audio_track.recv())
+                    else:
+                        logger.debug("[%s] audio recv stalled >15s — pc_state=%s",
+                                     device_label, pc.connectionState)
+                        # Keep waiting on same task
+                logger.info("[%s] _audio_loop exited", device_label)
+            asyncio.ensure_future(_audio_loop())
+
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        state = pc.connectionState
+        if pc_id in stream_stats:
+            stream_stats[pc_id]["connection_state"] = state
+        logger.info("[%s] state → %s", device_label, state)
+
+        if state in ("failed", "closed", "disconnected"):
+            if coordinator is not None:
+                coordinator.remove_session(pc_id)
+            stream_stats.pop(pc_id, None)
+            snapshots.pop(pc_id, None)
+            pcs.discard(pc)
+            _pcs_by_id.pop(pc_id, None)
+            _metrics.dec_session()
+            logger.info("[%s] ended — %d/%d slots", device_label, len(pcs), MAX_CONNECTIONS)
+
+    await pc.setRemoteDescription(offer_sdp)
+
+    # Force VP8 — aiortc's native codec, far more resilient to packet loss than
+    # H.264 on internet paths.  H.264 P-frames create long dependency chains: one
+    # lost UDP packet corrupts all subsequent frames until the next I-frame and
+    # can stall the aiortc jitter buffer indefinitely.  VP8 has no such chain.
+    try:
+        capabilities = RTCRtpReceiver.getCapabilities("video")
+        if capabilities:
+            vp8_codecs = [c for c in capabilities.codecs
+                          if c.mimeType.lower() == "video/vp8"]
+            if vp8_codecs:
+                for transceiver in pc.getTransceivers():
+                    if transceiver.kind == "video":
+                        transceiver.setCodecPreferences(vp8_codecs)
+                        logger.info("[%s] codec forced to VP8", device_label)
+    except Exception as exc:
+        logger.warning("[%s] VP8 codec preference failed (falling back): %s",
+                       device_label, exc)
+
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+
+    return JSONResponse({
+        "sdp"         : pc.localDescription.sdp,
+        "type"        : pc.localDescription.type,
+        "device_id"   : pc_id,
+        "device_label": device_label,
+        "report_id"   : file_prefix,
+    })

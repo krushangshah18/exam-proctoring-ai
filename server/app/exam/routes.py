@@ -271,6 +271,9 @@ def get_session_active(
         "terminated_reason": session.terminated_reason,
         "terminated_by": session.terminated_by,
         "server_now": datetime.now(UTC).isoformat(),
+        "title": exam.title,
+        "flag_threshold": exam.flag_threshold,
+        "config": exam.config,
         "active_resume_request": {
             "status": latest_rr.status,
             "reason": latest_rr.reason,
@@ -738,4 +741,252 @@ def end_exam(
 
     log.info("Exam ended session=%s user=%s", session.id, session.user_id)
 
+    # Pull final violation data from engine (best-effort — don't fail the submit)
+    if session.proctor_pc_id and session.proctor_engine_url:
+        import asyncio as _asyncio
+        from app.exam.proctor_proxy import fetch_session_log as _fetch_log
+        try:
+            loop = _asyncio.get_event_loop()
+            log_data = loop.run_until_complete(
+                _fetch_log(session.proctor_engine_url, session.proctor_pc_id)
+            )
+            risk = log_data.get("risk", {})
+            session.risk_score = int(risk.get("final_score", session.risk_score or 0))
+            report_id = log_data.get("report_id") or log_data.get("session_id")
+            if report_id:
+                session.proctor_report_id = report_id
+            db.commit()
+            log.info("Engine report pulled on exam end: session=%s score=%s", session.id, session.risk_score)
+        except Exception as _e:
+            log.warning("Could not pull engine report on exam end (session=%s): %s", session.id, _e)
+
     return {"message": "Exam ended", "session_id": str(session.id)}
+
+
+# =====================================================
+# PROCTOR ENGINE PROXY ROUTES
+# =====================================================
+
+class ProctorOfferBody(BaseModel):
+    sdp: str
+    type: str
+
+
+class ProctorIceBody(BaseModel):
+    candidate: str
+    sdpMid: str | None = None
+    sdpMLineIndex: int | None = None
+
+
+class ProctorViolationBody(BaseModel):
+    reason: str = "tab_switch"   # "tab_switch" | "window_blur"
+
+
+@router.post("/{exam_id}/proctor-connect")
+async def proctor_connect(
+    exam_id: str,
+    body: ProctorOfferBody,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    WebRTC offer proxy — student calls this after /exam/start succeeds.
+    Proxies the offer to the correct engine container, saves pc_id and
+    engine_url back onto the ExamSession row.
+    """
+    from app.exam.engine_allocator import pick_least_loaded_container, EngineCapacityError
+    from app.exam.proctor_proxy import proxy_offer, build_engine_detection_config
+
+    exam = db.query(models.Exam).filter(
+        models.Exam.id == exam_id,
+        models.Exam.is_deleted == False,
+    ).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.user_id == current_user.id,
+        models.ExamSession.exam_id == exam_id,
+        models.ExamSession.status == SessionStatus.ACTIVE.value,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=403, detail="No active exam session. Call /exam/start first.")
+
+    # Pick the least-loaded container assigned to this exam
+    try:
+        engine_url = pick_least_loaded_container(exam.id, db)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    if not engine_url:
+        raise HTTPException(
+            status_code=503,
+            detail="No proctoring engine is assigned to this exam. Contact your administrator.",
+        )
+
+    # Build merged config (exam admin toggles + system admin thresholds)
+    engine_settings = db.query(models.EngineSettings).first()
+    if not engine_settings:
+        raise HTTPException(status_code=503, detail="Engine settings not initialised.")
+
+    detection_config = build_engine_detection_config(exam.detection_config, engine_settings)
+
+    try:
+        answer = await proxy_offer(engine_url, body.sdp, body.type, detection_config)
+    except Exception as e:
+        log.error("Engine /offer failed (url=%s exam=%s): %s", engine_url, exam_id, e)
+        raise HTTPException(status_code=503, detail="Proctoring engine is unreachable. Exam cannot start.")
+
+    pc_id = answer.get("device_id")
+    if not pc_id:
+        raise HTTPException(status_code=502, detail="Engine did not return a session ID.")
+
+    session.proctor_pc_id = pc_id
+    session.proctor_engine_url = engine_url
+    db.commit()
+
+    log.info("Proctor session created: exam=%s user=%s pc_id=%s engine=%s",
+             exam_id, current_user.id, pc_id, engine_url)
+
+    return {**answer, "engine_url": engine_url}
+
+
+@router.post("/{exam_id}/proctor-ice")
+async def proctor_ice(
+    exam_id: str,
+    body: ProctorIceBody,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Trickle ICE candidate proxy."""
+    from app.exam.proctor_proxy import proxy_ice_candidate
+
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.user_id == current_user.id,
+        models.ExamSession.exam_id == exam_id,
+        models.ExamSession.status == SessionStatus.ACTIVE.value,
+    ).first()
+    if not session or not session.proctor_pc_id:
+        raise HTTPException(status_code=404, detail="No active proctor session")
+
+    candidate_dict = {
+        "candidate":     body.candidate,
+        "sdpMid":        body.sdpMid,
+        "sdpMLineIndex": body.sdpMLineIndex,
+    }
+    await proxy_ice_candidate(session.proctor_engine_url, session.proctor_pc_id, candidate_dict)
+    return {"ok": True}
+
+
+@router.post("/{exam_id}/proctor-violation")
+async def proctor_violation(
+    exam_id: str,
+    body: ProctorViolationBody,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Report a focus violation (tab switch / window blur) to the engine.
+    If the engine auto-terminates (3 switches), marks the ExamSession TERMINATED.
+    """
+    from app.exam.proctor_proxy import proxy_tab_switch
+    from app.exam.events import push_event_sync
+
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.user_id == current_user.id,
+        models.ExamSession.exam_id == exam_id,
+        models.ExamSession.status == SessionStatus.ACTIVE.value,
+    ).first()
+    if not session or not session.proctor_pc_id:
+        raise HTTPException(status_code=404, detail="No active proctor session")
+
+    try:
+        result = await proxy_tab_switch(session.proctor_engine_url, session.proctor_pc_id)
+    except Exception as e:
+        log.warning("Tab switch proxy failed (session=%s): %s", session.id, e)
+        return {"ok": False, "risk": None}
+
+    # If engine terminated the session, reflect that in our DB
+    risk = result.get("risk", {})
+    if risk.get("terminated"):
+        session.status = SessionStatus.TERMINATED.value
+        session.terminated_reason = risk.get("reason", "Exam policy violated")
+        session.terminated_by = "SYSTEM"
+        session.terminated_at = datetime.now(UTC)
+        db.commit()
+
+        # Push termination event through ProctorAI's own SSE so the active page
+        # gets notified via its existing SSE connection
+        push_event_sync(str(session.id), "TERMINATED", {
+            "cause":  "violation",
+            "reason": session.terminated_reason,
+        })
+        log.info("Session terminated by engine (tab switch): session=%s", session.id)
+
+    return result
+
+
+@router.get("/{exam_id}/proctor-events")
+async def proctor_events(
+    exam_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    SSE proxy — streams engine violation events to the student's active page.
+    Events are forwarded as-is from the engine's /stream/{pc_id}.
+    On session_end from engine, also terminates the ProctorAI session.
+    """
+    from app.exam.proctor_proxy import stream_engine_events
+    from app.exam.events import push_event_sync
+
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.user_id == current_user.id,
+        models.ExamSession.exam_id == exam_id,
+        models.ExamSession.status.in_([
+            SessionStatus.ACTIVE.value,
+            SessionStatus.DISCONNECTED.value,
+        ]),
+    ).first()
+    if not session or not session.proctor_pc_id:
+        raise HTTPException(status_code=404, detail="No active proctor session")
+
+    pc_id = session.proctor_pc_id
+    engine_url = session.proctor_engine_url
+    session_id_str = str(session.id)
+
+    async def event_stream():
+        async for chunk in stream_engine_events(engine_url, pc_id):
+            yield chunk
+            # If engine sent session_end + terminated, sync to our DB
+            if '"session_end"' in chunk and '"terminated": true' in chunk:
+                # Re-open DB session for the update (new session since we're in async gen)
+                from app.db.session import SessionLocal
+                _db = SessionLocal()
+                try:
+                    _sess = _db.query(models.ExamSession).filter(
+                        models.ExamSession.id == session_id_str
+                    ).first()
+                    if _sess and _sess.status == SessionStatus.ACTIVE.value:
+                        _sess.status = SessionStatus.TERMINATED.value
+                        _sess.terminated_reason = "Terminated by proctoring engine"
+                        _sess.terminated_by = "SYSTEM"
+                        _sess.terminated_at = datetime.now(UTC)
+                        _db.commit()
+                        push_event_sync(session_id_str, "TERMINATED", {
+                            "cause": "violation",
+                            "reason": "Terminated by proctoring engine",
+                        })
+                except Exception as _e:
+                    log.warning("Failed to sync engine termination: %s", _e)
+                finally:
+                    _db.close()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

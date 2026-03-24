@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { format } from 'date-fns';
 import api from '@/lib/axios';
+import { fmtDate, fmtTime } from '@/lib/fmt-date';
 import { 
   Plus, 
   Search, 
@@ -144,7 +144,7 @@ export default function AdminExamsPage() {
                     <td className="px-6 py-4 hidden md:table-cell text-slate-600">
                       <div className="flex items-center gap-2 mb-1">
                         <Calendar className="h-3.5 w-3.5 text-slate-400" />
-                        <span>{format(new Date(exam.start_window), 'MMM d, yyyy h:mm a')}</span>
+                        <span>{fmtDate(exam.start_window)}, {fmtTime(exam.start_window)}</span>
                       </div>
                     </td>
                     <td className="px-6 py-4 hidden sm:table-cell">

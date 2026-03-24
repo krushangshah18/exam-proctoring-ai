@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d/VS Code/PocOnAWS/ProctoDeployBackendGPU/frontend/lib/**)",
+      "Read(//d/VS Code/PocOnAWS/ProctoDeployBackendGPU/frontend/**)",
+      "Bash(python:*)",
+      "Bash(alembic upgrade:*)"
+    ]
+  }
+}

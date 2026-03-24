@@ -18,7 +18,11 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 // ──────────────────────────────────────────────
 
 function parseUTCDate(iso: string): Date {
-  return new Date(iso.endsWith('Z') ? iso : iso + 'Z');
+  if (!iso) return new Date(NaN);
+  // Already has timezone info (Z or +00:00 style) — parse directly
+  if (iso.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(iso)) return new Date(iso);
+  // Naive datetime from server — treat as UTC
+  return new Date(iso + 'Z');
 }
 
 function computeRemaining(
@@ -138,6 +142,9 @@ export default function ActiveExamPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const sseCloseRef = useRef<(() => void) | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const proctorPcIdRef = useRef<string | null>(null);
+  const proctorSseCloseRef = useRef<(() => void) | null>(null);
 
   const [exam, setExam] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -191,6 +198,8 @@ export default function ActiveExamPage() {
       await api.post('/exam/end');
       if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
       sseCloseRef.current?.();
+      proctorSseCloseRef.current?.();
+      pcRef.current?.close();
       if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
       router.push(`/student/exam/${examId}/completion`);
     } catch (err: any) {
@@ -245,6 +254,81 @@ export default function ActiveExamPage() {
     );
   }, [examId, exam]);
 
+  // ── Proctor engine WebRTC setup ──
+
+  const setupProctor = useCallback(async () => {
+    if (!streamRef.current) return;
+    try {
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      pcRef.current = pc;
+
+      streamRef.current.getTracks().forEach(t => pc.addTrack(t, streamRef.current!));
+
+      // Trickle ICE proxy
+      pc.onicecandidate = async (e) => {
+        if (e.candidate && proctorPcIdRef.current) {
+          try {
+            await api.post(`/exam/${examId}/proctor-ice`, {
+              candidate: e.candidate.candidate,
+              sdpMid: e.candidate.sdpMid,
+              sdpMLineIndex: e.candidate.sdpMLineIndex,
+            });
+          } catch {}
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      // Wait for ICE gathering (max 3s)
+      await new Promise<void>(resolve => {
+        if (pc.iceGatheringState === 'complete') { resolve(); return; }
+        const check = () => { if (pc.iceGatheringState === 'complete') resolve(); };
+        pc.addEventListener('icegatheringstatechange', check);
+        setTimeout(resolve, 3000);
+      });
+
+      const res = await api.post(`/exam/${examId}/proctor-connect`, {
+        sdp: pc.localDescription!.sdp,
+        type: pc.localDescription!.type,
+      });
+
+      proctorPcIdRef.current = res.data.pc_id ?? res.data.device_id;
+      await pc.setRemoteDescription(
+        new RTCSessionDescription({ sdp: res.data.sdp, type: res.data.type })
+      );
+
+      // Open proctor events SSE
+      // Engine sends all events as: data: {"type":"alert",...}  (no event: line)
+      // so the openSSE helper dispatches them all under 'message'.
+      const token = localStorage.getItem('access_token') || '';
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      proctorSseCloseRef.current = openSSE(
+        `${baseUrl}/exam/${examId}/proctor-events`,
+        token,
+        {
+          message: (data: any) => {
+            const t = data?.type;
+            if (t === 'alert' || t === 'warning') {
+              toast.warning(data.message || data.alert_type || 'Proctoring alert', {
+                duration: 6000,
+                icon: <ShieldAlert className="h-5 w-5 text-amber-500" />,
+              });
+            } else if (t === 'risk_update') {
+              if (data.state === 'HIGH_RISK' || data.state === 'ADMIN_REVIEW') {
+                toast.error(`Risk Level: ${data.state} (score: ${Math.round(data.risk_score ?? 0)})`, { duration: 6000 });
+              }
+            }
+          },
+        }
+      );
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      if (detail) toast.error(`Proctor engine: ${detail}`);
+      // Non-fatal — session continues; backend already logged it
+    }
+  }, [examId]);
+
   // ── Init ──
 
   useEffect(() => {
@@ -278,6 +362,7 @@ export default function ActiveExamPage() {
         setLoading(false);
         startTimer(remaining);
         setupSSE(sessionData.session_id);
+        setupProctor();
 
         if (sessionData.status === 'TERMINATED') {
           const cause = detectCause(sessionData.terminated_by, sessionData.terminated_reason);
@@ -286,6 +371,16 @@ export default function ActiveExamPage() {
           setTermBy(sessionData.terminated_by || '');
           setTerminated(true);
           if (sessionData.active_resume_request) setAppealData(sessionData.active_resume_request);
+        } else if (sessionData.status === 'DISCONNECTED') {
+          // Session went stale — go back through reconnect flow
+          toast.error('Your session was disconnected. Reconnecting…');
+          router.replace(`/student/exam/${examId}/system?reconnect=true`);
+          return;
+        } else if (sessionData.status !== 'ACTIVE') {
+          // CREATED or unknown — exam wasn't properly started
+          toast.error('Exam session is not active. Please start your exam.');
+          router.replace(`/student/exam/${examId}/info`);
+          return;
         }
       } catch {
         toast.error('Failed to load exam. Redirecting…');
@@ -298,6 +393,8 @@ export default function ActiveExamPage() {
       cancelled = true;
       if (timerRef.current) clearInterval(timerRef.current);
       sseCloseRef.current?.();
+      proctorSseCloseRef.current?.();
+      pcRef.current?.close();
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, [examId]);
@@ -323,7 +420,13 @@ export default function ActiveExamPage() {
           setTerminated(true);
           if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
         }
-      } catch {}
+      } catch (err: any) {
+        if (err?.response?.status === 403) {
+          // Session no longer active — redirect through reconnect flow
+          toast.error('Session expired or disconnected. Please reconnect.');
+          router.replace(`/student/exam/${examId}/system?reconnect=true`);
+        }
+      }
     }, 15000);
     return () => clearInterval(id);
   }, [loading, terminated]);
@@ -355,6 +458,10 @@ export default function ActiveExamPage() {
           });
           return next;
         });
+        // Notify proctoring engine (fire-and-forget)
+        if (proctorPcIdRef.current) {
+          api.post(`/exam/${examId}/proctor-violation`, { reason: 'tab_switch' }).catch(() => {});
+        }
       }
     };
     document.addEventListener('visibilitychange', onVisibility);

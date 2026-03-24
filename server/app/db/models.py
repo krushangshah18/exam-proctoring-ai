@@ -99,8 +99,12 @@ class Exam(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
 
     config = Column(JSON)
 
+    # Proctoring engine — exam-admin-controlled detection toggles (13 booleans)
+    detection_config = Column(JSON, nullable=True)
+
     sessions = relationship("ExamSession", back_populates="exam", cascade="all, delete-orphan")
     invites = relationship("ExamInvite", back_populates="exam", cascade="all, delete-orphan")
+    engine_assignments = relationship("ExamEngineAssignment", back_populates="exam", cascade="all, delete-orphan")
 
 
 class ExamInvite(UUIDMixin, TimestampMixin, Base):
@@ -142,6 +146,11 @@ class ExamSession(UUIDMixin, TimestampMixin, Base):
     ip_address = Column(String)
     user_agent = Column(Text)
 
+    # Proctoring engine — set when WebRTC handshake completes
+    proctor_pc_id = Column(String, nullable=True)
+    proctor_engine_url = Column(String, nullable=True)
+    # Set when session closes — used to fetch full report from engine
+    proctor_report_id = Column(String, nullable=True)
 
     user = relationship("User", back_populates="sessions")
     exam = relationship("Exam", back_populates="sessions")
@@ -355,3 +364,96 @@ class UserDevice(UUIDMixin, TimestampMixin, Base):
         Index("idx_user_device_user", "user_id"),
         Index("idx_user_device_fp", "fingerprint"),
     )
+
+
+# ── Proctoring Engine Infrastructure ─────────────────────────────────────────
+
+class EngineContainer(UUIDMixin, TimestampMixin, Base):
+    """
+    One row per Docker container running the AI proctoring engine.
+    Seeded at startup from PROCTOR_ENGINE_URLS env var.
+    Each container has a fixed capacity (MAX_SESSIONS=3 on current EC2).
+    """
+    __tablename__ = "engine_containers"
+
+    url = Column(String, unique=True, nullable=False)   # e.g. "http://13.201.166.165:8000"
+    max_sessions = Column(Integer, default=3, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    assignments = relationship("ExamEngineAssignment", back_populates="container")
+
+
+class ExamEngineAssignment(UUIDMixin, TimestampMixin, Base):
+    """
+    Maps a LIVE exam to the engine container(s) it owns.
+    One container → exactly one LIVE exam at a time.
+    One exam may own multiple containers (when it is the only LIVE exam).
+    Released when the exam ends.
+    """
+    __tablename__ = "exam_engine_assignments"
+
+    exam_id = Column(UUID(as_uuid=True), ForeignKey("exams.id"), nullable=False)
+    container_id = Column(UUID(as_uuid=True), ForeignKey("engine_containers.id"), nullable=False)
+
+    exam = relationship("Exam", back_populates="engine_assignments")
+    container = relationship("EngineContainer", back_populates="assignments")
+
+    __table_args__ = (
+        Index("idx_engine_assign_exam", "exam_id"),
+        Index("idx_engine_assign_container", "container_id"),
+    )
+
+
+class EngineSettings(UUIDMixin, TimestampMixin, Base):
+    """
+    System-admin-controlled global engine configuration.
+    Single row — updated in place. Created at startup with defaults if absent.
+    Applied to every /proctor-connect request merged with the exam's detection_config.
+    """
+    __tablename__ = "engine_settings"
+
+    # Head pose thresholds
+    look_away_yaw = Column(Float, default=0.20, nullable=False)
+    look_down_pitch = Column(Float, default=0.13, nullable=False)
+    look_up_pitch = Column(Float, default=-0.10, nullable=False)
+    gaze_left = Column(Float, default=-0.13, nullable=False)
+    gaze_right = Column(Float, default=0.13, nullable=False)
+
+    # Duration gates (seconds)
+    looking_away_threshold = Column(Float, default=2.0, nullable=False)
+    gaze_threshold = Column(Float, default=1.5, nullable=False)
+    fake_window = Column(Float, default=15.0, nullable=False)
+
+    # Risk scores
+    gaze_score = Column(Float, default=5.0, nullable=False)
+    phone_score_2nd = Column(Float, default=25.0, nullable=False)
+    phone_score_3rd = Column(Float, default=50.0, nullable=False)
+    book_score = Column(Float, default=20.0, nullable=False)
+    headphone_score = Column(Float, default=20.0, nullable=False)
+    earbud_score = Column(Float, default=20.0, nullable=False)
+    tab_switch_score = Column(Float, default=15.0, nullable=False)
+    multi_people_score_2nd = Column(Float, default=20.0, nullable=False)
+    multi_people_score_3rd = Column(Float, default=50.0, nullable=False)
+    no_person_score_1 = Column(Float, default=25.0, nullable=False)
+    no_person_score_2 = Column(Float, default=50.0, nullable=False)
+    fake_presence_score_1 = Column(Float, default=30.0, nullable=False)
+    fake_presence_score_2 = Column(Float, default=60.0, nullable=False)
+
+    # State thresholds
+    state_warning = Column(Float, default=30.0, nullable=False)
+    state_high_risk = Column(Float, default=60.0, nullable=False)
+    state_admin_review = Column(Float, default=100.0, nullable=False)
+
+    # Decay
+    decay_amount = Column(Float, default=5.0, nullable=False)
+
+    # Termination rules
+    tab_switch_terminate_count = Column(Integer, default=3, nullable=False)
+    multi_people_terminate_s = Column(Float, default=20.0, nullable=False)
+    no_person_terminate_s = Column(Float, default=20.0, nullable=False)
+
+    # YOLO confidence thresholds
+    yolo_phone_conf = Column(Float, default=0.65, nullable=False)
+    yolo_book_conf = Column(Float, default=0.70, nullable=False)
+    yolo_audio_conf = Column(Float, default=0.41, nullable=False)
+    yolo_person_conf = Column(Float, default=0.30, nullable=False)

@@ -14,7 +14,7 @@ import {
   User,
   MoreHorizontal
 } from 'lucide-react';
-import { format } from "date-fns";
+import { fmtDate } from "@/lib/fmt-date";
 
 import api from '@/lib/axios';
 import { Button } from '@/components/ui/button';
@@ -228,7 +228,7 @@ export default function ApplicationsPage() {
           return (
             <div className="flex items-center gap-1 text-muted-foreground whitespace-nowrap">
               <Calendar className="h-3 w-3" />
-              <span>{format(new Date(row.original.created_at), 'MMM dd, yyyy')}</span>
+              <span>{fmtDate(row.original.created_at)}</span>
             </div>
           );
         } catch {

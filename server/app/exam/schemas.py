@@ -17,6 +17,31 @@ class MonitoringConfig(BaseModel):
     tab_switching: bool = True
 
 
+class DetectionConfig(BaseModel):
+    """
+    Per-exam AI detection toggles — controlled by the exam admin.
+    Sent to the proctoring engine on each student's WebRTC handshake.
+    All 13 flags default to True (fully enabled).
+    """
+    # Head & Gaze
+    DETECT_LOOKING_AWAY:    bool = True
+    DETECT_LOOKING_DOWN:    bool = True
+    DETECT_LOOKING_UP:      bool = True
+    DETECT_LOOKING_SIDE:    bool = True
+    # Presence
+    DETECT_FACE_HIDDEN:     bool = True
+    DETECT_PARTIAL_FACE:    bool = True
+    DETECT_FAKE_PRESENCE:   bool = True
+    # Audio
+    DETECT_SPEAKER_AUDIO:   bool = True
+    # Objects
+    DETECT_PHONE:           bool = True
+    DETECT_BOOK:            bool = True
+    DETECT_HEADPHONE:       bool = True
+    DETECT_EARBUD:          bool = True
+    DETECT_MULTIPLE_PEOPLE: bool = True
+
+
 def _make_utc_aware(v):
     """Ensure a datetime is UTC-aware."""
     if isinstance(v, datetime):
@@ -43,6 +68,9 @@ class ExamCreateRequest(BaseModel):
     max_late_minutes: int = Field(default=0, ge=0)
 
     config: MonitoringConfig
+
+    # AI proctoring engine detection toggles (exam admin controlled)
+    detection_config: DetectionConfig = Field(default_factory=DetectionConfig)
 
     invites: List[EmailStr] = Field(default_factory=list)
 
@@ -98,6 +126,9 @@ class ExamUpdateRequest(BaseModel):
     max_late_minutes: int = Field(default=0, ge=0)
 
     config: MonitoringConfig
+
+    # AI proctoring engine detection toggles (exam admin controlled)
+    detection_config: DetectionConfig = Field(default_factory=DetectionConfig)
 
     invites: List[EmailStr] = Field(default_factory=list)
 
@@ -165,6 +196,7 @@ class ExamDetailResponse(ExamListResponse):
     allow_late_extension: bool
     max_late_minutes: int
     config: dict
+    detection_config: dict | None = None
     invites: List[ExamInviteResponse] = []
 
     class Config:
