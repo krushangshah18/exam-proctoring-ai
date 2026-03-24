@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
 import RoleGuard from '@/components/auth/role-guard';
-import { parseUTC } from '@/lib/fmt-date';
+import { parseUTC, fmtDateTimeTZ, fmtTimeTZ } from '@/lib/fmt-date';
 
 // ──────────────────────────────────────────────
 // Helpers
@@ -202,10 +202,7 @@ export default function ExamHistoryPage() {
                             })}
                           </p>
                           <p className="text-xs text-slate-400">
-                            {parseUTC(exam.start_window).toLocaleTimeString(undefined, {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
+                            {fmtTimeTZ(exam.start_window)}
                           </p>
                         </div>
                       </div>
@@ -253,7 +250,7 @@ export default function ExamHistoryPage() {
                       {submittedAt && (
                         <div className="mt-3 flex items-center gap-1.5 text-xs text-slate-400">
                           <Clock className="h-3.5 w-3.5" />
-                          Submitted at {submittedAt.toLocaleString()}
+                          Submitted at {fmtDateTimeTZ(exam.session_end_time)}
                         </div>
                       )}
 

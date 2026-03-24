@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
-import { Loader2, ArrowRight, Monitor, LogOut, CheckCircle2, ShieldAlert, AlertTriangle } from 'lucide-react';
+import { Loader2, ArrowRight, Monitor, LogOut, CheckCircle2, ShieldAlert, AlertTriangle, Cpu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -25,6 +25,8 @@ export default function SystemCheckPage() {
   const [fsStatus, setFsStatus] = useState<CheckStatus>('pending');
   const [sessionStatus, setSessionStatus] = useState<CheckStatus>('pending');
   const [sessionError, setSessionError] = useState<string>('');
+  const [engineStatus, setEngineStatus] = useState<CheckStatus>('pending');
+  const [engineError, setEngineError] = useState<string>('');
 
   const [isExamReady, setIsExamReady] = useState(false);
   const [countdown, setCountdown] = useState<number>(0);
@@ -36,6 +38,13 @@ export default function SystemCheckPage() {
       try {
         const res = await api.get(`/exam/${examId}/status`);
         const data = res.data;
+
+        // Block terminated sessions — send to the dedicated terminated page
+        if (data.session_status === 'TERMINATED') {
+          router.replace(`/student/exam/${examId}/terminated`);
+          return;
+        }
+
         setExam(data);
         setIsExamReady(data.allowed_to_start);
 
@@ -102,6 +111,24 @@ export default function SystemCheckPage() {
         toast.error('Your browser does not support fullscreen mode. Please use Chrome or Edge.');
       }
     }, 1200);
+
+    // 3. Proctoring engine availability check
+    setEngineStatus('checking');
+    setEngineError('');
+    try {
+      const res = await api.get(`/exam/${examId}/engine-status`);
+      if (res.data.available) {
+        setEngineStatus('pass');
+      } else {
+        setEngineStatus('fail');
+        setEngineError(res.data.message || 'Proctoring engine is unavailable.');
+        toast.error(res.data.message || 'Proctoring engine is unavailable.');
+      }
+    } catch {
+      setEngineStatus('fail');
+      setEngineError('Could not reach the proctoring engine. Please contact your administrator.');
+      toast.error('Proctoring engine check failed.');
+    }
   };
 
   const handleStartExam = async () => {
@@ -116,9 +143,9 @@ export default function SystemCheckPage() {
     }
   };
 
-  const allPassed = fsStatus === 'pass' && sessionStatus === 'pass';
-  const anyChecking = fsStatus === 'checking' || sessionStatus === 'checking';
-  const anyFailed = fsStatus === 'fail' || sessionStatus === 'fail';
+  const allPassed = fsStatus === 'pass' && sessionStatus === 'pass' && engineStatus === 'pass';
+  const anyChecking = fsStatus === 'checking' || sessionStatus === 'checking' || engineStatus === 'checking';
+  const anyFailed = fsStatus === 'fail' || sessionStatus === 'fail' || engineStatus === 'fail';
 
   const formatCountdown = (secs: number) => {
     const h = Math.floor(secs / 3600);
@@ -193,6 +220,28 @@ export default function SystemCheckPage() {
                 </div>
               </div>
               <StatusIcon status={fsStatus} />
+            </Card>
+
+            {/* Proctoring engine check */}
+            <Card className="p-5 border-slate-200 shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="bg-indigo-100 p-2.5 rounded-lg">
+                    <Cpu className="h-6 w-6 text-indigo-600" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-slate-900 text-lg">Proctoring Engine</h3>
+                    <p className="text-sm text-slate-500">Verifying AI monitoring service availability</p>
+                  </div>
+                </div>
+                <StatusIcon status={engineStatus} />
+              </div>
+              {engineStatus === 'fail' && engineError && (
+                <Alert className="mt-4 bg-rose-50 border-rose-200">
+                  <AlertTriangle className="h-4 w-4 text-rose-600" />
+                  <AlertDescription className="text-rose-800 text-sm">{engineError}</AlertDescription>
+                </Alert>
+              )}
             </Card>
           </div>
 

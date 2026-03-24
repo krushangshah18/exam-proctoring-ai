@@ -27,6 +27,7 @@ class ResumeStatus(str,enum.Enum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     DENIED = "DENIED"
+    NOT_APPLIED = "NOT_APPLIED"
 
 class VerdictType(str,enum.Enum):
     CONFIRMED = "CONFIRMED"

@@ -3,12 +3,11 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import {
-  Loader2, AlertOctagon, CheckCircle2, ShieldAlert, Ban,
+  Loader2, AlertOctagon, CheckCircle2, ShieldAlert,
   Maximize2, AlertTriangle, Clock
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
@@ -91,48 +90,6 @@ function openSSE(
   };
 }
 
-// ──────────────────────────────────────────────
-
-type TerminationCause = 'violation' | 'admin' | 'disconnection' | 'timeout' | 'generic';
-
-function getTerminationMessage(cause: TerminationCause, reason?: string) {
-  switch (cause) {
-    case 'violation':
-      return {
-        title: 'Exam Terminated — Integrity Violation',
-        body: reason || 'Your session was ended because the system detected a violation of exam rules.',
-      };
-    case 'admin':
-      return {
-        title: 'Exam Terminated by Proctor',
-        body: reason || 'The exam proctor has ended your session. Contact your instructor for details.',
-      };
-    case 'disconnection':
-      return {
-        title: 'Session Disconnected',
-        body: 'Your session was disconnected due to prolonged inactivity or network interruption. Submit an appeal if this was unintentional.',
-      };
-    case 'timeout':
-      return {
-        title: 'Time Expired',
-        body: 'Your exam time has run out and your answers have been auto-submitted.',
-      };
-    default:
-      return {
-        title: 'Exam Terminated',
-        body: reason || 'Your session was terminated. You may submit an appeal.',
-      };
-  }
-}
-
-function detectCause(terminatedBy: string, reason: string): TerminationCause {
-  if (!terminatedBy && !reason) return 'generic';
-  if (terminatedBy === 'ADMIN') return 'admin';
-  if (reason?.toLowerCase().includes('disconnect')) return 'disconnection';
-  if (reason?.toLowerCase().includes('violation') || reason?.toLowerCase().includes('flag')) return 'violation';
-  return 'generic';
-}
-
 export default function ActiveExamPage() {
   const router = useRouter();
   const params = useParams();
@@ -151,16 +108,8 @@ export default function ActiveExamPage() {
   const [submitting, setSubmitting] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
 
-  // Termination
+  // Termination (overlay removed — redirects to /terminated page)
   const [terminated, setTerminated] = useState(false);
-  const [termCause, setTermCause] = useState<TerminationCause>('generic');
-  const [termReason, setTermReason] = useState('');
-  const [termBy, setTermBy] = useState('');
-
-  // Appeal
-  const [appealReason, setAppealReason] = useState('');
-  const [submittingAppeal, setSubmittingAppeal] = useState(false);
-  const [appealData, setAppealData] = useState<any>(null);
 
   // UI states
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
@@ -219,36 +168,13 @@ export default function ActiveExamPage() {
       `${baseUrl}/exam/${examId}/events`,
       token,
       {
-        RESUME_APPROVED: (data) => {
-          toast.success('Appeal approved! You may resume.');
-          setTerminated(false);
-          setAppealData(null);
-          if (data.time_extension_seconds) {
-            setTimeLeft((prev) => prev + (data.time_extension_seconds - (exam?.extensionApplied || 0)));
-          }
-          if (document.documentElement.requestFullscreen) {
-            document.documentElement.requestFullscreen().catch(() => {});
-          }
-        },
-        RESUME_DENIED: (data) => {
-          setAppealData((prev: any) => ({
-            ...prev,
-            status: 'DENIED',
-            review_note: data.review_note,
-          }));
-          toast.error('Your appeal was denied.');
-        },
         TIME_EXTENDED: (data) => {
           toast.success(`Time extended by ${data.added_minutes} minute(s)!`);
           setTimeLeft((prev) => prev + data.added_minutes * 60);
         },
-        TERMINATED: (data) => {
-          const cause = detectCause(data.terminated_by, data.terminated_reason);
-          setTermCause(cause);
-          setTermReason(data.terminated_reason || '');
-          setTermBy(data.terminated_by || '');
-          setTerminated(true);
+        TERMINATED: () => {
           if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+          router.replace(`/student/exam/${examId}/terminated`);
         },
       }
     );
@@ -365,16 +291,14 @@ export default function ActiveExamPage() {
         setupProctor();
 
         if (sessionData.status === 'TERMINATED') {
-          const cause = detectCause(sessionData.terminated_by, sessionData.terminated_reason);
-          setTermCause(cause);
-          setTermReason(sessionData.terminated_reason || '');
-          setTermBy(sessionData.terminated_by || '');
-          setTerminated(true);
-          if (sessionData.active_resume_request) setAppealData(sessionData.active_resume_request);
+          // Navigate to dedicated terminated page — do not show overlay
+          if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+          router.replace(`/student/exam/${examId}/terminated`);
+          return;
         } else if (sessionData.status === 'DISCONNECTED') {
-          // Session went stale — go back through reconnect flow
-          toast.error('Your session was disconnected. Reconnecting…');
-          router.replace(`/student/exam/${examId}/system?reconnect=true`);
+          // Session went stale — go back through full preExam flow
+          toast.error('Your session was disconnected. Please reconnect.');
+          router.replace(`/student/exam/${examId}/device`);
           return;
         } else if (sessionData.status !== 'ACTIVE') {
           // CREATED or unknown — exam wasn't properly started
@@ -413,18 +337,28 @@ export default function ActiveExamPage() {
       try {
         const res = await api.post('/exam/heartbeat');
         if (res.data.status === 'terminated') {
-          const cause = detectCause(res.data.terminated_by || '', res.data.terminated_reason || '');
-          setTermCause(cause);
-          setTermReason(res.data.terminated_reason || '');
-          setTermBy(res.data.terminated_by || '');
-          setTerminated(true);
           if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+          router.replace(`/student/exam/${examId}/terminated`);
         }
       } catch (err: any) {
         if (err?.response?.status === 403) {
-          // Session no longer active — redirect through reconnect flow
-          toast.error('Session expired or disconnected. Please reconnect.');
-          router.replace(`/student/exam/${examId}/system?reconnect=true`);
+          // 403 can mean TERMINATED, ENDED, DISCONNECTED, or expired — check actual status
+          try {
+            const sr = await api.get(`/exam/${examId}/session-active`);
+            const s = sr.data.status;
+            if (s === 'TERMINATED') {
+              if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+              router.replace(`/student/exam/${examId}/terminated`);
+            } else if (s === 'ENDED') {
+              router.replace(`/student/exam/${examId}/completion`);
+            } else {
+              // DISCONNECTED or unexpected — send through full preExam reconnect
+              toast.error('Session disconnected. Please reconnect.');
+              router.replace(`/student/exam/${examId}/device`);
+            }
+          } catch {
+            router.replace('/student/dashboard');
+          }
         }
       }
     }, 15000);
@@ -448,25 +382,34 @@ export default function ActiveExamPage() {
   // Tab switch monitoring
   useEffect(() => {
     if (loading || !exam?.config?.tab_switching) return;
-    const onVisibility = () => {
-      if (document.hidden) {
-        setTabSwitchCount((c) => {
-          const next = c + 1;
-          toast.error(`Tab switch detected (${next}/${exam?.flag_threshold || 3} warnings)`, {
-            duration: 5000,
-            icon: <AlertOctagon className="h-5 w-5 text-rose-500" />,
-          });
-          return next;
-        });
-        // Notify proctoring engine (fire-and-forget)
-        if (proctorPcIdRef.current) {
-          api.post(`/exam/${examId}/proctor-violation`, { reason: 'tab_switch' }).catch(() => {});
+    const onVisibility = async () => {
+      if (!document.hidden) return;
+
+      const next = tabSwitchCount + 1;
+      setTabSwitchCount(next);
+      toast.error(`Tab switch detected (${next}/${exam?.flag_threshold || 3} warnings)`, {
+        duration: 5000,
+        icon: <AlertOctagon className="h-5 w-5 text-rose-500" />,
+      });
+
+      // Report to engine via backend and act on the response
+      if (proctorPcIdRef.current) {
+        try {
+          const res = await api.post(`/exam/${examId}/proctor-violation`, { reason: 'tab_switch' });
+          const risk = res.data?.risk;
+          if (risk?.terminated) {
+            // Engine auto-terminated (occ >= 3) — redirect to terminated page
+            if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+            router.replace(`/student/exam/${examId}/terminated`);
+          }
+        } catch {
+          // Engine unreachable — violation already logged locally, continue
         }
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [loading, exam]);
+  }, [loading, exam, tabSwitchCount]);
 
   // Unload beacon
   useEffect(() => {
@@ -485,22 +428,6 @@ export default function ActiveExamPage() {
     return () => window.removeEventListener('unload', onUnload);
   }, [loading, submitting, terminated]);
 
-  // Appeal handlers
-  const handleAppealSubmit = async () => {
-    if (!appealReason.trim()) return toast.error('Please enter a reason.');
-    setSubmittingAppeal(true);
-    try {
-      await api.post(`/exam/${examId}/appeal`, { reason: appealReason });
-      toast.success('Appeal submitted.');
-      const res = await api.get(`/exam/${examId}/session-active`);
-      setAppealData(res.data.active_resume_request);
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to submit appeal.');
-    } finally {
-      setSubmittingAppeal(false);
-    }
-  };
-
   const formatTime = (secs: number) => {
     const h = Math.floor(secs / 3600);
     const m = Math.floor((secs % 3600) / 60);
@@ -517,8 +444,6 @@ export default function ActiveExamPage() {
       </div>
     );
   }
-
-  const termMsg = getTerminationMessage(termCause, termReason);
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-slate-100 relative">
@@ -541,68 +466,6 @@ export default function ActiveExamPage() {
             >
               <Maximize2 className="h-4 w-4 mr-2" /> Return to Fullscreen
             </Button>
-          </Card>
-        </div>
-      )}
-
-      {/* TERMINATION OVERLAY */}
-      {terminated && (
-        <div className="absolute inset-0 z-[100] bg-slate-900/95 backdrop-blur-md flex items-center justify-center p-6 text-white">
-          <Card className="max-w-md w-full p-8 border-rose-900 bg-slate-900 text-white shadow-2xl">
-            <Ban className="h-16 w-16 text-rose-500 mx-auto mb-4 animate-in zoom-in" />
-            <h2 className="text-2xl font-bold text-rose-100 mb-2">{termMsg.title}</h2>
-            <p className="text-slate-400 mb-6 text-sm leading-relaxed">{termMsg.body}</p>
-
-            {termCause === 'timeout' ? (
-              <Button
-                onClick={() => router.push(`/student/exam/${examId}/completion`)}
-                className="w-full bg-slate-700 hover:bg-slate-600"
-              >
-                View Results
-              </Button>
-            ) : !appealData ? (
-              <div className="space-y-4 text-left">
-                <p className="text-sm font-semibold text-slate-300">
-                  Submit an appeal to request session resumption:
-                </p>
-                <Textarea
-                  placeholder="Clearly explain what happened…"
-                  value={appealReason}
-                  onChange={(e) => setAppealReason(e.target.value)}
-                  className="bg-slate-800 border-slate-700 text-slate-200"
-                />
-                <Button
-                  onClick={handleAppealSubmit}
-                  disabled={submittingAppeal}
-                  className="w-full bg-rose-600 hover:bg-rose-700"
-                >
-                  {submittingAppeal && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                  Submit Appeal
-                </Button>
-              </div>
-            ) : appealData.status === 'PENDING' ? (
-              <div className="bg-slate-800/50 p-4 rounded-lg flex flex-col items-center gap-3">
-                <Loader2 className="h-8 w-8 text-amber-500 animate-spin" />
-                <p className="font-semibold text-amber-400">Appeal Pending Review</p>
-                <p className="text-sm text-slate-400 text-center">
-                  The proctor is reviewing your request. Please keep this window open.
-                </p>
-              </div>
-            ) : appealData.status === 'DENIED' ? (
-              <div className="bg-rose-950/30 border border-rose-900 p-4 rounded-lg space-y-3">
-                <p className="font-bold text-rose-400">Appeal Denied</p>
-                {appealData.review_note && (
-                  <p className="text-sm text-rose-300">Note: {appealData.review_note}</p>
-                )}
-                <Button
-                  onClick={() => router.push('/student/dashboard')}
-                  variant="outline"
-                  className="w-full border-slate-700 text-slate-300"
-                >
-                  Return to Dashboard
-                </Button>
-              </div>
-            ) : null}
           </Card>
         </div>
       )}

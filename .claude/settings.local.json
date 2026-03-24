@@ -4,7 +4,10 @@
       "Read(//d/VS Code/PocOnAWS/ProctoDeployBackendGPU/frontend/lib/**)",
       "Read(//d/VS Code/PocOnAWS/ProctoDeployBackendGPU/frontend/**)",
       "Bash(python:*)",
-      "Bash(alembic upgrade:*)"
+      "Bash(alembic upgrade:*)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(python3 -c \"from app.exam.admin_routes import router; print\\(''OK''\\)\")",
+      "Bash(ls:*)"
     ]
   }
 }

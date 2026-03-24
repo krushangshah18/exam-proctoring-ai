@@ -1,0 +1,44 @@
+These are all the cases and their intended behviour
+
+Student exam states we have : Created, Active, Disconnected, Ended, terminated
+Resume Stats we have : Pending, Approved, Denied, Not applied, Again 
+
+preExam Flow : 
+- Exam Info
+- Device check : selecting camera and mic
+- Environment & Identity Check check face etc..
+- system LockDown : revoke other devices, full screen and Proctor engine check
+- Exam start
+
+Lets understand the states first :
+Created : student is added to the exam and student has not started the exam yet even once
+Active : Student is currently on the exam page and currently taking the exam if stdent on any another page then this should not be its state
+Disconnected : the student has left the exam page for some reason (browser/tab closed) the exam is still running and not receiving heartbeat if lets decide the amount of harbeats if those number of herabeats missed we change its state to Disconnected 
+Ended : Student has ended the exam on his own will if feel proper term is submitted here one student exam in ended state it would never be able to resume it or appeal for it 
+terminated : this is the state where the students has not submitted/completed the exam but is terminated due to cheating it maybe done by the admin for getting the risk score > 100 OR auto termination have triggered (only 3 cases 3 tab switch Or multiple people >2-s or no person >20s)
+ 
+now lets different cases and their flow :
+
+1. Normal case : student exam state created it goes throw preExam flow -> starts the exam -> student completes the exam and submits it and exam state becomes ended redirected to /completion page
+2. Auto termination case : student exam state created it goes throw preExam flow -> starts the exam -> student is unable to complete its exam with in duration but the exam duration ends so the exam is autosubmited hence the state is ended redirected to /completion page
+3. student exam state created it goes throw preExam flow -> starts the exam -> during the exam student closes the tab/browser so the exam state becomes disconnected and it will be in disconnected state for 5 mins 
+if the student dosent returns within 5mins of disconnected time 
+    the exam state is changed to terminated with pending with the reason terminated >5 mins 
+        and if student returns after 5mins and before students exam duration ends 
+            then it gets chance to apply request to join back then its on exam admins hand and the student wont be allowed to even take the preExam flow check or start the exam when its in Terminated state if the request is approved the students state changes to terminated and approved (the student goes through preExam flow and starts exam state remains same and the exam duration counter continues no extra time or anything) then when submited exam state becomes ended (but it should be mentioned that this student was terminated and approved )and if rejected the students state changes to terminated and denied and in case student dosent return at all then till its exam duration ends the its state will be terminated and Not Applied
+if student is disconnected and return then its allowed to join the exam normally student doest through preExam flow and when starts exam the state is changed to active and student is allocated the time it missed and when submitted the state changes to ended 
+
+students are allowed to take preExam flow only in 3 states if their state is creater OR (terminated and approved) OR disconnected
+
+4. student exam state created it goes throw preExam flow -> starts the exam -> during the exam it teminated can be manula or automatic student state changes to terminated and pending then the same flow student can apply for request only if its state is terminated and pending not other state can apply for request and if already requested and in terminated and pending state should not be allowed to apply again 
+    if the request is approved the user state changes to terminated and approved and upon completion to ended but should be mentioned that this student was terminated and approved 
+    if the request is denied then user state changes to terminated and denied and the student is not allowed to take the exam anymore the session is closed 
+    
+if the student exam is in terminated and (pending OR denied OR Not applied OR Again) student will not be alowed to take the perExam flow and directly redirected to /terminated page 
+if the student is in terminated approved state and then its exam is terminated again then the student state changes to terminated and again 
+
+these are the states from which exam resume is not allowed : terminated and (pending OR Not applied OR Again) , ended 
+
+the request is allowed only in these states : (terminated and pending)
+
+ask if any doubts clear them and then improve the current implementation

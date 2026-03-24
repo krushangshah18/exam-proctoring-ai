@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import {
   ShieldAlert, Clock, Loader2, ArrowRight, Wifi, WifiOff,
-  CheckCircle2, XCircle, AlertTriangle, Info, BookOpen, MessageSquare, History
+  CheckCircle2, XCircle, AlertTriangle, Info, BookOpen, MessageSquare,
+  History, RefreshCw, Ban, RotateCcw
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -13,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import api from '@/lib/axios';
+import { parseUTC, fmtDateTimeTZ, fmtDateTimeTZFromDate } from '@/lib/fmt-date';
 
 function NetworkBadge() {
   const [online, setOnline] = useState(true);
@@ -60,12 +62,24 @@ export default function ExamInfoPage() {
   const [appealReason, setAppealReason] = useState('');
   const [submittingAppeal, setSubmittingAppeal] = useState(false);
 
+  // Ref to schedule the exact moment the gateway opens
+  const gatewayTidRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const appealPending = exam?.active_resume_request?.status === 'PENDING';
+  const sessionStatus = exam?.session_status as string | null;
 
   const fetchStatus = useCallback(async () => {
     try {
       const res = await api.get(`/exam/${examId}/status`);
-      setExam(res.data);
+      const data = res.data;
+      setExam(data);
+
+      // Auto-refresh exactly when the gateway opens — no manual refresh needed
+      if (!data.allowed_to_enter && data.time_until_open_ms > 0) {
+        if (gatewayTidRef.current) clearTimeout(gatewayTidRef.current);
+        // +1s buffer to avoid race with server clock skew
+        gatewayTidRef.current = setTimeout(fetchStatus, data.time_until_open_ms + 1000);
+      }
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to fetch exam status');
     } finally {
@@ -73,19 +87,25 @@ export default function ExamInfoPage() {
     }
   }, [examId]);
 
+  // Dynamic poll interval: fast for appeal/disconnected, slow otherwise
+  const pollInterval = appealPending ? 5000 : sessionStatus === 'DISCONNECTED' ? 10000 : 60000;
+
   useEffect(() => {
     if (!examId) return;
     fetchStatus();
-    // Fast poll when appeal is pending (5s), else 60s
-    const id = setInterval(fetchStatus, appealPending ? 5000 : 60000);
-    return () => clearInterval(id);
-  }, [examId, fetchStatus, appealPending]);
+    const id = setInterval(fetchStatus, pollInterval);
+    return () => {
+      clearInterval(id);
+      if (gatewayTidRef.current) clearTimeout(gatewayTidRef.current);
+    };
+  }, [examId, fetchStatus, pollInterval]);
 
-  const handleAppealSubmit = async () => {
-    if (!appealReason.trim()) return toast.error("Please enter a reason.");
+  const handleAppealSubmit = async (overrideReason?: string) => {
+    const reason = overrideReason || appealReason;
+    if (!reason.trim()) return toast.error("Please enter a reason.");
     setSubmittingAppeal(true);
     try {
-      await api.post(`/exam/${examId}/appeal`, { reason: appealReason });
+      await api.post(`/exam/${examId}/appeal`, { reason });
       toast.success("Appeal submitted successfully.");
       await fetchStatus();
     } catch (err: any) {
@@ -118,10 +138,214 @@ export default function ExamInfoPage() {
     );
   }
 
-  const startTime = new Date(exam.start_window);
-  const endTime = new Date(exam.end_window);
-  const deadlineTime = exam.hard_join_deadline ? new Date(exam.hard_join_deadline) : null;
+  const startTime = parseUTC(exam.start_window);
+  const endTime = parseUTC(exam.end_window);
+  const deadlineTime = exam.hard_join_deadline ? parseUTC(exam.hard_join_deadline) : null;
   const gatewayTime = new Date(startTime.getTime() - 15 * 60000);
+
+  // ── Determine the bottom CTA to render ──────────────────────────────────
+  const renderCTA = () => {
+
+    // 1. Session already active on this or another device → send back to exam
+    if (sessionStatus === 'ACTIVE') {
+      return (
+        <div className="flex items-center justify-between p-6 bg-indigo-50 border border-indigo-200 rounded-xl">
+          <div className="flex items-center gap-3">
+            <RefreshCw className="h-8 w-8 text-indigo-600 shrink-0" />
+            <div>
+              <h4 className="font-semibold text-indigo-900">Exam Session Active</h4>
+              <p className="text-sm text-indigo-700 mt-0.5">
+                You have an ongoing exam session. Return to it now.
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={() => router.push(`/student/exam/${examId}/active`)}
+            className="shrink-0 bg-indigo-600 hover:bg-indigo-700 gap-2"
+          >
+            Return to Exam <ArrowRight className="h-4 w-4" />
+          </Button>
+        </div>
+      );
+    }
+
+    // 2. Session disconnected — full preExam flow to reconnect
+    if (sessionStatus === 'DISCONNECTED') {
+      return (
+        <div className="p-6 bg-amber-50 border-2 border-amber-300 rounded-xl space-y-4 animate-in fade-in duration-300">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-8 w-8 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-bold text-amber-900 text-lg">Your Exam Is Still In Progress!</h4>
+              <p className="text-amber-800 mt-1 text-sm leading-relaxed">
+                Don't worry — your session and all your work are saved. Your connection dropped, but
+                the exam is still running. Complete the setup checks quickly to rejoin before the
+                system auto-terminates your attempt.
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={() => router.push(`/student/exam/${examId}/device`)}
+            className="w-full h-12 text-base bg-amber-600 hover:bg-amber-700 text-white font-bold gap-2 shadow-lg"
+          >
+            <RotateCcw className="h-5 w-5" />
+            Start Reconnect Setup
+          </Button>
+          <p className="text-xs text-amber-700 text-center">
+            Checking for status updates every 10 seconds…
+          </p>
+        </div>
+      );
+    }
+
+    // 3. Session terminated — redirect to /terminated page for appeal flow
+    if (sessionStatus === 'TERMINATED') {
+      return (
+        <div className="p-6 bg-rose-50 border border-rose-200 rounded-xl space-y-4">
+          <div className="flex items-start gap-3">
+            <Ban className="h-6 w-6 text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-semibold text-rose-900 text-lg">Session Terminated</h4>
+              <p className="text-rose-700 text-sm mt-1 leading-relaxed">
+                Your exam session has been terminated. If you believe this was an error, you can
+                request access from the terminated session page.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <Button
+              onClick={() => router.push(`/student/exam/${examId}/terminated`)}
+              className="flex-1 bg-rose-600 hover:bg-rose-700 text-white gap-2"
+            >
+              <MessageSquare className="h-4 w-4" />
+              Want to Request Access?
+            </Button>
+            <Button
+              onClick={() => router.push('/student/dashboard')}
+              variant="outline"
+              className="flex-1 border-slate-300 text-slate-700"
+            >
+              Back to Dashboard
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    // 4. Exam already submitted / ended
+    if (sessionStatus === 'ENDED') {
+      return (
+        <div className="flex items-center justify-between p-6 bg-emerald-50 border border-emerald-200 rounded-xl">
+          <div className="flex items-center gap-3">
+            <CheckCircle2 className="h-8 w-8 text-emerald-600 shrink-0" />
+            <div>
+              <h4 className="font-semibold text-emerald-900">Exam Already Submitted</h4>
+              <p className="text-sm text-emerald-700 mt-0.5">
+                You have already completed and submitted this exam. Your attempt has been recorded.
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => router.push('/student/history')}
+            className="shrink-0 gap-2 border-emerald-300 text-emerald-800 hover:bg-emerald-100"
+          >
+            <History className="h-4 w-4" /> View History
+          </Button>
+        </div>
+      );
+    }
+
+    // 5. Hard deadline passed (late join flow)
+    if (exam.is_late && exam.active_resume_request?.status !== 'APPROVED') {
+      return (
+        <div className="p-6 bg-rose-50 border border-rose-200 rounded-xl space-y-4">
+          <div className="flex items-center gap-3 mb-2">
+            <ShieldAlert className="h-6 w-6 text-rose-600" />
+            <h4 className="font-semibold text-rose-900 text-lg">Hard Deadline Passed</h4>
+          </div>
+
+          {exam.late_join_policy === 'DENY' && (
+            <p className="text-rose-700">This exam strictly denies late joins. You may no longer enter.</p>
+          )}
+
+          {exam.late_join_policy === 'REVIEW' && !exam.active_resume_request && (
+            <div className="space-y-4">
+              <p className="text-rose-700">You missed the join window. Submit an appeal to request late entry.</p>
+              <Textarea
+                placeholder="Explain clearly why you are late..."
+                value={appealReason}
+                onChange={(e) => setAppealReason(e.target.value)}
+                className="bg-white"
+              />
+              <Button
+                onClick={handleAppealSubmit}
+                disabled={submittingAppeal}
+                className="bg-rose-600 hover:bg-rose-700 text-white"
+              >
+                {submittingAppeal && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Submit Appeal
+              </Button>
+            </div>
+          )}
+
+          {exam.late_join_policy === 'REVIEW' && exam.active_resume_request?.status === 'PENDING' && (
+            <div className="p-4 bg-white/50 rounded-lg space-y-2">
+              <p className="text-rose-800 font-medium flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Your appeal is under review — checking every 5 seconds
+              </p>
+              <p className="text-sm text-rose-600 italic">"{exam.active_resume_request.reason}"</p>
+              <p className="text-xs text-slate-500">Please keep this page open. Do not close the browser.</p>
+            </div>
+          )}
+
+          {exam.late_join_policy === 'REVIEW' && exam.active_resume_request?.status === 'DENIED' && (
+            <div className="p-4 bg-white/50 rounded-lg">
+              <p className="text-rose-800 font-bold">Your appeal was denied.</p>
+              {exam.active_resume_request.review_note && (
+                <p className="text-sm text-rose-700 mt-1">Note: {exam.active_resume_request.review_note}</p>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // 6. Gateway locked — auto-timer is running in background; shows countdown
+    if (!exam.allowed_to_enter) {
+      const msLeft = exam.time_until_open_ms ?? 0;
+      const minsLeft = Math.ceil(msLeft / 60000);
+      return (
+        <Alert className="bg-amber-50 border-amber-200">
+          <Clock className="h-5 w-5 text-amber-600" />
+          <AlertTitle className="text-amber-800 font-semibold">Gateway Locked</AlertTitle>
+          <AlertDescription className="text-amber-700 mt-2">
+            The setup gateway opens 15 minutes before the exam starts.
+            You can proceed from <strong>{fmtDateTimeTZFromDate(gatewayTime)}</strong>
+            {minsLeft > 1 && ` (in about ${minsLeft} minute${minsLeft !== 1 ? 's' : ''})`}.
+            This page will automatically unlock — no refresh needed.
+          </AlertDescription>
+        </Alert>
+      );
+    }
+
+    // 7. Gateway open — proceed through setup checks
+    return (
+      <div className="flex items-center justify-between p-6 bg-indigo-50 border border-indigo-100 rounded-xl">
+        <div>
+          <h4 className="font-semibold text-indigo-900">Setup Gateway Open</h4>
+          <p className="text-sm text-indigo-700">Proceed with camera, microphone, and environment checks.</p>
+        </div>
+        <Button
+          onClick={() => router.push(`/student/exam/${examId}/device`)}
+          className="bg-indigo-600 hover:bg-indigo-700 shadow-md gap-2"
+        >
+          Start Setup <ArrowRight className="h-4 w-4" />
+        </Button>
+      </div>
+    );
+  };
 
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -153,16 +377,16 @@ export default function ExamInfoPage() {
               </div>
               <div>
                 <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Starts At</span>
-                <p className="font-semibold text-slate-900 mt-1">{startTime.toLocaleString()}</p>
+                <p className="font-semibold text-slate-900 mt-1">{fmtDateTimeTZ(exam.start_window)}</p>
               </div>
               <div>
                 <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Ends At</span>
-                <p className="font-semibold text-slate-900 mt-1">{endTime.toLocaleString()}</p>
+                <p className="font-semibold text-slate-900 mt-1">{fmtDateTimeTZ(exam.end_window)}</p>
               </div>
               {deadlineTime && (
                 <div>
                   <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Join Deadline</span>
-                  <p className="font-semibold text-rose-600 mt-1">{deadlineTime.toLocaleString()}</p>
+                  <p className="font-semibold text-rose-600 mt-1">{fmtDateTimeTZ(exam.hard_join_deadline)}</p>
                 </div>
               )}
               {exam.late_join_policy && (
@@ -270,107 +494,14 @@ export default function ExamInfoPage() {
             </h4>
             <p className="text-sm text-slate-600 leading-relaxed">
               If your session is unexpectedly terminated or you believe a violation was flagged in error,
-              you may submit an appeal directly from the exam page. An admin will review it and can
-              approve your re-entry. <strong>Do not close the exam window</strong> while your appeal is pending.
-              If approved, extra time may be granted to compensate for the interruption.
+              you may submit an appeal directly from this page or the exam page. An admin will review it
+              and can approve your re-entry. <strong>Do not close the browser</strong> while your appeal
+              is pending. If approved, extra time may be granted to compensate for the interruption.
             </p>
           </Card>
 
-          {/* Late / Appeal / Gateway CTA */}
-          {exam.session_status === 'ENDED' ? (
-            <div className="flex items-center justify-between p-6 bg-emerald-50 border border-emerald-200 rounded-xl">
-              <div className="flex items-center gap-3">
-                <CheckCircle2 className="h-8 w-8 text-emerald-600 shrink-0" />
-                <div>
-                  <h4 className="font-semibold text-emerald-900">Exam Already Submitted</h4>
-                  <p className="text-sm text-emerald-700 mt-0.5">
-                    You have already completed and submitted this exam. Your attempt has been recorded.
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                onClick={() => router.push('/student/history')}
-                className="shrink-0 gap-2 border-emerald-300 text-emerald-800 hover:bg-emerald-100"
-              >
-                <History className="h-4 w-4" /> View History
-              </Button>
-            </div>
-          ) : exam.is_late && exam.active_resume_request?.status !== 'APPROVED' ? (
-            <div className="p-6 bg-rose-50 border border-rose-200 rounded-xl space-y-4">
-              <div className="flex items-center gap-3 mb-2">
-                <ShieldAlert className="h-6 w-6 text-rose-600" />
-                <h4 className="font-semibold text-rose-900 text-lg">Hard Deadline Passed</h4>
-              </div>
-
-              {exam.late_join_policy === 'DENY' && (
-                <p className="text-rose-700">This exam strictly denies late joins. You may no longer enter.</p>
-              )}
-
-              {exam.late_join_policy === 'REVIEW' && !exam.active_resume_request && (
-                <div className="space-y-4">
-                  <p className="text-rose-700">You missed the join window. Submit an appeal to request late entry.</p>
-                  <Textarea
-                    placeholder="Explain clearly why you are late..."
-                    value={appealReason}
-                    onChange={(e) => setAppealReason(e.target.value)}
-                    className="bg-white"
-                  />
-                  <Button
-                    onClick={handleAppealSubmit}
-                    disabled={submittingAppeal}
-                    className="bg-rose-600 hover:bg-rose-700 text-white"
-                  >
-                    {submittingAppeal && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                    Submit Appeal
-                  </Button>
-                </div>
-              )}
-
-              {exam.late_join_policy === 'REVIEW' && exam.active_resume_request?.status === 'PENDING' && (
-                <div className="p-4 bg-white/50 rounded-lg space-y-2">
-                  <p className="text-rose-800 font-medium flex items-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Your appeal is under review — checking every 5 seconds
-                  </p>
-                  <p className="text-sm text-rose-600 italic">"{exam.active_resume_request.reason}"</p>
-                  <p className="text-xs text-slate-500">Please keep this page open. Do not close the browser.</p>
-                </div>
-              )}
-
-              {exam.late_join_policy === 'REVIEW' && exam.active_resume_request?.status === 'DENIED' && (
-                <div className="p-4 bg-white/50 rounded-lg">
-                  <p className="text-rose-800 font-bold">Your appeal was denied.</p>
-                  {exam.active_resume_request.review_note && (
-                    <p className="text-sm text-rose-700 mt-1">Note: {exam.active_resume_request.review_note}</p>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : !exam.allowed_to_enter ? (
-            <Alert className="bg-amber-50 border-amber-200">
-              <Clock className="h-5 w-5 text-amber-600" />
-              <AlertTitle className="text-amber-800 font-semibold">Gateway Locked</AlertTitle>
-              <AlertDescription className="text-amber-700 mt-2">
-                The setup gateway opens 15 minutes before the exam starts.
-                You can proceed from <strong>{gatewayTime.toLocaleTimeString()}</strong>.
-                Use this time to ensure your room, lighting, and equipment are ready.
-              </AlertDescription>
-            </Alert>
-          ) : (
-            <div className="flex items-center justify-between p-6 bg-indigo-50 border border-indigo-100 rounded-xl">
-              <div>
-                <h4 className="font-semibold text-indigo-900">Setup Gateway Open</h4>
-                <p className="text-sm text-indigo-700">Proceed with camera, microphone, and environment checks.</p>
-              </div>
-              <Button
-                onClick={() => router.push(`/student/exam/${examId}/device`)}
-                className="bg-indigo-600 hover:bg-indigo-700 shadow-md gap-2"
-              >
-                Start Setup <ArrowRight className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
+          {/* ── Bottom CTA — state-driven ── */}
+          {renderCTA()}
 
         </div>
       </div>

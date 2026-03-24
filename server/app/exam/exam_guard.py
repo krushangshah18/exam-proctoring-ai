@@ -69,18 +69,21 @@ def exam_guard(
             detail="Exam device mismatch"
         )
 
-    # 5️⃣ Session expiry check (optional)
-    if session.exam.end_window:
-        # Make expires_at timezone-aware if needed
-        expires_at = session.exam.end_window
-        if expires_at.tzinfo is None:
-            from datetime import UTC
-            expires_at = expires_at.replace(tzinfo=UTC)
-        
-        if expires_at < datetime.now(UTC):
+    # 5️⃣ Session expiry check — use personal deadline, not exam.end_window.
+    # Admin-granted time extensions (time_extension_seconds) allow a student to
+    # continue past the exam's end_window, so we compute the personal deadline as:
+    #   start_time + duration_minutes + time_extension_seconds
+    if session.start_time:
+        from datetime import timedelta
+        start = session.start_time.replace(tzinfo=UTC) if session.start_time.tzinfo is None else session.start_time
+        personal_deadline = (
+            start
+            + timedelta(minutes=session.exam.duration_minutes)
+            + timedelta(seconds=session.time_extension_seconds or 0)
+        )
+        if personal_deadline < datetime.now(UTC):
             session.status = SessionStatus.ENDED.value
             db.commit()
-
             raise HTTPException(
                 status_code=403,
                 detail="Exam session expired"

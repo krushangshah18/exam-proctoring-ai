@@ -20,7 +20,8 @@ async def _exam_status_scheduler():
     Background task:
       SCHEDULED → LIVE  when start_window passes
       LIVE      → ENDED when end_window passes
-      ACTIVE sessions with last_heartbeat > 5 min → DISCONNECTED
+      ACTIVE sessions with last_heartbeat > 90s → DISCONNECTED
+      DISCONNECTED sessions with last_heartbeat > 5 min → TERMINATED
     Runs every 60 seconds.
     """
     from app.db.session import SessionLocal
@@ -42,19 +43,9 @@ async def _exam_status_scheduler():
                     )
                     .all()
                 )
-                from app.exam.engine_allocator import allocate_for_exam, EngineCapacityError
                 for exam in scheduled_to_live:
-                    # Allocate engine containers before going LIVE
-                    try:
-                        urls = allocate_for_exam(exam.id, db)
-                        exam.status = ExamStatus.LIVE.value
-                        log.info("Exam %s → LIVE. Engine containers: %s", exam.id, urls)
-                    except EngineCapacityError as _cap_err:
-                        log.error(
-                            "Exam %s CANNOT go LIVE — no engine capacity: %s",
-                            exam.id, _cap_err,
-                        )
-                        # Leave as SCHEDULED — will retry next tick
+                    exam.status = ExamStatus.LIVE.value
+                    log.info("Exam %s → LIVE", exam.id)
 
                 live_to_ended = (
                     db.query(models.Exam)
@@ -67,12 +58,43 @@ async def _exam_status_scheduler():
                 )
                 for exam in live_to_ended:
                     exam.status = ExamStatus.ENDED.value
-                    # Release engine containers back to the pool
-                    from app.exam.engine_allocator import release_for_exam
-                    release_for_exam(exam.id, db)
+                    log.info("Exam %s → ENDED", exam.id)
+                    # Only end sessions whose personal deadline has passed.
+                    # Personal deadline = start_time + duration + admin-granted extension.
+                    # Sessions still within their personal window are left running so the
+                    # student can finish (their frontend timer will auto-submit when it hits 0).
+                    orphaned = (
+                        db.query(models.ExamSession)
+                        .filter(
+                            models.ExamSession.exam_id == exam.id,
+                            models.ExamSession.status.in_([
+                                SessionStatus.ACTIVE.value,
+                                SessionStatus.DISCONNECTED.value,
+                            ]),
+                        )
+                        .all()
+                    )
+                    for sess in orphaned:
+                        if not sess.start_time:
+                            sess.status = SessionStatus.ENDED.value
+                            sess.end_time = now
+                            continue
+                        start = sess.start_time.replace(tzinfo=UTC) if sess.start_time.tzinfo is None else sess.start_time
+                        personal_deadline = (
+                            start
+                            + timedelta(minutes=exam.duration_minutes)
+                            + timedelta(seconds=sess.time_extension_seconds or 0)
+                        )
+                        if now >= personal_deadline:
+                            sess.status = SessionStatus.ENDED.value
+                            sess.end_time = now
+                            log.info(
+                                "Session %s auto-ended (personal deadline %s passed)", sess.id, personal_deadline
+                            )
+                        # else: leave running — student has admin-granted extra time
 
-                # Detect disconnected sessions (no heartbeat for > 5 minutes)
-                heartbeat_cutoff = now - timedelta(minutes=5)
+                # Detect disconnected sessions (no heartbeat for > 90 seconds)
+                heartbeat_cutoff = now - timedelta(seconds=90)
                 stale_sessions = (
                     db.query(models.ExamSession)
                     .filter(
@@ -86,13 +108,70 @@ async def _exam_status_scheduler():
                     sess.status = SessionStatus.DISCONNECTED.value
                     log.info("Session %s marked DISCONNECTED (last heartbeat: %s)", sess.id, sess.last_heartbeat)
 
-                if scheduled_to_live or live_to_ended or stale_sessions:
+                # Auto-terminate sessions disconnected for > 5 min
+                from app.exam.events import push_event_sync
+                disconnect_terminate_cutoff = now - timedelta(minutes=5)
+                long_disconnected = (
+                    db.query(models.ExamSession)
+                    .filter(
+                        models.ExamSession.status == SessionStatus.DISCONNECTED.value,
+                        models.ExamSession.last_heartbeat <= disconnect_terminate_cutoff,
+                        models.ExamSession.last_heartbeat.isnot(None),
+                    )
+                    .all()
+                )
+                for sess in long_disconnected:
+                    sess.status = SessionStatus.TERMINATED.value
+                    sess.terminated_by = "SYSTEM_DISCONNECT"
+                    sess.terminated_reason = "Session auto-terminated: student disconnected for over 5 minutes"
+                    sess.terminated_at = now
+                    push_event_sync(str(sess.id), "TERMINATED", {
+                        "terminated_by": "SYSTEM_DISCONNECT",
+                        "terminated_reason": sess.terminated_reason,
+                    })
+                    log.info(
+                        "Session %s auto-terminated (disconnected since %s)", sess.id, sess.last_heartbeat
+                    )
+
+                # Also check sessions in already-ENDED exams whose personal deadline has now expired
+                # (students who were given time extensions past the exam end_window)
+                ended_exam_sessions = (
+                    db.query(models.ExamSession, models.Exam)
+                    .join(models.Exam, models.Exam.id == models.ExamSession.exam_id)
+                    .filter(
+                        models.Exam.status == ExamStatus.ENDED.value,
+                        models.ExamSession.status.in_([
+                            SessionStatus.ACTIVE.value,
+                            SessionStatus.DISCONNECTED.value,
+                        ]),
+                    )
+                    .all()
+                )
+                extended_auto_ended = []
+                for sess, exam in ended_exam_sessions:
+                    if not sess.start_time:
+                        continue
+                    start = sess.start_time.replace(tzinfo=UTC) if sess.start_time.tzinfo is None else sess.start_time
+                    personal_deadline = (
+                        start
+                        + timedelta(minutes=exam.duration_minutes)
+                        + timedelta(seconds=sess.time_extension_seconds or 0)
+                    )
+                    if now >= personal_deadline:
+                        sess.status = SessionStatus.ENDED.value
+                        sess.end_time = now
+                        extended_auto_ended.append(sess.id)
+                        log.info("Session %s auto-ended (extended past exam window, deadline %s)", sess.id, personal_deadline)
+
+                if scheduled_to_live or live_to_ended or stale_sessions or long_disconnected or extended_auto_ended:
                     db.commit()
                     log.info(
-                        "Exam scheduler: %d SCHEDULED→LIVE, %d LIVE→ENDED, %d sessions DISCONNECTED",
+                        "Exam scheduler: %d SCHEDULED→LIVE, %d LIVE→ENDED, %d DISCONNECTED, %d auto-terminated, %d extended-sessions ended",
                         len(scheduled_to_live),
                         len(live_to_ended),
                         len(stale_sessions),
+                        len(long_disconnected),
+                        len(extended_auto_ended),
                     )
             except Exception as e:
                 db.rollback()

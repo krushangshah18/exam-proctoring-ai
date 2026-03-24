@@ -1,6 +1,7 @@
 import secrets
 import time
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, BackgroundTasks, status, HTTPException
 from sqlalchemy.orm import Session
@@ -25,16 +26,35 @@ router = APIRouter(prefix="/admin/exams", tags=["Admin Exams"])
 # DetachedInstanceError after the request session closes.
 # =====================================================
 
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _fmt_email_time(dt: datetime) -> str:
+    """
+    Format a UTC datetime for email display showing both UTC and IST,
+    e.g. "2026-03-25 10:30 UTC  (4:00 PM IST)".
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    utc_str = dt.strftime("%Y-%m-%d %H:%M UTC")
+    ist_dt = dt.astimezone(_IST)
+    ist_str = ist_dt.strftime("%I:%M %p IST").lstrip("0")
+    return f"{utc_str}  ({ist_str})"
+
+
 def _send_exam_invites(
     admin_email: str,
     exam_title: str,
     hard_deadline_str: str,
     invite_data: List[dict],
+    start_window_str: str = "",
+    end_window_str: str = "",
 ):
     """
     Send invite emails with retry (3 attempts, exponential backoff).
     On persistent failures, notifies the admin.
     invite_data: list of {email: str, token: str}
+    start_window_str / end_window_str: pre-formatted UTC+IST strings for the email body.
     """
     from app.db.session import SessionLocal
 
@@ -66,21 +86,34 @@ def _send_exam_invites(
         link = f"{settings.FRONTEND_URL}/exam/{inv['token']}/wait"
         full_name = user_map.get(email.lower())
 
+        schedule_lines = ""
+        if start_window_str:
+            schedule_lines += f"  Start : {start_window_str}\n"
+        if end_window_str:
+            schedule_lines += f"  End   : {end_window_str}\n"
+        if hard_deadline_str and hard_deadline_str != "N/A":
+            schedule_lines += f"  Join by: {hard_deadline_str}\n"
+
         if full_name:
             subject = f"You're invited to take an exam: {exam_title}"
             body = (
                 f"Hello {full_name},\n\n"
-                f"You have been assigned to the exam '{exam_title}'.\n"
-                f"Access your exam here: {link}\n\n"
-                f"Please ensure you join before the deadline: {hard_deadline_str}.\n"
+                f"You have been assigned to the exam '{exam_title}'.\n\n"
+                f"Exam Schedule (all times shown in UTC and IST):\n"
+                f"{schedule_lines}"
+                f"\nAccess your exam here: {link}\n\n"
+                f"Times above are shown in UTC and IST. Please convert to your local "
+                f"timezone if needed.\n\nThank you!"
             )
         else:
             subject = f"Action Required: Exam Invitation for {exam_title}"
             body = (
                 f"Hello,\n\n"
                 f"You have been assigned to the exam '{exam_title}', but you do not currently "
-                f"have an active profile in our system.\n"
-                f"Your exam link is: {link}\n\n"
+                f"have an active profile in our system.\n\n"
+                f"Exam Schedule (all times shown in UTC and IST):\n"
+                f"{schedule_lines}"
+                f"\nYour exam link is: {link}\n\n"
                 f"Please register at {settings.FRONTEND_URL}/auth/register using this email "
                 f"address ({email}) so you can be verified and take the exam.\n"
             )
@@ -224,7 +257,7 @@ def create_exam(
     db.commit()
 
     hard_deadline_str = (
-        new_exam.hard_join_deadline.strftime("%Y-%m-%d %H:%M UTC")
+        _fmt_email_time(new_exam.hard_join_deadline)
         if new_exam.hard_join_deadline
         else "N/A"
     )
@@ -236,6 +269,8 @@ def create_exam(
             new_exam.title,
             hard_deadline_str,
             invite_data,
+            _fmt_email_time(new_exam.start_window),
+            _fmt_email_time(new_exam.end_window),
         )
 
     log.info(
@@ -430,7 +465,7 @@ def update_exam(
     db.commit()
 
     hard_deadline_str = (
-        new_deadline.strftime("%Y-%m-%d %H:%M UTC") if new_deadline else "N/A"
+        _fmt_email_time(new_deadline) if new_deadline else "N/A"
     )
 
     if new_invite_data:
@@ -440,6 +475,8 @@ def update_exam(
             exam.title,
             hard_deadline_str,
             new_invite_data,
+            _fmt_email_time(new_start),
+            _fmt_email_time(new_end),
         )
 
     if schedule_changed:
@@ -615,6 +652,32 @@ def list_resume_requests(
     for rr in rrs:
         sess = db.query(models.ExamSession).filter(models.ExamSession.id == rr.session_id).first()
         user = db.query(models.User).filter(models.User.id == sess.user_id).first() if sess else None
+
+        # Derive termination type from terminated_by field
+        terminated_by = sess.terminated_by if sess else None
+        if terminated_by == "SYSTEM_DISCONNECT":
+            termination_type = "DISCONNECT"
+        elif terminated_by == "ADMIN":
+            termination_type = "ADMIN"
+        elif terminated_by and terminated_by.startswith("SYSTEM"):
+            termination_type = "VIOLATION"
+        else:
+            termination_type = "LATE_JOIN"   # no session or no terminated_by → late join appeal
+
+        # For disconnect type, suggest extension = time from last_heartbeat to now (at review time)
+        suggested_extension_minutes = None
+        if termination_type == "DISCONNECT" and sess and sess.last_heartbeat:
+            lh = sess.last_heartbeat.replace(tzinfo=UTC) if sess.last_heartbeat.tzinfo is None else sess.last_heartbeat
+            lost_seconds = max(0, int((datetime.now(UTC) - lh).total_seconds()))
+            suggested_extension_minutes = max(1, round(lost_seconds / 60))
+
+        # How long after disconnect the student filed the appeal (or it was auto-created)
+        time_since_disconnect_seconds = None
+        if sess and sess.last_heartbeat and rr.created_at:
+            lh = sess.last_heartbeat.replace(tzinfo=UTC) if sess.last_heartbeat.tzinfo is None else sess.last_heartbeat
+            rr_created = rr.created_at.replace(tzinfo=UTC) if rr.created_at.tzinfo is None else rr.created_at
+            time_since_disconnect_seconds = max(0, int((rr_created - lh).total_seconds()))
+
         result.append({
             "id": str(rr.id),
             "session_id": str(rr.session_id),
@@ -626,6 +689,9 @@ def list_resume_requests(
             "time_extension_minutes": rr.time_extension_minutes,
             "reviewed_at": rr.reviewed_at,
             "created_at": rr.created_at,
+            "termination_type": termination_type,
+            "suggested_extension_minutes": suggested_extension_minutes,
+            "time_since_disconnect_seconds": time_since_disconnect_seconds,
         })
 
     return result
@@ -685,12 +751,14 @@ def review_resume_request(
 
     if data.decision == "APPROVED":
         # Apply time extension to session if provided
+        added_extension_seconds = 0
         if data.time_extension_minutes and data.time_extension_minutes > 0:
-            sess.time_extension_seconds = (sess.time_extension_seconds or 0) + data.time_extension_minutes * 60
+            added_extension_seconds = data.time_extension_minutes * 60
+            sess.time_extension_seconds = (sess.time_extension_seconds or 0) + added_extension_seconds
 
-        # Resume: reactivate session if it was TERMINATED
+        # Resume: reactivate session so student can rejoin via /exam/start
         if sess.status == SessionStatus.TERMINATED.value:
-            sess.status = SessionStatus.CREATED.value  # student will re-start via /exam/start
+            sess.status = SessionStatus.CREATED.value
 
         event_type = "RESUME_APPROVED"
         event_data = {
@@ -699,6 +767,12 @@ def review_resume_request(
             "time_extension_seconds": sess.time_extension_seconds,
         }
     else:
+        # DENIED — permanently close the session so no ghost sessions remain.
+        # Types 3/4/5 (violation/admin): session ends, no extra time.
+        # Types 6/7 (disconnect): same, no extra time.
+        sess.status = SessionStatus.ENDED.value
+        sess.end_time = datetime.now(UTC)
+
         event_type = "RESUME_DENIED"
         event_data = {"review_note": data.review_note}
 
@@ -821,6 +895,58 @@ def bulk_extend_time(
     }
 
 
+@router.post("/{exam_id}/sessions/{session_id}/terminate")
+def terminate_session(
+    exam_id: str,
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role(UserRole.ADMIN, UserRole.SYSADMIN)),
+):
+    """
+    Admin manually terminates a student session.
+    Typically triggered when risk_score >= 100.
+    Pushes a TERMINATED SSE event to the student's active page.
+    """
+    exam = (
+        db.query(models.Exam)
+        .filter(
+            models.Exam.id == exam_id,
+            models.Exam.is_deleted == False,
+        )
+        .first()
+    )
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    sess = db.query(models.ExamSession).filter(
+        models.ExamSession.id == session_id,
+        models.ExamSession.exam_id == exam_id,
+        models.ExamSession.status.in_([
+            SessionStatus.ACTIVE.value,
+            SessionStatus.DISCONNECTED.value,
+        ]),
+    ).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="No active or disconnected session found")
+
+    sess.status = SessionStatus.TERMINATED.value
+    sess.terminated_by = "ADMIN"
+    sess.terminated_reason = "Session terminated by exam proctor due to high risk score"
+    sess.terminated_at = datetime.now(UTC)
+    db.commit()
+
+    push_event_sync(str(sess.id), "TERMINATED", {
+        "terminated_by": "ADMIN",
+        "terminated_reason": sess.terminated_reason,
+    })
+
+    log.info(
+        "Admin %s manually terminated session %s (exam %s, risk_score=%s)",
+        current_admin.email, session_id, exam_id, sess.risk_score,
+    )
+    return {"message": "Session terminated successfully"}
+
+
 # =====================================================
 # PROCTOR ENGINE — ADMIN PROXY ROUTES
 # =====================================================
@@ -843,7 +969,8 @@ async def admin_live_frame(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if not session.proctor_pc_id or not session.proctor_engine_url:
-        raise HTTPException(status_code=404, detail="No proctoring engine session for this student")
+        # Student hasn't established WebRTC connection yet — not an error, just no frame
+        return _Response(content=b"", status_code=204, media_type="image/jpeg")
 
     try:
         jpeg_bytes = await fetch_snapshot(session.proctor_engine_url, session.proctor_pc_id)
@@ -873,13 +1000,74 @@ async def admin_live_stream(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if not session.proctor_pc_id or not session.proctor_engine_url:
-        raise HTTPException(status_code=404, detail="No proctoring engine session for this student")
+        # Student hasn't connected to engine yet — send keepalive stream so the
+        # admin SSE client stays connected and can reconnect when ready
+        import asyncio as _asyncio
+        async def _waiting_stream():
+            while True:
+                yield ': waiting\n\n'
+                await _asyncio.sleep(5)
+        return _SR(
+            _waiting_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return _SR(
         stream_engine_events(session.proctor_engine_url, session.proctor_pc_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/{exam_id}/sessions/{session_id}/alert-history")
+async def get_session_alert_history(
+    exam_id: str,
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role("ADMIN")),
+):
+    """
+    Return the full alert + warning history for a session from the engine.
+    Used by the admin monitor to restore history when switching between students.
+    Returns empty lists if the engine session is no longer available.
+    """
+    from app.exam.proctor_proxy import fetch_session_log
+
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.id == session_id,
+        models.ExamSession.exam_id == exam_id,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not session.proctor_pc_id or not session.proctor_engine_url:
+        return {"alerts": [], "warnings": []}
+
+    try:
+        log_data = await fetch_session_log(session.proctor_engine_url, session.proctor_pc_id)
+        alerts = [
+            {
+                "message"   : e.get("message", "Alert"),
+                "proof_url" : e.get("proof_url"),
+                "proof_type": e.get("proof_type", "image"),
+                "score_added": 0,
+                "elapsed_s" : e.get("elapsed_s", 0),
+                "time"      : e.get("time", ""),
+            }
+            for e in log_data.get("alert_log", [])
+        ]
+        warnings = [
+            {
+                "message"  : e.get("message", "Warning"),
+                "elapsed_s": e.get("elapsed_s", 0),
+                "time"     : e.get("time", ""),
+            }
+            for e in log_data.get("warning_log", [])
+        ]
+        return {"alerts": list(reversed(alerts)), "warnings": list(reversed(warnings))}
+    except Exception:
+        return {"alerts": [], "warnings": []}
 
 
 class DebugModeBody(BaseModel):
@@ -913,6 +1101,94 @@ async def admin_debug_mode(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Engine debug toggle failed: {e}")
 
+    return result
+
+
+# =====================================================
+# EXAM ADMIN — SESSION REPORTS
+# =====================================================
+
+@router.get("/{exam_id}/reports")
+async def list_exam_reports(
+    exam_id: str,
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role(UserRole.ADMIN, UserRole.SYSADMIN)),
+):
+    """
+    List session reports for a specific exam.
+    Fetches metadata from each engine container for sessions that have a
+    proctor_report_id; falls back to DB-only data for sessions without one.
+    """
+    import httpx
+
+    exam = (
+        db.query(models.Exam)
+        .filter(
+            models.Exam.id == exam_id,
+            models.Exam.created_by == current_admin.id,
+            models.Exam.is_deleted == False,
+        )
+        .first()
+    )
+    if not exam:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exam not found")
+
+    sessions = db.query(models.ExamSession).filter(
+        models.ExamSession.exam_id == exam_id
+    ).all()
+
+    # Group sessions that have a report by engine_url for batched fetching
+    engine_groups: dict[str, list] = {}
+    for sess in sessions:
+        if sess.proctor_engine_url and sess.proctor_report_id:
+            engine_groups.setdefault(sess.proctor_engine_url, []).append(sess)
+
+    # report_id → engine metadata
+    report_meta_cache: dict[str, dict] = {}
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=4.0, read=8.0, write=4.0, pool=4.0)) as client:
+        for engine_url, engine_sessions in engine_groups.items():
+            try:
+                r = await client.get(f"{engine_url}/reports/meta")
+                r.raise_for_status()
+                for rep in r.json():
+                    report_meta_cache[rep["id"]] = {**rep, "engine_url": engine_url}
+            except Exception as exc:
+                log.warning("Could not fetch reports/meta from %s: %s", engine_url, exc)
+
+    result = []
+    for sess in sessions:
+        user = db.query(models.User).filter(models.User.id == sess.user_id).first()
+        meta = report_meta_cache.get(sess.proctor_report_id or "")
+
+        row: dict = {
+            "session_id": str(sess.id),
+            "report_id": sess.proctor_report_id,
+            "engine_url": sess.proctor_engine_url,
+            "student_name": user.full_name if user else "Unknown",
+            "student_email": user.email if user else "",
+            "session_status": sess.status,
+            "terminated_by": sess.terminated_by,
+            "terminated_reason": sess.terminated_reason,
+            "risk_score": sess.risk_score or 0,
+            "start_time": sess.start_time,
+            "end_time": sess.end_time,
+            # Engine report metadata (null if not available)
+            "risk_state": meta.get("risk_state") if meta else None,
+            "final_score": meta.get("final_score") if meta else None,
+            "alert_count": meta.get("alert_count") if meta else None,
+            "warning_count": meta.get("warning_count") if meta else None,
+            "size_kb": meta.get("size_kb") if meta else None,
+            "proof_count": meta.get("proof_count") if meta else None,
+            "duration_s": meta.get("duration_s") if meta else None,
+            "terminated": meta.get("terminated") if meta else None,
+        }
+        result.append(row)
+
+    # Sort: sessions with reports first (by end_time desc), then others
+    result.sort(
+        key=lambda x: (x["report_id"] is None, x["end_time"] is None, x.get("end_time") or ""),
+        reverse=True,
+    )
     return result
 
 
@@ -1008,7 +1284,7 @@ def get_system_settings(
         "yolo_book_conf":             row.yolo_book_conf,
         "yolo_audio_conf":            row.yolo_audio_conf,
         "yolo_person_conf":           row.yolo_person_conf,
-        "updated_at":                 row.updated_at.isoformat() if row.updated_at else None,
+        "updated_at":                 row.created_at.isoformat() if row.created_at else None,
     }
 
 
@@ -1031,3 +1307,358 @@ def update_system_settings(
     db.refresh(row)
     log.info("System admin %s updated EngineSettings: %s", current_admin.email, list(patch.keys()))
     return {"message": "Settings updated", "changed": list(patch.keys())}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SYSADMIN — Engine monitoring + cross-exam session oversight
+# ─────────────────────────────────────────────────────────────────────────────
+
+@_system_settings_router.get("/engine/containers")
+def get_engine_containers(
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """List all configured engine containers with their current session load."""
+    containers = db.query(models.EngineContainer).order_by(models.EngineContainer.url).all()
+    result = []
+    for c in containers:
+        active_sessions = (
+            db.query(models.ExamSession)
+            .filter(
+                models.ExamSession.proctor_engine_url == c.url,
+                models.ExamSession.status.in_(["CREATED", "ACTIVE", "DISCONNECTED"]),
+            )
+            .count()
+        )
+        result.append({
+            "id": str(c.id),
+            "url": c.url,
+            "max_sessions": c.max_sessions,
+            "is_active": c.is_active,
+            "active_sessions": active_sessions,
+        })
+    return result
+
+
+@_system_settings_router.get("/engine/metrics")
+async def get_engine_metrics(
+    _=Depends(require_role("SYSADMIN")),
+    db: Session = Depends(get_db),
+):
+    """
+    Proxy GET /metrics from every active engine container.
+    Returns a list of {url, metrics | error} — one entry per container.
+    """
+    import httpx
+    containers = (
+        db.query(models.EngineContainer)
+        .filter(models.EngineContainer.is_active == True)
+        .all()
+    )
+    results = []
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=4.0, read=8.0, write=4.0, pool=4.0)) as client:
+        for c in containers:
+            try:
+                r = await client.get(f"{c.url}/metrics")
+                r.raise_for_status()
+                results.append({"url": c.url, "ok": True, "metrics": r.json()})
+            except Exception as exc:
+                results.append({"url": c.url, "ok": False, "error": str(exc)})
+    return results
+
+
+@_system_settings_router.get("/engine/report")
+async def get_engine_report(
+    _=Depends(require_role("SYSADMIN")),
+    db: Session = Depends(get_db),
+):
+    """
+    Proxy GET /system/report from every active engine container.
+    Returns a list of {url, report | error}.
+    """
+    import httpx
+    containers = (
+        db.query(models.EngineContainer)
+        .filter(models.EngineContainer.is_active == True)
+        .all()
+    )
+    results = []
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=4.0, read=15.0, write=4.0, pool=4.0)) as client:
+        for c in containers:
+            try:
+                r = await client.get(f"{c.url}/system/report")
+                r.raise_for_status()
+                results.append({"url": c.url, "ok": True, "report": r.json()})
+            except Exception as exc:
+                results.append({"url": c.url, "ok": False, "error": str(exc)})
+    return results
+
+
+@_system_settings_router.get("/engine/sessions")
+async def get_engine_sessions(
+    _=Depends(require_role("SYSADMIN")),
+    db: Session = Depends(get_db),
+):
+    """
+    Proxy GET /sessions from every active container and cross-reference with
+    our DB to add student name, exam title, and ProctorAI session_id.
+    """
+    import httpx
+    containers = (
+        db.query(models.EngineContainer)
+        .filter(models.EngineContainer.is_active == True)
+        .all()
+    )
+    combined = []
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=4.0, read=8.0, write=4.0, pool=4.0)) as client:
+        for c in containers:
+            try:
+                r = await client.get(f"{c.url}/sessions")
+                r.raise_for_status()
+                engine_sessions = r.json()
+            except Exception as exc:
+                log.warning("Engine /sessions failed (%s): %s", c.url, exc)
+                continue
+
+            for es in engine_sessions:
+                pc_id = es.get("pc_id")
+                # Look up the ProctorAI session by pc_id + engine_url
+                db_session = (
+                    db.query(models.ExamSession)
+                    .filter(
+                        models.ExamSession.proctor_pc_id == pc_id,
+                        models.ExamSession.proctor_engine_url == c.url,
+                    )
+                    .first()
+                )
+                entry = {**es, "engine_url": c.url}
+                if db_session:
+                    user = db.query(models.User).filter(models.User.id == db_session.user_id).first()
+                    exam = db.query(models.Exam).filter(models.Exam.id == db_session.exam_id).first()
+                    entry.update({
+                        "session_id": str(db_session.id),
+                        "exam_id": str(db_session.exam_id),
+                        "exam_title": exam.title if exam else "Unknown",
+                        "student_name": user.full_name if user else "Unknown",
+                        "student_email": user.email if user else "",
+                        "session_status": db_session.status,
+                    })
+                combined.append(entry)
+    return combined
+
+
+@_system_settings_router.get("/sessions")
+def get_all_active_sessions(
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """
+    All active/disconnected ProctorAI sessions across all exams — with full
+    student info, exam title, risk score, violation count, proctor status.
+    """
+    sessions = (
+        db.query(models.ExamSession)
+        .filter(
+            models.ExamSession.status.in_(["ACTIVE", "DISCONNECTED"]),
+        )
+        .order_by(models.ExamSession.start_time.desc())
+        .all()
+    )
+    result = []
+    for s in sessions:
+        user = db.query(models.User).filter(models.User.id == s.user_id).first()
+        exam = db.query(models.Exam).filter(models.Exam.id == s.exam_id).first()
+        violation_count = (
+            db.query(models.Violation)
+            .filter(models.Violation.session_id == s.id)
+            .count()
+        )
+        result.append({
+            "session_id": str(s.id),
+            "exam_id": str(s.exam_id),
+            "exam_title": exam.title if exam else "Unknown",
+            "student_name": user.full_name if user else "Unknown",
+            "student_email": user.email if user else "",
+            "status": s.status,
+            "start_time": s.start_time,
+            "risk_score": s.risk_score or 0,
+            "violation_count": violation_count,
+            "last_heartbeat": s.last_heartbeat,
+            "proctor_connected": bool(s.proctor_pc_id),
+            "proctor_engine_url": s.proctor_engine_url,
+            "terminated_reason": s.terminated_reason,
+        })
+    return result
+
+
+@_system_settings_router.get("/sessions/{session_id}/live-frame")
+async def sysadmin_live_frame(
+    session_id: str,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Snapshot JPEG for any session — no exam_id required."""
+    from fastapi.responses import Response as _Response
+    from app.exam.proctor_proxy import fetch_snapshot
+
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.id == session_id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.proctor_pc_id or not session.proctor_engine_url:
+        return _Response(content=b"", status_code=204, media_type="image/jpeg")
+    try:
+        jpeg = await fetch_snapshot(session.proctor_engine_url, session.proctor_pc_id)
+        return _Response(content=jpeg, media_type="image/jpeg")
+    except Exception as e:
+        return _Response(content=b"", status_code=204, media_type="image/jpeg")
+
+
+@_system_settings_router.get("/sessions/{session_id}/live-stream")
+async def sysadmin_live_stream(
+    session_id: str,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """SSE alert stream for any session — no exam_id required."""
+    from fastapi.responses import StreamingResponse as _SR
+    from app.exam.proctor_proxy import stream_engine_events
+    import asyncio as _asyncio
+
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.id == session_id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.proctor_pc_id or not session.proctor_engine_url:
+        async def _waiting():
+            while True:
+                yield ': waiting\n\n'
+                await _asyncio.sleep(5)
+        return _SR(_waiting(), media_type="text/event-stream",
+                   headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    return _SR(
+        stream_engine_events(session.proctor_engine_url, session.proctor_pc_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+# =====================================================
+# SYSTEM ADMIN — SESSION REPORTS (cross-engine)
+# =====================================================
+
+@_system_settings_router.get("/reports")
+async def list_all_reports(
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """
+    List all session reports from all active engine containers.
+    Cross-references proctor_report_id in the DB to enrich with student/exam info.
+    """
+    import httpx as _httpx
+
+    containers = (
+        db.query(models.EngineContainer)
+        .filter(models.EngineContainer.is_active == True)
+        .all()
+    )
+
+    sessions_with_reports = (
+        db.query(models.ExamSession)
+        .filter(models.ExamSession.proctor_report_id.isnot(None))
+        .all()
+    )
+    report_to_session: dict[str, models.ExamSession] = {
+        s.proctor_report_id: s for s in sessions_with_reports
+    }
+
+    result = []
+    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=8.0, write=4.0, pool=4.0)) as client:
+        for c in containers:
+            try:
+                r = await client.get(f"{c.url}/reports/meta")
+                r.raise_for_status()
+                engine_reports = r.json()
+            except Exception as exc:
+                log.warning("Could not fetch reports/meta from %s: %s", c.url, exc)
+                engine_reports = []
+
+            for rep in engine_reports:
+                entry: dict = {
+                    "report_id": rep["id"],
+                    "engine_url": c.url,
+                    "risk_state": rep.get("risk_state"),
+                    "final_score": rep.get("final_score"),
+                    "alert_count": rep.get("alert_count"),
+                    "warning_count": rep.get("warning_count"),
+                    "size_kb": rep.get("size_kb"),
+                    "proof_count": rep.get("proof_count"),
+                    "duration_s": rep.get("duration_s"),
+                    "terminated": rep.get("terminated"),
+                    "session_start": rep.get("session_start"),
+                    "session_end": rep.get("session_end"),
+                    "session_id": None,
+                    "exam_id": None,
+                    "exam_title": None,
+                    "student_name": None,
+                    "student_email": None,
+                    "session_status": None,
+                }
+                sess = report_to_session.get(rep["id"])
+                if sess:
+                    user = db.query(models.User).filter(models.User.id == sess.user_id).first()
+                    exam = db.query(models.Exam).filter(models.Exam.id == sess.exam_id).first()
+                    entry.update({
+                        "session_id": str(sess.id),
+                        "exam_id": str(sess.exam_id),
+                        "exam_title": exam.title if exam else "Unknown",
+                        "student_name": user.full_name if user else "Unknown",
+                        "student_email": user.email if user else "",
+                        "session_status": sess.status,
+                    })
+                result.append(entry)
+
+    result.sort(key=lambda x: x.get("session_end") or "", reverse=True)
+    return result
+
+
+@_system_settings_router.delete("/reports/{report_id}")
+async def delete_report(
+    report_id: str,
+    engine_url: str,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Delete a report from an engine container and clear the DB reference."""
+    import httpx as _httpx
+
+    container = db.query(models.EngineContainer).filter(
+        models.EngineContainer.url == engine_url
+    ).first()
+    if not container:
+        raise HTTPException(status_code=400, detail="Unknown engine URL")
+
+    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=8.0, write=4.0, pool=4.0)) as client:
+        try:
+            r = await client.delete(f"{engine_url}/report/{report_id}")
+            r.raise_for_status()
+        except _httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                pass
+            else:
+                raise HTTPException(status_code=502, detail=f"Engine delete failed: {exc}")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Engine unreachable: {exc}")
+
+    sess = db.query(models.ExamSession).filter(
+        models.ExamSession.proctor_report_id == report_id
+    ).first()
+    if sess:
+        sess.proctor_report_id = None
+        db.commit()
+
+    log.info("SYSADMIN deleted report %s from engine %s", report_id, engine_url)
+    return {"ok": True, "deleted": report_id}

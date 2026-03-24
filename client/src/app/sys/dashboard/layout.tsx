@@ -14,6 +14,9 @@ import {
   Menu,
   X,
   SlidersHorizontal,
+  Cpu,
+  Activity,
+  BarChart2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -72,6 +75,9 @@ export default function SystemAdminLayout({
     { name: 'Dashboard',        href: '/sys/dashboard',                 icon: LayoutDashboard    },
     { name: 'Applications',     href: '/sys/dashboard/applications',    icon: FileText           },
     { name: 'Users',            href: '/sys/dashboard/users',           icon: Users              },
+    { name: 'Engine Monitor',   href: '/sys/dashboard/engine',          icon: Cpu                },
+    { name: 'Live Sessions',    href: '/sys/dashboard/sessions',        icon: Activity           },
+    { name: 'Reports',          href: '/sys/dashboard/reports',         icon: BarChart2          },
     { name: 'Engine Settings',  href: '/sys/dashboard/system-settings', icon: SlidersHorizontal  },
     { name: 'Settings',         href: '/sys/dashboard/settings',        icon: Settings           },
   ];

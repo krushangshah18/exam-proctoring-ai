@@ -22,6 +22,49 @@ router = APIRouter(prefix="/exam", tags=["Exam"])
 
 
 # =====================================================
+# RESUME STATE UTILITY
+# =====================================================
+
+def get_resume_state(session, db) -> str | None:
+    """
+    Derive the student's resume/appeal state for a TERMINATED session.
+
+    Returns one of:
+      "CAN_APPLY"   — terminated, no appeal filed yet
+      "PENDING"     — appeal filed, awaiting admin review
+      "APPROVED"    — appeal approved (session should be CREATED, transitional)
+      "DENIED"      — appeal denied; no re-entry
+      "NOT_APPLIED" — student explicitly dismissed / tab closed
+      "AGAIN"       — TERMINATED again after a previous approval; no appeals left
+      None          — session not terminated (not relevant)
+    """
+    if not session or session.status != SessionStatus.TERMINATED.value:
+        return None
+
+    latest_rr = (
+        db.query(models.ResumeRequest)
+        .filter(models.ResumeRequest.session_id == session.id)
+        .order_by(models.ResumeRequest.created_at.desc())
+        .first()
+    )
+
+    if not latest_rr:
+        return "CAN_APPLY"
+
+    status = latest_rr.status
+    if status == ResumeStatus.APPROVED.value:
+        return "AGAIN"
+    if status == ResumeStatus.PENDING.value:
+        return "PENDING"
+    if status == ResumeStatus.DENIED.value:
+        return "DENIED"
+    if status == ResumeStatus.NOT_APPLIED.value:
+        return "NOT_APPLIED"
+
+    return "CAN_APPLY"
+
+
+# =====================================================
 # STUDENT EXAM DASHBOARD & GATES
 # =====================================================
 
@@ -223,11 +266,14 @@ def get_exam_status(
         "max_late_minutes": exam.max_late_minutes,
         "is_late": is_late,
         "session_status": session_status,
+        "session_terminated_by": session.terminated_by if session else None,
+        "session_terminated_reason": session.terminated_reason if session else None,
         "active_resume_request": active_resume_request,
         "allowed_to_enter": allowed_to_enter,
         "allowed_to_start": allowed_to_start,
         "time_until_open_ms": time_until_open_ms,
-        "config": exam.config
+        "config": exam.config,
+        "resume_state": get_resume_state(session, db),
     }
 
 
@@ -280,6 +326,7 @@ def get_session_active(
             "review_note": latest_rr.review_note,
             "time_extension_minutes": latest_rr.time_extension_minutes,
         } if latest_rr else None,
+        "resume_state": get_resume_state(session, db),
     }
 
 
@@ -517,14 +564,26 @@ def submit_appeal(
     else:
         if session.status == SessionStatus.ACTIVE.value:
             raise HTTPException(status_code=400, detail="Cannot appeal while session is active")
+        # Type 1 & 2: student submitted or timer expired — no appeal allowed
+        if session.status == SessionStatus.ENDED.value:
+            raise HTTPException(status_code=403, detail="This exam has already been submitted. No appeal is allowed.")
 
-    existing_rr = db.query(models.ResumeRequest).filter(
-        models.ResumeRequest.session_id == session.id,
-        models.ResumeRequest.status == ResumeStatus.PENDING.value
-    ).first()
-
-    if existing_rr:
-        raise HTTPException(status_code=400, detail="An appeal is already pending.")
+    # Enforce one-appeal-per-termination rule
+    any_rr = (
+        db.query(models.ResumeRequest)
+        .filter(models.ResumeRequest.session_id == session.id)
+        .order_by(models.ResumeRequest.created_at.desc())
+        .first()
+    )
+    if any_rr:
+        if any_rr.status == ResumeStatus.PENDING.value:
+            raise HTTPException(status_code=400, detail="An appeal is already pending.")
+        if any_rr.status == ResumeStatus.DENIED.value:
+            raise HTTPException(status_code=403, detail="Your appeal was already reviewed and denied. No further appeals are allowed.")
+        if any_rr.status == ResumeStatus.APPROVED.value:
+            raise HTTPException(status_code=400, detail="Your appeal has already been approved. Proceed to rejoin.")
+        # NOT_APPLIED means they previously dismissed — allow re-appeal as long as they can still appeal
+        # (AGAIN state is blocked above via TERMINATED + APPROVED latest RR)
 
     rr = models.ResumeRequest(
         session_id=session.id,
@@ -537,6 +596,50 @@ def submit_appeal(
     log.info("Appeal filed by %s for session %s.", current_user.id, session.id)
 
     return {"message": "Appeal submitted successfully", "status": "PENDING"}
+
+
+@router.post("/{exam_id}/dismiss-appeal")
+def dismiss_appeal(
+    exam_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Student explicitly dismisses the appeal (Back to Dashboard / tab close beacon).
+    Creates a NOT_APPLIED ResumeRequest row to mark the decision.
+    Only valid for TERMINATED sessions with no existing active appeal.
+    """
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.user_id == current_user.id,
+        models.ExamSession.exam_id == exam_id,
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="No session found for this exam")
+
+    if session.status != SessionStatus.TERMINATED.value:
+        raise HTTPException(status_code=400, detail="Session is not terminated")
+
+    # Check resume state — only allow dismiss if CAN_APPLY (no existing RR)
+    resume_state = get_resume_state(session, db)
+    if resume_state not in ("CAN_APPLY", "NOT_APPLIED"):
+        # Already has a PENDING/APPROVED/DENIED/AGAIN RR — can't dismiss
+        return {"message": "Nothing to dismiss", "resume_state": resume_state}
+
+    if resume_state == "NOT_APPLIED":
+        # Already dismissed — idempotent
+        return {"message": "Already dismissed", "resume_state": "NOT_APPLIED"}
+
+    rr = models.ResumeRequest(
+        session_id=session.id,
+        reason="Student dismissed — chose not to appeal",
+        status=ResumeStatus.NOT_APPLIED.value,
+    )
+    db.add(rr)
+    db.commit()
+
+    log.info("Appeal dismissed by %s for session %s (exam %s).", current_user.id, session.id, exam_id)
+    return {"message": "Appeal dismissed", "resume_state": "NOT_APPLIED"}
 
 
 # =====================================================
@@ -619,11 +722,22 @@ def start_exam(
 
         # Resume from termination
         if active and active.status == SessionStatus.TERMINATED.value:
-            rr = db.query(models.ResumeRequest).filter(
-                models.ResumeRequest.session_id == active.id,
-                models.ResumeRequest.status == ResumeStatus.APPROVED.value
-            ).first()
-            if not rr:
+            latest_rr = (
+                db.query(models.ResumeRequest)
+                .filter(models.ResumeRequest.session_id == active.id)
+                .order_by(models.ResumeRequest.created_at.desc())
+                .first()
+            )
+            # AGAIN: already used their one appeal; second termination → no re-entry
+            if latest_rr and latest_rr.status == ResumeStatus.APPROVED.value:
+                raise HTTPException(status_code=403, detail="No further appeals are allowed.")
+            # Explicitly denied or dismissed → no re-entry
+            if latest_rr and latest_rr.status in (
+                ResumeStatus.DENIED.value, ResumeStatus.NOT_APPLIED.value
+            ):
+                raise HTTPException(status_code=403, detail="Your appeal has been closed. No further access is allowed.")
+            # No RR or PENDING → not yet approved
+            if not latest_rr or latest_rr.status == ResumeStatus.PENDING.value:
                 raise HTTPException(status_code=403, detail="Your termination appeal has not been approved yet.")
 
     # Device checks
@@ -650,6 +764,18 @@ def start_exam(
         session.user_agent = request.headers.get("user-agent")
         if not session.start_time:
             session.start_time = datetime.now(UTC)
+        if is_reconnect or session.proctor_pc_id:
+            # Clear the stale engine session — the old WebRTC connection is dead.
+            # Covers both: DISCONNECTED reconnect and TERMINATED→CREATED (appeal approved).
+            # The engine self-cleans when the ICE state goes to disconnected/failed.
+            # proctor-connect will write fresh values once the student re-establishes
+            # the WebRTC offer, so the DB never points at a dead engine slot.
+            old_pc_id = session.proctor_pc_id
+            session.proctor_pc_id = None
+            session.proctor_engine_url = None
+            if old_pc_id:
+                log.info("Reconnect/resume: cleared stale engine session pc_id=%s for session=%s",
+                         old_pc_id, session.id)
     else:
         session = models.ExamSession(
             user_id=current_user.id,
@@ -782,6 +908,71 @@ class ProctorViolationBody(BaseModel):
     reason: str = "tab_switch"   # "tab_switch" | "window_blur"
 
 
+@router.get("/{exam_id}/engine-status")
+async def engine_status(
+    exam_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Pre-flight check called from the system-check page before the student starts the exam.
+    Checks the global pool of engine containers — not per-exam assignment.
+
+    Response: {available: bool, reason: str, message: str}
+    Reasons: "ok" | "no_engine" | "unreachable" | "at_capacity"
+    """
+    import httpx
+
+    containers = (
+        db.query(models.EngineContainer)
+        .filter(models.EngineContainer.is_active == True)
+        .all()
+    )
+
+    if not containers:
+        return {
+            "available": False,
+            "reason": "no_engine",
+            "message": "No proctoring engine is configured. Please contact your administrator.",
+        }
+
+    any_reachable = False
+    any_has_capacity = False
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=4.0, read=5.0, write=4.0, pool=4.0)) as client:
+        for container in containers:
+            try:
+                resp = await client.get(f"{container.url}/capacity")
+                resp.raise_for_status()
+                data = resp.json()
+                any_reachable = True
+                if data.get("available", False):
+                    any_has_capacity = True
+                    break
+            except httpx.ConnectError:
+                log.warning("Engine container unreachable: %s", container.url)
+            except httpx.TimeoutException:
+                log.warning("Engine container timed out: %s", container.url)
+            except Exception as exc:
+                log.warning("Engine capacity check failed (%s): %s", container.url, exc)
+
+    if not any_reachable:
+        return {
+            "available": False,
+            "reason": "unreachable",
+            "message": "The proctoring engine is currently unavailable. Please contact your administrator.",
+        }
+
+    if not any_has_capacity:
+        return {
+            "available": False,
+            "reason": "at_capacity",
+            "message": "All proctoring slots are currently in use. Please wait a few minutes and try again.",
+        }
+
+    return {"available": True, "reason": "ok", "message": ""}
+
+
 @router.post("/{exam_id}/proctor-connect")
 async def proctor_connect(
     exam_id: str,
@@ -794,7 +985,7 @@ async def proctor_connect(
     Proxies the offer to the correct engine container, saves pc_id and
     engine_url back onto the ExamSession row.
     """
-    from app.exam.engine_allocator import pick_least_loaded_container, EngineCapacityError
+    from app.exam.engine_allocator import pick_any_container
     from app.exam.proctor_proxy import proxy_offer, build_engine_detection_config
 
     exam = db.query(models.Exam).filter(
@@ -812,16 +1003,12 @@ async def proctor_connect(
     if not session:
         raise HTTPException(status_code=403, detail="No active exam session. Call /exam/start first.")
 
-    # Pick the least-loaded container assigned to this exam
-    try:
-        engine_url = pick_least_loaded_container(exam.id, db)
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
-
+    # Pick the least-loaded container from the global pool
+    engine_url = pick_any_container(db)
     if not engine_url:
         raise HTTPException(
             status_code=503,
-            detail="No proctoring engine is assigned to this exam. Contact your administrator.",
+            detail="No proctoring engine is configured. Contact your administrator.",
         )
 
     # Build merged config (exam admin toggles + system admin thresholds)
@@ -911,7 +1098,7 @@ async def proctor_violation(
     if risk.get("terminated"):
         session.status = SessionStatus.TERMINATED.value
         session.terminated_reason = risk.get("reason", "Exam policy violated")
-        session.terminated_by = "SYSTEM"
+        session.terminated_by = "SYSTEM_VIOLATION"
         session.terminated_at = datetime.now(UTC)
         db.commit()
 
@@ -956,12 +1143,44 @@ async def proctor_events(
     session_id_str = str(session.id)
 
     async def event_stream():
+        import json as _json
+        from app.db.session import SessionLocal
         async for chunk in stream_engine_events(engine_url, pc_id):
             yield chunk
-            # If engine sent session_end + terminated, sync to our DB
-            if '"session_end"' in chunk and '"terminated": true' in chunk:
-                # Re-open DB session for the update (new session since we're in async gen)
-                from app.db.session import SessionLocal
+
+            # Parse the event to sync DB state
+            if '"type"' not in chunk:
+                continue
+            try:
+                raw = chunk.strip()
+                if raw.startswith("data: "):
+                    raw = raw[6:]
+                event_data = _json.loads(raw)
+            except Exception:
+                continue
+
+            event_type = event_data.get("type")
+
+            # Update risk_score in DB on every alert/warning
+            if event_type in ("alert", "warning"):
+                risk_info = event_data.get("risk", {})
+                new_score = risk_info.get("score")
+                if new_score is not None:
+                    _db = SessionLocal()
+                    try:
+                        _sess = _db.query(models.ExamSession).filter(
+                            models.ExamSession.id == session_id_str
+                        ).first()
+                        if _sess:
+                            _sess.risk_score = int(new_score)
+                            _db.commit()
+                    except Exception as _e:
+                        log.warning("Failed to update risk_score: %s", _e)
+                    finally:
+                        _db.close()
+
+            # Engine auto-terminated the session (alert with terminated: true)
+            if event_data.get("terminated") and event_type == "alert":
                 _db = SessionLocal()
                 try:
                     _sess = _db.query(models.ExamSession).filter(
@@ -969,14 +1188,15 @@ async def proctor_events(
                     ).first()
                     if _sess and _sess.status == SessionStatus.ACTIVE.value:
                         _sess.status = SessionStatus.TERMINATED.value
-                        _sess.terminated_reason = "Terminated by proctoring engine"
-                        _sess.terminated_by = "SYSTEM"
+                        _sess.terminated_reason = event_data.get("message", "Terminated by proctoring engine")
+                        _sess.terminated_by = "SYSTEM_VIOLATION"
                         _sess.terminated_at = datetime.now(UTC)
                         _db.commit()
                         push_event_sync(session_id_str, "TERMINATED", {
                             "cause": "violation",
-                            "reason": "Terminated by proctoring engine",
+                            "reason": _sess.terminated_reason,
                         })
+                        log.info("Session %s terminated by engine via SSE", session_id_str)
                 except Exception as _e:
                     log.warning("Failed to sync engine termination: %s", _e)
                 finally:

@@ -13,7 +13,7 @@ import {
 import { useRouter } from 'next/navigation';
 import api from '@/lib/axios';
 import { toast } from 'sonner';
-import { parseUTC } from '@/lib/fmt-date';
+import { parseUTC, fmtTimeTZ } from '@/lib/fmt-date';
 
 interface UpcomingExam {
   id: string;
@@ -72,7 +72,7 @@ function ExamCard({ exam, onClick }: { exam: UpcomingExam; onClick: () => void }
           <Calendar className="h-3.5 w-3.5 shrink-0 text-slate-400" />
           <span>
             <strong className={`${isToday ? 'text-emerald-600' : 'text-slate-700'}`}>{dateLabel}</strong>{' '}
-            at {startDate.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+            at {fmtTimeTZ(exam.start_window)}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -84,10 +84,12 @@ function ExamCard({ exam, onClick }: { exam: UpcomingExam; onClick: () => void }
             <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
             <span>
               Deadline:{' '}
-              {parseUTC(exam.hard_join_deadline).toLocaleTimeString(undefined, {
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
+              {parseUTC(exam.hard_join_deadline).toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+              })}{' '}
+              at{' '}
+              {fmtTimeTZ(exam.hard_join_deadline)}
             </span>
           </div>
         )}

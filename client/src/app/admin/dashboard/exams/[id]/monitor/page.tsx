@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Loader2, RefreshCw, Users, Activity,
   ShieldAlert, Clock, CheckCircle2, XCircle, AlertTriangle,
-  Eye, Timer, MessageSquare, ChevronRight, Bot
+  Eye, Timer, MessageSquare, ChevronRight, Bot, Ban
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -18,6 +18,28 @@ import api from "@/lib/axios";
 // ──────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────
+
+interface RiskInfo {
+  score: number;
+  fixed: number;
+  decaying?: number;
+  state: string;
+  terminated?: boolean;
+}
+
+interface AlertEntry {
+  message: string;
+  key?: string;
+  score_added?: number;
+  proof_url?: string;
+  proof_type?: string;
+  ts: number;
+}
+
+interface WarningEntry {
+  message: string;
+  ts: number;
+}
 
 interface SessionCard {
   session_id: string;
@@ -47,6 +69,9 @@ interface ResumeRequest {
   time_extension_minutes: number | null;
   reviewed_at: string | null;
   created_at: string;
+  termination_type: "DISCONNECT" | "VIOLATION" | "ADMIN" | "LATE_JOIN";
+  suggested_extension_minutes: number | null;
+  time_since_disconnect_seconds: number | null;
 }
 
 // ──────────────────────────────────────────────
@@ -117,11 +142,71 @@ function openSSE(url: string, token: string, handlers: Record<string, (d: any) =
 // Live Monitor panel
 // ──────────────────────────────────────────────
 
-function LiveMonitorPanel({ session, examId }: { session: SessionCard; examId: string }) {
+const RISK_COLORS: Record<string, string> = {
+  NORMAL      : '#22c55e',
+  WARNING     : '#f59e0b',
+  HIGH_RISK   : '#ef4444',
+  ADMIN_REVIEW: '#dc2626',
+  TERMINATED  : '#7f1d1d',
+};
+
+function RiskBadge({ state }: { state: string }) {
+  const color = RISK_COLORS[state] ?? '#22c55e';
+  const labels: Record<string, string> = {
+    NORMAL: 'Normal', WARNING: 'Warning', HIGH_RISK: 'High Risk',
+    ADMIN_REVIEW: 'Review', TERMINATED: 'Terminated',
+  };
+  return (
+    <span className="text-xs font-bold px-2 py-0.5 rounded border"
+      style={{ background: `${color}22`, color, borderColor: `${color}44` }}>
+      {labels[state] ?? state}
+    </span>
+  );
+}
+
+function ExpandableAlertRow({ entry, index }: { entry: AlertEntry; index: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const base = process.env.NEXT_PUBLIC_ENGINE_URL || 'http://localhost:8001';
+  return (
+    <div className="rounded-lg overflow-hidden border border-rose-100 bg-rose-50/50">
+      <button className="w-full px-3 py-2.5 flex items-start gap-2 text-left" onClick={() => setExpanded(e => !e)}>
+        <span className="text-xs font-mono text-slate-400 mt-0.5 shrink-0">{String(index + 1).padStart(2, '0')}</span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-rose-700 leading-snug">{entry.message}</p>
+          {entry.score_added !== undefined && entry.score_added > 0 && (
+            <p className="text-xs text-rose-400 mt-0.5">+{entry.score_added.toFixed(1)} pts · {new Date(entry.ts).toLocaleTimeString()}</p>
+          )}
+        </div>
+        {entry.proof_url && (
+          <span className="text-xs text-slate-400 shrink-0">{expanded ? '▲' : '▼'}</span>
+        )}
+      </button>
+      {expanded && entry.proof_url && (
+        <div className="px-3 pb-3">
+          {entry.proof_type === 'audio' ? (
+            <audio controls className="w-full h-8 mt-1">
+              <source src={`${base}${entry.proof_url}`} type="audio/wav" />
+            </audio>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={`${base}${entry.proof_url}`} alt="Proof" className="w-full rounded-lg object-cover mt-1" style={{ maxHeight: 160 }} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated }: { session: SessionCard; examId: string; onScoreUpdate: (sessionId: string, score: number) => void; onSessionTerminated: () => void }) {
   const [extMinutes, setExtMinutes] = useState("");
   const [extending, setExtending] = useState(false);
+  const [terminating, setTerminating] = useState(false);
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
-  const [alerts, setAlerts] = useState<{ message: string; alert_type?: string; ts: number }[]>([]);
+  const [alerts, setAlerts] = useState<AlertEntry[]>([]);
+  const [warnings, setWarnings] = useState<WarningEntry[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [liveRisk, setLiveRisk] = useState<RiskInfo>({ score: session.risk_score, fixed: 0, state: 'NORMAL' });
+  const [alertTab, setAlertTab] = useState<'alerts' | 'warnings'>('alerts');
   const [debugMode, setDebugMode] = useState(false);
   const [togglingDebug, setTogglingDebug] = useState(false);
   const sseCloseRef = useRef<(() => void) | null>(null);
@@ -136,13 +221,45 @@ function LiveMonitorPanel({ session, examId }: { session: SessionCard; examId: s
         `${base}/admin/exams/${examId}/sessions/${session.session_id}/live-frame`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      if (!res.ok) return;
+      // 204 = student hasn't connected to engine yet — keep showing placeholder
+      if (res.status === 204 || !res.ok) return;
       const blob = await res.blob();
+      if (!blob.size) return;
       const url = URL.createObjectURL(blob);
       if (prevFrameUrl.current) URL.revokeObjectURL(prevFrameUrl.current);
       prevFrameUrl.current = url;
       setFrameUrl(url);
     } catch {}
+  }, [examId, session.session_id]);
+
+  // Fetch historical alerts/warnings from the engine log on mount
+  useEffect(() => {
+    api.get(`/admin/exams/${examId}/sessions/${session.session_id}/alert-history`)
+      .then((res) => {
+        const data = res.data;
+        const now = Date.now();
+        if (data.alerts?.length) {
+          const histAlerts: AlertEntry[] = data.alerts.map((e: any) => ({
+            message: e.message,
+            proof_url: e.proof_url ?? undefined,
+            proof_type: e.proof_type ?? 'image',
+            score_added: e.score_added ?? 0,
+            ts: now - (e.elapsed_s ?? 0) * 1000,
+          }));
+          // Prepend any live SSE alerts that arrived before history loaded
+          setAlerts(prev => [...prev, ...histAlerts]);
+        }
+        if (data.warnings?.length) {
+          const histWarnings: WarningEntry[] = data.warnings.map((e: any) => ({
+            message: e.message,
+            ts: now - (e.elapsed_s ?? 0) * 1000,
+          }));
+          setWarnings(prev => [...prev, ...histWarnings]);
+        }
+      })
+      .catch(() => {/* silently ignore — SSE will still work */})
+      .finally(() => setHistoryLoaded(true));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examId, session.session_id]);
 
   useEffect(() => {
@@ -158,8 +275,35 @@ function LiveMonitorPanel({ session, examId }: { session: SessionCard; examId: s
       token,
       {
         message: (d: any) => {
-          if (d?.type === 'alert' || d?.type === 'warning') {
-            setAlerts(prev => [{ message: d.message || d.alert_type || 'Alert', alert_type: d.alert_type || d.type, ts: Date.now() }, ...prev].slice(0, 50));
+          // Update live risk info on every alert/warning
+          if (d?.risk) {
+            const risk: RiskInfo = {
+              score: d.risk.score ?? 0,
+              fixed: d.risk.fixed ?? 0,
+              decaying: d.risk.decaying,
+              state: d.risk.state ?? 'NORMAL',
+              terminated: d.risk.terminated,
+            };
+            setLiveRisk(risk);
+            onScoreUpdate(session.session_id, Math.round(risk.score));
+          }
+          if (d?.type === 'alert') {
+            setAlerts(prev => [{
+              message: d.message || d.key || 'Alert',
+              key: d.key,
+              score_added: d.score_added,
+              proof_url: d.proof_url,
+              proof_type: d.proof_type,
+              ts: Date.now(),
+            }, ...prev].slice(0, 100));
+          } else if (d?.type === 'warning') {
+            setWarnings(prev => [{
+              message: d.message || 'Warning',
+              ts: Date.now(),
+            }, ...prev].slice(0, 100));
+          } else if (d?.type === 'session_end') {
+            // Engine ended the session — trigger immediate refresh of session list
+            onSessionTerminated();
           }
         },
       }
@@ -197,6 +341,20 @@ function LiveMonitorPanel({ session, examId }: { session: SessionCard; examId: s
       toast.error('Failed to toggle debug mode');
     } finally {
       setTogglingDebug(false);
+    }
+  };
+
+  const handleTerminate = async () => {
+    if (!confirm(`Terminate ${session.student_name}'s session? This cannot be undone.`)) return;
+    setTerminating(true);
+    try {
+      await api.post(`/admin/exams/${examId}/sessions/${session.session_id}/terminate`);
+      toast.success(`Session terminated for ${session.student_name}`);
+      onSessionTerminated();
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Failed to terminate session");
+    } finally {
+      setTerminating(false);
     }
   };
 
@@ -240,60 +398,110 @@ function LiveMonitorPanel({ session, examId }: { session: SessionCard; examId: s
         </CardContent>
       </Card>
 
-      {/* Scores & Stats */}
+      {/* Risk Score Card */}
       <Card>
         <CardHeader className="pb-3 border-b border-slate-100">
-          <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-            <Activity className="h-4 w-4 text-indigo-500" /> Session Metrics
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+              <Activity className="h-4 w-4 text-indigo-500" /> Risk Assessment
+            </CardTitle>
+            <RiskBadge state={liveRisk.state} />
+          </div>
         </CardHeader>
-        <CardContent className="pt-4 grid grid-cols-3 gap-4 text-center">
-          <div>
-            <p className="text-2xl font-bold text-slate-900">{session.risk_score}</p>
-            <p className="text-xs text-slate-400 mt-0.5">Risk Score</p>
-          </div>
-          <div>
-            <p className="text-2xl font-bold text-slate-900">{session.violation_count}</p>
-            <p className="text-xs text-slate-400 mt-0.5">Violations</p>
-          </div>
-          <div>
-            <p className="text-2xl font-bold text-slate-900">
-              {session.time_extension_seconds > 0 ? `+${Math.round(session.time_extension_seconds / 60)}m` : "–"}
+        <CardContent className="pt-4 space-y-3">
+          {/* Big score */}
+          <div className="flex items-end gap-3">
+            <p className="text-5xl font-bold tabular-nums transition-all"
+              style={{ color: RISK_COLORS[liveRisk.state] ?? '#22c55e' }}>
+              {Math.round(liveRisk.score)}
             </p>
-            <p className="text-xs text-slate-400 mt-0.5">Time Ext.</p>
+            <span className="text-xs text-slate-400 mb-1.5">/ 100</span>
+          </div>
+          {/* Progress bar */}
+          <div className="h-2 rounded-full overflow-hidden bg-slate-100">
+            <div className="h-2 rounded-full transition-all duration-700"
+              style={{ width: `${Math.min(liveRisk.score, 100)}%`, background: RISK_COLORS[liveRisk.state] ?? '#22c55e' }} />
+          </div>
+          {/* Fixed / Decaying breakdown */}
+          <div className="flex gap-4 text-xs text-slate-500">
+            <span>Fixed <span className="font-semibold text-slate-700">{Math.round(liveRisk.fixed)}</span></span>
+            {liveRisk.decaying !== undefined && (
+              <span>Decaying <span className="font-semibold text-slate-700">{Math.round(liveRisk.decaying)}</span></span>
+            )}
+          </div>
+          {liveRisk.terminated && (
+            <div className="text-xs font-bold text-center py-1.5 rounded bg-red-50 text-red-600 border border-red-200">
+              EXAM TERMINATED BY ENGINE
+            </div>
+          )}
+          {/* Stats row */}
+          <div className="grid grid-cols-3 gap-3 pt-1 border-t border-slate-100">
+            <div className="text-center">
+              <p className="text-lg font-bold text-rose-500">{alerts.length}</p>
+              <p className="text-xs text-slate-400">Alerts</p>
+            </div>
+            <div className="text-center">
+              <p className="text-lg font-bold text-amber-500">{warnings.length}</p>
+              <p className="text-xs text-slate-400">Warnings</p>
+            </div>
+            <div className="text-center">
+              <p className="text-lg font-bold text-slate-700">
+                {session.time_extension_seconds > 0 ? `+${Math.round(session.time_extension_seconds / 60)}m` : '–'}
+              </p>
+              <p className="text-xs text-slate-400">Time Ext.</p>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Live Alerts */}
+      {/* Alert / Warning log with tabs */}
       <Card>
-        <CardHeader className="pb-3 border-b border-slate-100">
-          <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-500" /> Live Alerts
-            {alerts.length > 0 && (
-              <Badge className="ml-auto bg-amber-100 text-amber-700 border-amber-200 text-xs">{alerts.length}</Badge>
-            )}
-          </CardTitle>
+        <CardHeader className="pb-0 border-b border-slate-100">
+          <div className="flex gap-1">
+            <button
+              onClick={() => setAlertTab('alerts')}
+              className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${alertTab === 'alerts' ? 'border-rose-500 text-rose-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              Alerts
+              {alerts.length > 0 && (
+                <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-600">{alerts.length}</span>
+              )}
+            </button>
+            <button
+              onClick={() => setAlertTab('warnings')}
+              className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px ${alertTab === 'warnings' ? 'border-amber-500 text-amber-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+            >
+              Warnings
+              {warnings.length > 0 && (
+                <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-600">{warnings.length}</span>
+              )}
+            </button>
+          </div>
         </CardHeader>
-        <CardContent className="pt-4">
-          {alerts.length === 0 ? (
-            <div className="bg-slate-50 rounded-lg p-4 text-center">
-              <p className="text-sm text-slate-400">No alerts yet</p>
-            </div>
-          ) : (
-            <div className="space-y-2 max-h-48 overflow-y-auto">
-              {alerts.map((a, i) => (
-                <div key={i} className="flex items-start gap-2 p-2 bg-amber-50 rounded-md border border-amber-100 text-xs">
-                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-semibold text-amber-800">{a.alert_type || 'Alert'}</p>
-                    <p className="text-amber-700">{a.message}</p>
-                    <p className="text-amber-400 mt-0.5">{new Date(a.ts).toLocaleTimeString()}</p>
+        <CardContent className="pt-3">
+          <div className="space-y-2 max-h-56 overflow-y-auto">
+            {!historyLoaded ? (
+              <div className="flex items-center justify-center gap-2 py-6 text-slate-400 text-sm">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading history…
+              </div>
+            ) : alertTab === 'alerts' ? (
+              alerts.length === 0
+                ? <p className="text-sm text-slate-400 text-center py-6">No alerts yet</p>
+                : alerts.map((a, i) => <ExpandableAlertRow key={i} entry={a} index={alerts.length - 1 - i} />)
+            ) : (
+              warnings.length === 0
+                ? <p className="text-sm text-slate-400 text-center py-6">No warnings yet</p>
+                : warnings.map((w, i) => (
+                  <div key={i} className="flex items-start gap-2 px-3 py-2 bg-amber-50/50 rounded-lg border border-amber-100 text-xs">
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-amber-700">{w.message}</p>
+                      <p className="text-amber-400 mt-0.5">{new Date(w.ts).toLocaleTimeString()}</p>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
+                ))
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -320,6 +528,47 @@ function LiveMonitorPanel({ session, examId }: { session: SessionCard; examId: s
           </CardContent>
         </Card>
       )}
+
+      {/* Admin termination — available when session is ACTIVE and risk score >= 100 */}
+      {session.status === "ACTIVE" && (
+        <Card className={`border-2 transition-colors ${liveRisk.score >= 100 ? "border-rose-400 bg-rose-50/30" : "border-slate-200"}`}>
+          <CardHeader className="pb-3 border-b border-slate-100">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-semibold text-rose-700 flex items-center gap-2">
+                <Ban className="h-4 w-4" /> Terminate Session
+              </CardTitle>
+              {liveRisk.score < 100 && (
+                <span className="text-xs text-slate-400">Available at risk ≥ 100</span>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="pt-4 space-y-3">
+            {liveRisk.score >= 100 ? (
+              <>
+                <p className="text-sm text-rose-700">
+                  Risk score has reached <strong>{Math.round(liveRisk.score)}</strong>. You may terminate
+                  this student's session. They will be notified and can submit an appeal.
+                </p>
+                <Button
+                  onClick={handleTerminate}
+                  disabled={terminating}
+                  className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold"
+                >
+                  {terminating
+                    ? <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    : <Ban className="h-4 w-4 mr-2" />}
+                  Terminate {session.student_name}'s Session
+                </Button>
+              </>
+            ) : (
+              <p className="text-sm text-slate-400">
+                The terminate button unlocks when the student's risk score reaches 100.
+                Current score: <strong>{Math.round(liveRisk.score)}</strong>.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
@@ -338,7 +587,18 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
   const fetchAppeals = useCallback(async () => {
     try {
       const res = await api.get(`/admin/exams/${examId}/resume-requests`);
-      setAppeals(res.data);
+      const data: ResumeRequest[] = res.data;
+      setAppeals(data);
+      // Pre-fill suggested extension for DISCONNECT appeals that haven't been manually edited
+      setExtMins((prev) => {
+        const next = { ...prev };
+        for (const rr of data) {
+          if (rr.status === "PENDING" && rr.termination_type === "DISCONNECT" && rr.suggested_extension_minutes && !(rr.id in prev)) {
+            next[rr.id] = String(rr.suggested_extension_minutes);
+          }
+        }
+        return next;
+      });
     } catch {
       toast.error("Failed to load appeals");
     } finally {
@@ -390,7 +650,16 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
         </div>
       )}
 
-      {pending.map((rr) => (
+      {pending.map((rr) => {
+        const isDisconnect = rr.termination_type === "DISCONNECT";
+        const typeBadgeClass = isDisconnect
+          ? "bg-blue-50 text-blue-700 border-blue-200"
+          : rr.termination_type === "ADMIN"
+          ? "bg-rose-50 text-rose-700 border-rose-200"
+          : "bg-purple-50 text-purple-700 border-purple-200";
+        const typeLabel = isDisconnect ? "Disconnect" : rr.termination_type === "ADMIN" ? "Admin Terminated" : "Violation";
+
+        return (
         <Card key={rr.id} className="border-amber-200 bg-amber-50/30">
           <CardHeader className="pb-3 border-b border-amber-100">
             <div className="flex items-start justify-between">
@@ -398,9 +667,14 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
                 <CardTitle className="text-base font-semibold text-slate-900">{rr.student_name}</CardTitle>
                 <CardDescription>{rr.student_email}</CardDescription>
               </div>
-              <Badge variant="outline" className="bg-amber-100 text-amber-700 border-amber-300 text-xs">
-                Pending Review
-              </Badge>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className={`text-xs ${typeBadgeClass}`}>
+                  {typeLabel}
+                </Badge>
+                <Badge variant="outline" className="bg-amber-100 text-amber-700 border-amber-300 text-xs">
+                  Pending Review
+                </Badge>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="pt-4 space-y-4">
@@ -408,6 +682,26 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Student's Reason</p>
               <p className="text-sm text-slate-700 leading-relaxed">"{rr.reason}"</p>
             </div>
+
+            {isDisconnect && rr.time_since_disconnect_seconds != null && (
+              <div className="flex items-center gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
+                <Clock className="h-3.5 w-3.5 shrink-0" />
+                Appeal filed <strong>
+                  {rr.time_since_disconnect_seconds < 60
+                    ? `${rr.time_since_disconnect_seconds}s`
+                    : `${Math.floor(rr.time_since_disconnect_seconds / 60)}m ${rr.time_since_disconnect_seconds % 60}s`}
+                </strong> after disconnection
+              </div>
+            )}
+
+            {!isDisconnect && (
+              <div className="flex items-start gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
+                <AlertTriangle className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
+                <p className="text-xs text-slate-500">
+                  Timer continued running during this appeal. No extra time is typically granted for {rr.termination_type === "ADMIN" ? "admin-terminated" : "violation"} sessions, but you may still add minutes if appropriate.
+                </p>
+              </div>
+            )}
 
             <div className="grid sm:grid-cols-2 gap-3">
               <div>
@@ -422,7 +716,7 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-500 block mb-1">
-                  Extra Minutes if Approved
+                  {isDisconnect ? "Extra Minutes if Approved" : "Extra Minutes (optional)"}
                 </label>
                 <Input
                   type="number"
@@ -431,6 +725,11 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
                   value={extMins[rr.id] ?? ""}
                   onChange={(e) => setExtMins((m) => ({ ...m, [rr.id]: e.target.value }))}
                 />
+                {isDisconnect && rr.suggested_extension_minutes && (
+                  <p className="text-xs text-slate-400 mt-1">
+                    Suggested: {rr.suggested_extension_minutes} min (based on time disconnected)
+                  </p>
+                )}
               </div>
             </div>
 
@@ -454,7 +753,8 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
             </div>
           </CardContent>
         </Card>
-      ))}
+        );
+      })}
 
       {reviewed.length > 0 && (
         <div>
@@ -498,6 +798,17 @@ export default function MonitoringDashboard() {
   const [bulkMinutes, setBulkMinutes] = useState("");
   const [bulkExtending, setBulkExtending] = useState(false);
 
+  // Keep selectedSession in sync with latest session data from polls
+  useEffect(() => {
+    if (!selectedSession) return;
+    const latest = sessions.find(s => s.session_id === selectedSession.session_id);
+    if (latest) setSelectedSession(latest);
+  }, [sessions]);
+
+  const handleScoreUpdate = useCallback((sessionId: string, score: number) => {
+    setSessions(prev => prev.map(s => s.session_id === sessionId ? { ...s, risk_score: score } : s));
+  }, []);
+
   const fetchSessions = useCallback(async () => {
     try {
       const res = await api.get(`/admin/exams/${examId}/sessions`);
@@ -509,11 +820,14 @@ export default function MonitoringDashboard() {
     }
   }, [examId]);
 
+  // Poll faster when there are active sessions (5s), slower otherwise (20s)
+  const hasActive = sessions.some(s => s.status === 'ACTIVE' || s.status === 'DISCONNECTED');
   useEffect(() => {
     fetchSessions();
-    const id = setInterval(fetchSessions, 15000);
+    const interval = hasActive ? 5000 : 20000;
+    const id = setInterval(fetchSessions, interval);
     return () => clearInterval(id);
-  }, [fetchSessions]);
+  }, [fetchSessions, hasActive]);
 
   const handleBulkExtend = async () => {
     const m = parseInt(bulkMinutes);
@@ -743,7 +1057,12 @@ export default function MonitoringDashboard() {
                   </div>
                   <StatusBadge status={selectedSession.status} />
                 </div>
-                <LiveMonitorPanel session={selectedSession} examId={examId} />
+                <LiveMonitorPanel
+                  session={selectedSession}
+                  examId={examId}
+                  onScoreUpdate={handleScoreUpdate}
+                  onSessionTerminated={() => { fetchSessions(); setSelectedSession(null); }}
+                />
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-64 border-2 border-dashed border-slate-200 rounded-xl">

@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import axios from 'axios';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
-import { fmtDate, fmtTime } from '@/lib/fmt-date';
+import { fmtDate, fmtTimeTZ } from '@/lib/fmt-date';
 import {
   ArrowLeft,
   Calendar,
@@ -151,7 +151,7 @@ export default function AdminExamDetailsPage() {
           </CardHeader>
           <CardContent className="p-4">
             <div className="text-xl font-semibold text-slate-900">{fmtDate(exam.start_window)}</div>
-            <p className="text-sm text-slate-500 mt-1 font-medium">{fmtTime(exam.start_window)}</p>
+            <p className="text-sm text-slate-500 mt-1 font-medium">{fmtTimeTZ(exam.start_window)}</p>
           </CardContent>
         </Card>
         
@@ -162,7 +162,7 @@ export default function AdminExamDetailsPage() {
           </CardHeader>
           <CardContent className="p-4">
             <div className="text-xl font-semibold text-slate-900">{fmtDate(exam.end_window)}</div>
-            <p className="text-sm text-slate-500 mt-1 font-medium">{fmtTime(exam.end_window)}</p>
+            <p className="text-sm text-slate-500 mt-1 font-medium">{fmtTimeTZ(exam.end_window)}</p>
           </CardContent>
         </Card>
 

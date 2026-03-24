@@ -61,7 +61,6 @@ _DEFAULTS = {
         "earbud":     0.50,
         "default":    0.55,
     },
-    "RISK_SESSION_DURATION_S" : 300,
     "TIMER_FLICKER_GRACE_S"   : 1.5,
     "SAVE_PROOF"              : True,
     "SAVE_REPORT"             : True,
@@ -168,8 +167,7 @@ class ProctorSession:
         )
         self.speaker_audio = SpeakerAudioDetector(hold_s=cfg["SPEAKER_HOLD_S"])
         self.risk = RiskEngine(
-            session_duration_s = cfg["RISK_SESSION_DURATION_S"],
-            flicker_grace_s    = cfg["TIMER_FLICKER_GRACE_S"],
+            flicker_grace_s = cfg["TIMER_FLICKER_GRACE_S"],
         )
 
         self.audio_monitor = AudioMonitor(

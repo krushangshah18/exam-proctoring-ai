@@ -55,8 +55,7 @@ _GAZE_EVENTS = {"looking_away", "looking_down", "looking_up", "looking_side"}
 
 class RiskEngine:
 
-    def __init__(self, session_duration_s: float = 3600.0,
-                 flicker_grace_s: float = 1.5):
+    def __init__(self, flicker_grace_s: float = 1.5):
         # Two-bucket score
         self._fixed_score:    float = 0.0   # non-decaying
         self._decaying_score: float = 0.0   # decays every interval
@@ -65,9 +64,8 @@ class RiskEngine:
         self.terminated          = False
         self._termination_reason = ""
 
-        # Decay config
-        self._session_duration_s = session_duration_s
-        self._decay_interval     = max(60.0, session_duration_s / 20.0)
+        # Decay config — fixed 5-minute interval (backend scheduler owns time limits)
+        self._decay_interval     = 300.0
         self._creation_time      = time.time()
         self._last_decay_time    = time.time()
 
@@ -164,12 +162,6 @@ class RiskEngine:
         if now <= 0.0:
             now = time.time()
 
-        # ── Hard time limit ───────────────────────────────────────────────────
-        if now - self._creation_time >= self._session_duration_s:
-            mins = int(self._session_duration_s // 60)
-            self._terminate(f"Exam time limit reached ({mins} min)")
-            return RiskEvent(key=key, terminated=True,
-                             termination_reason=self._termination_reason)
         prev = self._prev_active.get(key, False)
         self._prev_active[key] = active
 
