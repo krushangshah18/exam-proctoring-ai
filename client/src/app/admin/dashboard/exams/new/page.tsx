@@ -57,7 +57,7 @@ const examSchema = z.object({
   allow_late_extension: z.boolean().default(false),
   max_late_minutes: z.coerce.number().min(0).default(0),
 
-  flag_threshold: z.coerce.number().min(0).max(100).default(30),
+  flag_threshold: z.coerce.number().min(0).default(100),
   preset: z.enum(['STRICT', 'MEDIUM', 'RELAXED', 'CUSTOM']).default('MEDIUM'),
 
   config: z.object({
@@ -110,10 +110,20 @@ const examSchema = z.object({
   path: ['hard_join_deadline'],
 });
 
+// Presets control detection_config (engine AI toggles) + tab_switching (browser-side)
 const PRESETS = {
-  STRICT:  { eye_gaze: true,  looking_away: true,  static_photo: true, phone_detected: true,  book_detected: true,  earphones: true,  audio_analysis: true,  multiple_person: true, tab_switching: true  },
-  MEDIUM:  { eye_gaze: false, looking_away: true,  static_photo: true, phone_detected: true,  book_detected: false, earphones: true,  audio_analysis: true,  multiple_person: true, tab_switching: true  },
-  RELAXED: { eye_gaze: false, looking_away: false, static_photo: true, phone_detected: true,  book_detected: false, earphones: false, audio_analysis: false, multiple_person: true, tab_switching: false },
+  STRICT: {
+    config: { eye_gaze: true, looking_away: true, static_photo: true, phone_detected: true, book_detected: true, earphones: true, audio_analysis: true, multiple_person: true, tab_switching: true },
+    detection: { DETECT_LOOKING_AWAY: true, DETECT_LOOKING_DOWN: true, DETECT_LOOKING_UP: true, DETECT_LOOKING_SIDE: true, DETECT_FACE_HIDDEN: true, DETECT_PARTIAL_FACE: true, DETECT_FAKE_PRESENCE: true, DETECT_SPEAKER_AUDIO: true, DETECT_PHONE: true, DETECT_BOOK: true, DETECT_HEADPHONE: true, DETECT_EARBUD: true, DETECT_MULTIPLE_PEOPLE: true },
+  },
+  MEDIUM: {
+    config: { eye_gaze: false, looking_away: true, static_photo: true, phone_detected: true, book_detected: false, earphones: true, audio_analysis: true, multiple_person: true, tab_switching: true },
+    detection: { DETECT_LOOKING_AWAY: true, DETECT_LOOKING_DOWN: false, DETECT_LOOKING_UP: false, DETECT_LOOKING_SIDE: true, DETECT_FACE_HIDDEN: true, DETECT_PARTIAL_FACE: true, DETECT_FAKE_PRESENCE: true, DETECT_SPEAKER_AUDIO: true, DETECT_PHONE: true, DETECT_BOOK: false, DETECT_HEADPHONE: true, DETECT_EARBUD: true, DETECT_MULTIPLE_PEOPLE: true },
+  },
+  RELAXED: {
+    config: { eye_gaze: false, looking_away: false, static_photo: true, phone_detected: true, book_detected: false, earphones: false, audio_analysis: false, multiple_person: true, tab_switching: false },
+    detection: { DETECT_LOOKING_AWAY: false, DETECT_LOOKING_DOWN: false, DETECT_LOOKING_UP: false, DETECT_LOOKING_SIDE: false, DETECT_FACE_HIDDEN: true, DETECT_PARTIAL_FACE: true, DETECT_FAKE_PRESENCE: true, DETECT_SPEAKER_AUDIO: false, DETECT_PHONE: true, DETECT_BOOK: false, DETECT_HEADPHONE: false, DETECT_EARBUD: false, DETECT_MULTIPLE_PEOPLE: true },
+  },
 };
 
 export default function CreateExamPage() {
@@ -129,15 +139,9 @@ export default function CreateExamPage() {
       start_window: '', end_window: '', duration_minutes: 60,
       hard_join_deadline: '', late_join_policy: 'REVIEW',
       allow_late_extension: false, max_late_minutes: 0,
-      flag_threshold: 30, preset: 'MEDIUM',
-      config: PRESETS.MEDIUM,
-      detection_config: {
-        DETECT_LOOKING_AWAY: true, DETECT_LOOKING_DOWN: true, DETECT_LOOKING_UP: true,
-        DETECT_LOOKING_SIDE: true, DETECT_FACE_HIDDEN: true, DETECT_PARTIAL_FACE: true,
-        DETECT_FAKE_PRESENCE: true, DETECT_SPEAKER_AUDIO: true, DETECT_PHONE: true,
-        DETECT_BOOK: true, DETECT_HEADPHONE: true, DETECT_EARBUD: true,
-        DETECT_MULTIPLE_PEOPLE: true,
-      },
+      flag_threshold: 100, preset: 'MEDIUM',
+      config: PRESETS.MEDIUM.config,
+      detection_config: PRESETS.MEDIUM.detection,
       invites_text: '',
     } as any,
   });
@@ -194,7 +198,11 @@ export default function CreateExamPage() {
 
   const handlePresetChange = (val: string) => {
     form.setValue('preset', val as any);
-    if (val !== 'CUSTOM') form.setValue('config', PRESETS[val as keyof typeof PRESETS]);
+    if (val !== 'CUSTOM') {
+      const p = PRESETS[val as keyof typeof PRESETS];
+      form.setValue('config', p.config);
+      form.setValue('detection_config', p.detection);
+    }
   };
 
   // ─── Email helpers ────────────────────────────────────────────────────────
@@ -452,19 +460,24 @@ export default function CreateExamPage() {
                 </FormItem>
               )} />
 
+              {/* Unified detection toggles — controls both config and detection_config */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-6 bg-gray-50 dark:bg-gray-800/50 rounded-lg border">
                 {[
-                  { id: 'eye_gaze',        label: 'Eye Gaze Tracking'      },
-                  { id: 'looking_away',    label: 'Looking Away'            },
-                  { id: 'static_photo',    label: 'Static Photo Spoofing'   },
-                  { id: 'phone_detected',  label: 'Phone Detection'         },
-                  { id: 'book_detected',   label: 'Book Detection'          },
-                  { id: 'earphones',       label: 'Earphone Detection'      },
-                  { id: 'audio_analysis',  label: 'Audio Activity'          },
-                  { id: 'multiple_person', label: 'Multiple Faces'          },
-                  { id: 'tab_switching',   label: 'Tab Switching Tracker'   },
+                  { id: 'DETECT_LOOKING_AWAY',    label: 'Looking Away'          },
+                  { id: 'DETECT_LOOKING_DOWN',    label: 'Looking Down'          },
+                  { id: 'DETECT_LOOKING_UP',      label: 'Looking Up'            },
+                  { id: 'DETECT_LOOKING_SIDE',    label: 'Looking Side'          },
+                  { id: 'DETECT_FACE_HIDDEN',     label: 'Face Hidden'           },
+                  { id: 'DETECT_PARTIAL_FACE',    label: 'Partial Face'          },
+                  { id: 'DETECT_FAKE_PRESENCE',   label: 'Static Photo Spoofing' },
+                  { id: 'DETECT_SPEAKER_AUDIO',   label: 'Speaker / Audio'       },
+                  { id: 'DETECT_PHONE',           label: 'Phone Detection'       },
+                  { id: 'DETECT_BOOK',            label: 'Book Detection'        },
+                  { id: 'DETECT_HEADPHONE',       label: 'Headphone Detection'   },
+                  { id: 'DETECT_EARBUD',          label: 'Earbud Detection'      },
+                  { id: 'DETECT_MULTIPLE_PEOPLE', label: 'Multiple People'       },
                 ].map(item => (
-                  <FormField key={item.id} control={form.control} name={`config.${item.id}` as any} render={({ field }) => (
+                  <FormField key={item.id} control={form.control} name={`detection_config.${item.id}` as any} render={({ field }) => (
                     <FormItem className="flex items-center gap-3 space-y-0">
                       <FormControl>
                         <Switch checked={field.value} onCheckedChange={field.onChange} disabled={preset !== 'CUSTOM'} />
@@ -473,37 +486,15 @@ export default function CreateExamPage() {
                     </FormItem>
                   )} />
                 ))}
-              </div>
-
-              {/* ── AI Engine Detection Toggles ── */}
-              <div className="pt-4 border-t space-y-3">
-                <p className="uppercase text-xs font-bold text-muted-foreground tracking-wider">AI Engine Detection</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-6 bg-gray-50 dark:bg-gray-800/50 rounded-lg border">
-                  {[
-                    { id: 'DETECT_LOOKING_AWAY',    label: 'Looking Away'         },
-                    { id: 'DETECT_LOOKING_DOWN',    label: 'Looking Down'         },
-                    { id: 'DETECT_LOOKING_UP',      label: 'Looking Up'           },
-                    { id: 'DETECT_LOOKING_SIDE',    label: 'Looking Side'         },
-                    { id: 'DETECT_FACE_HIDDEN',     label: 'Face Hidden'          },
-                    { id: 'DETECT_PARTIAL_FACE',    label: 'Partial Face'         },
-                    { id: 'DETECT_FAKE_PRESENCE',   label: 'Fake Presence (Photo)'},
-                    { id: 'DETECT_SPEAKER_AUDIO',   label: 'Speaker Audio'        },
-                    { id: 'DETECT_PHONE',           label: 'Phone'                },
-                    { id: 'DETECT_BOOK',            label: 'Book'                 },
-                    { id: 'DETECT_HEADPHONE',       label: 'Headphone'            },
-                    { id: 'DETECT_EARBUD',          label: 'Earbud'               },
-                    { id: 'DETECT_MULTIPLE_PEOPLE', label: 'Multiple People'      },
-                  ].map(item => (
-                    <FormField key={item.id} control={form.control} name={`detection_config.${item.id}` as any} render={({ field }) => (
-                      <FormItem className="flex items-center gap-3 space-y-0">
-                        <FormControl>
-                          <Switch checked={field.value} onCheckedChange={field.onChange} />
-                        </FormControl>
-                        <FormLabel className="text-sm font-medium">{item.label}</FormLabel>
-                      </FormItem>
-                    )} />
-                  ))}
-                </div>
+                {/* Tab switching — browser-side, always editable */}
+                <FormField control={form.control} name="config.tab_switching" render={({ field }) => (
+                  <FormItem className="flex items-center gap-3 space-y-0">
+                    <FormControl>
+                      <Switch checked={field.value} onCheckedChange={field.onChange} disabled={preset !== 'CUSTOM'} />
+                    </FormControl>
+                    <FormLabel className="text-sm font-medium">Tab Switching Tracker</FormLabel>
+                  </FormItem>
+                )} />
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t">

@@ -3,11 +3,12 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   RefreshCw, Users, ShieldAlert, Activity, Loader2,
-  AlertTriangle, Eye, Bot, CheckCircle2, XCircle, Server,
+  AlertTriangle, Eye, Bot, CheckCircle2, XCircle, Server, Search,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
 
@@ -29,9 +30,34 @@ interface LiveSession {
   terminated_reason: string | null;
 }
 
-interface AlertEntry { message: string; key?: string; score_added?: number; proof_url?: string; proof_type?: string; ts: number; }
+interface AlertEntry {
+  message: string;
+  key?: string;
+  score_added?: number;
+  proof_url?: string;
+  proof_type?: string;
+  ts: number;
+}
 interface WarningEntry { message: string; ts: number; }
-interface RiskInfo { score: number; fixed: number; decaying?: number; state: string; terminated?: boolean; }
+interface RiskInfo { score: number; fixed: number; decaying?: number; state: string; }
+
+// ── Persistence helpers ───────────────────────────────────────────────────────
+
+const SS_ALERTS   = (id: string) => `live_alerts_${id}`;
+const SS_WARNINGS = (id: string) => `live_warnings_${id}`;
+
+function loadAlerts(id: string): AlertEntry[] {
+  try { return JSON.parse(sessionStorage.getItem(SS_ALERTS(id)) ?? '[]'); } catch { return []; }
+}
+function loadWarnings(id: string): WarningEntry[] {
+  try { return JSON.parse(sessionStorage.getItem(SS_WARNINGS(id)) ?? '[]'); } catch { return []; }
+}
+function saveAlerts(id: string, a: AlertEntry[]) {
+  try { sessionStorage.setItem(SS_ALERTS(id), JSON.stringify(a.slice(0, 200))); } catch {}
+}
+function saveWarnings(id: string, w: WarningEntry[]) {
+  try { sessionStorage.setItem(SS_WARNINGS(id), JSON.stringify(w.slice(0, 200))); } catch {}
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -96,47 +122,56 @@ function openSSE(url: string, token: string, handlers: Record<string, (d: any) =
   return () => { cancelled = true; controller.abort(); };
 }
 
-// ── Live session detail panel ─────────────────────────────────────────────────
+// ── Session detail panel ──────────────────────────────────────────────────────
 
 function SessionDetailPanel({ session, onScoreUpdate }: {
   session: LiveSession;
   onScoreUpdate: (id: string, score: number) => void;
 }) {
-  const [frameUrl, setFrameUrl] = useState<string | null>(null);
-  const [alerts, setAlerts] = useState<AlertEntry[]>([]);
-  const [warnings, setWarnings] = useState<WarningEntry[]>([]);
-  const [liveRisk, setLiveRisk] = useState<RiskInfo>({ score: session.risk_score, fixed: 0, state: 'NORMAL' });
-  const [alertTab, setAlertTab] = useState<'alerts' | 'warnings'>('alerts');
-  const sseRef = useRef<(() => void) | null>(null);
+  const [frameUrl, setFrameUrl]   = useState<string | null>(null);
+  const [alerts, setAlerts]       = useState<AlertEntry[]>(() => loadAlerts(session.session_id));
+  const [warnings, setWarnings]   = useState<WarningEntry[]>(() => loadWarnings(session.session_id));
+  const [liveRisk, setLiveRisk]   = useState<RiskInfo>({ score: session.risk_score, fixed: 0, state: 'NORMAL' });
+  const [alertTab, setAlertTab]   = useState<'alerts' | 'warnings'>('alerts');
+  const sseRef   = useRef<(() => void) | null>(null);
   const frameRef = useRef<NodeJS.Timeout | null>(null);
-  const prevFrame = useRef<string | null>(null);
+  const prevFrameUrl = useRef<string | null>(null);
+  const alertsRef    = useRef(alerts);
+  const warningsRef  = useRef(warnings);
+
+  // keep refs in sync for persistence
+  useEffect(() => { alertsRef.current = alerts;   saveAlerts(session.session_id, alerts);   }, [alerts, session.session_id]);
+  useEffect(() => { warningsRef.current = warnings; saveWarnings(session.session_id, warnings); }, [warnings, session.session_id]);
 
   const fetchFrame = useCallback(async () => {
     const token = localStorage.getItem('access_token') || '';
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     try {
-      const res = await fetch(`${base}/admin/sessions/${session.session_id}/live-frame`,
-        { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(
+        `${base}/admin/sessions/${session.session_id}/live-frame`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
       if (res.status === 204 || !res.ok) return;
       const blob = await res.blob();
       if (!blob.size) return;
       const url = URL.createObjectURL(blob);
-      if (prevFrame.current) URL.revokeObjectURL(prevFrame.current);
-      prevFrame.current = url;
+      // revoke after applying new URL to avoid flicker
+      const old = prevFrameUrl.current;
+      prevFrameUrl.current = url;
       setFrameUrl(url);
+      if (old) setTimeout(() => URL.revokeObjectURL(old), 500);
     } catch {}
   }, [session.session_id]);
 
   useEffect(() => {
-    setAlerts([]);
-    setWarnings([]);
+    // Don't clear alerts/warnings on session change — they're pre-loaded from sessionStorage
     setFrameUrl(null);
     setLiveRisk({ score: session.risk_score, fixed: 0, state: 'NORMAL' });
 
     if (session.status !== 'ACTIVE') return;
 
     fetchFrame();
-    frameRef.current = setInterval(fetchFrame, 2000);
+    frameRef.current = setInterval(fetchFrame, 1500); // tighter poll for less lag
 
     const token = localStorage.getItem('access_token') || '';
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -146,14 +181,22 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
       {
         message: (d: any) => {
           if (d?.risk) {
-            const risk: RiskInfo = { score: d.risk.score ?? 0, fixed: d.risk.fixed ?? 0, decaying: d.risk.decaying, state: d.risk.state ?? 'NORMAL', terminated: d.risk.terminated };
+            const risk: RiskInfo = {
+              score: d.risk.score ?? 0,
+              fixed: d.risk.fixed ?? 0,
+              decaying: d.risk.decaying,
+              state: d.risk.state ?? 'NORMAL',
+            };
             setLiveRisk(risk);
             onScoreUpdate(session.session_id, Math.round(risk.score));
           }
           if (d?.type === 'alert') {
-            setAlerts(prev => [{ message: d.message || d.key || 'Alert', key: d.key, score_added: d.score_added, proof_url: d.proof_url, proof_type: d.proof_type, ts: Date.now() }, ...prev].slice(0, 100));
+            setAlerts(prev => {
+              const next = [{ message: d.message || d.key || 'Alert', key: d.key, score_added: d.score_added, proof_url: d.proof_url, proof_type: d.proof_type, ts: Date.now() }, ...prev].slice(0, 200);
+              return next;
+            });
           } else if (d?.type === 'warning') {
-            setWarnings(prev => [{ message: d.message || 'Warning', ts: Date.now() }, ...prev].slice(0, 100));
+            setWarnings(prev => [{ message: d.message || 'Warning', ts: Date.now() }, ...prev].slice(0, 200));
           }
         },
       }
@@ -162,7 +205,7 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
     return () => {
       if (frameRef.current) clearInterval(frameRef.current);
       sseRef.current?.();
-      if (prevFrame.current) URL.revokeObjectURL(prevFrame.current);
+      if (prevFrameUrl.current) URL.revokeObjectURL(prevFrameUrl.current);
     };
   }, [session.session_id, session.status]);
 
@@ -180,10 +223,17 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
         <CardContent>
           {frameUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={frameUrl} alt="Live feed" className="w-full aspect-video rounded-lg object-cover bg-slate-800" />
+            <img
+              src={frameUrl}
+              alt="Live feed"
+              className="w-full aspect-video rounded-lg object-cover bg-slate-800"
+              decoding="async"
+            />
           ) : (
             <div className="aspect-video bg-slate-800 rounded-lg flex items-center justify-center border border-slate-700">
-              <p className="text-slate-500 text-sm">{session.status === 'ACTIVE' && session.proctor_connected ? 'Loading feed…' : 'Engine not connected'}</p>
+              <p className="text-slate-500 text-sm">
+                {session.status === 'ACTIVE' && session.proctor_connected ? 'Loading feed…' : 'Engine not connected'}
+              </p>
             </div>
           )}
         </CardContent>
@@ -227,21 +277,33 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
       {/* Alert / Warning log */}
       <Card>
         <CardHeader className="pb-0 border-b border-slate-100">
-          <div className="flex gap-1">
-            {(['alerts', 'warnings'] as const).map(tab => (
-              <button key={tab} onClick={() => setAlertTab(tab)}
-                className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors capitalize
-                  ${alertTab === tab
-                    ? (tab === 'alerts' ? 'border-rose-500 text-rose-600' : 'border-amber-500 text-amber-600')
-                    : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
-                {tab}
-                {(tab === 'alerts' ? alerts : warnings).length > 0 && (
-                  <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${tab === 'alerts' ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-600'}`}>
-                    {(tab === 'alerts' ? alerts : warnings).length}
-                  </span>
-                )}
-              </button>
-            ))}
+          <div className="flex items-center justify-between">
+            <div className="flex gap-1">
+              {(['alerts', 'warnings'] as const).map(tab => (
+                <button key={tab} onClick={() => setAlertTab(tab)}
+                  className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors capitalize
+                    ${alertTab === tab
+                      ? (tab === 'alerts' ? 'border-rose-500 text-rose-600' : 'border-amber-500 text-amber-600')
+                      : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
+                  {tab}
+                  {(tab === 'alerts' ? alerts : warnings).length > 0 && (
+                    <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${tab === 'alerts' ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-600'}`}>
+                      {(tab === 'alerts' ? alerts : warnings).length}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {/* Clear button */}
+            <button
+              className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1"
+              onClick={() => {
+                if (alertTab === 'alerts') { setAlerts([]); saveAlerts(session.session_id, []); }
+                else { setWarnings([]); saveWarnings(session.session_id, []); }
+              }}
+            >
+              Clear
+            </button>
           </div>
         </CardHeader>
         <CardContent className="pt-3">
@@ -251,11 +313,15 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
               : alerts.map((a, i) => (
                 <div key={i} className="flex items-start gap-2 px-3 py-2 bg-rose-50/50 rounded-lg border border-rose-100 text-xs">
                   <AlertTriangle className="h-3.5 w-3.5 text-rose-500 shrink-0 mt-0.5" />
-                  <div>
+                  <div className="flex-1 min-w-0">
                     <p className="font-medium text-rose-700">{a.message}</p>
-                    {a.score_added !== undefined && a.score_added > 0 && (
-                      <p className="text-rose-400 mt-0.5">+{a.score_added.toFixed(1)} pts · {new Date(a.ts).toLocaleTimeString()}</p>
-                    )}
+                    <div className="flex items-center gap-3 mt-0.5 text-rose-400">
+                      {a.score_added !== undefined && a.score_added > 0 && <span>+{a.score_added.toFixed(1)} pts</span>}
+                      <span>{new Date(a.ts).toLocaleTimeString()}</span>
+                      {a.proof_url && (
+                        <a href={a.proof_url} target="_blank" rel="noreferrer" className="text-blue-500 underline">proof</a>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))
@@ -282,9 +348,10 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function SessionsMonitorPage() {
-  const [sessions, setSessions] = useState<LiveSession[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<LiveSession | null>(null);
+  const [sessions, setSessions]   = useState<LiveSession[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [selected, setSelected]   = useState<LiveSession | null>(null);
+  const [search, setSearch]       = useState('');
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchSessions = useCallback(async (silent = false) => {
@@ -300,7 +367,7 @@ export default function SessionsMonitorPage() {
 
   useEffect(() => {
     fetchSessions();
-    intervalRef.current = setInterval(() => fetchSessions(true), 15000);
+    intervalRef.current = setInterval(() => fetchSessions(true), 10000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [fetchSessions]);
 
@@ -315,6 +382,19 @@ export default function SessionsMonitorPage() {
     setSessions(prev => prev.map(s => s.session_id === id ? { ...s, risk_score: score } : s));
   }, []);
 
+  const active       = sessions.filter(s => s.status === 'ACTIVE');
+  const disconnected = sessions.filter(s => s.status === 'DISCONNECTED');
+
+  // Filtered list for display
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? sessions.filter(s =>
+        s.student_name.toLowerCase().includes(q) ||
+        s.student_email.toLowerCase().includes(q) ||
+        s.exam_title.toLowerCase().includes(q)
+      )
+    : sessions;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -322,9 +402,6 @@ export default function SessionsMonitorPage() {
       </div>
     );
   }
-
-  const active = sessions.filter(s => s.status === 'ACTIVE');
-  const disconnected = sessions.filter(s => s.status === 'DISCONNECTED');
 
   return (
     <div className="space-y-6 pb-12">
@@ -364,6 +441,19 @@ export default function SessionsMonitorPage() {
         </Card>
       </div>
 
+      {/* Search */}
+      {sessions.length > 0 && (
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <Input
+            placeholder="Search by student name, email, or exam…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="pl-9 border-slate-200"
+          />
+        </div>
+      )}
+
       {sessions.length === 0 ? (
         <Card className="border-slate-200">
           <CardContent className="py-20 text-center text-slate-400">
@@ -376,47 +466,59 @@ export default function SessionsMonitorPage() {
         <div className="grid lg:grid-cols-2 gap-6">
           {/* Session cards */}
           <div className="space-y-3">
-            {sessions.map(sess => (
-              <Card key={sess.session_id}
-                className={`cursor-pointer transition-all hover:shadow-md border-2 ${selected?.session_id === sess.session_id ? 'border-indigo-400 shadow-md' : 'border-transparent shadow-sm'}`}
-                onClick={() => setSelected(s => s?.session_id === sess.session_id ? null : sess)}>
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-slate-900 truncate">{sess.student_name}</p>
-                      <p className="text-xs text-slate-400 truncate">{sess.student_email}</p>
-                      <p className="text-xs text-indigo-600 font-medium mt-0.5 truncate">{sess.exam_title}</p>
-                    </div>
-                    <div className="flex flex-col items-end gap-1.5 shrink-0">
-                      <Badge variant="outline" className={`text-xs ${sess.status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
-                        {sess.status}
-                      </Badge>
-                      <div className="flex items-center gap-1 text-xs text-slate-400">
-                        {sess.proctor_connected
-                          ? <CheckCircle2 className="h-3 w-3 text-emerald-500" />
-                          : <XCircle className="h-3 w-3 text-slate-300" />}
-                        <Server className="h-3 w-3" />
-                        {sess.proctor_engine_url?.replace(/https?:\/\//, '').split(':')[1] ?? '—'}
+            {filtered.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-6">No sessions match your search</p>
+            ) : (
+              filtered.map(sess => (
+                <Card key={sess.session_id}
+                  className={`cursor-pointer transition-all hover:shadow-md border-2 ${
+                    selected?.session_id === sess.session_id
+                      ? 'border-indigo-400 shadow-md'
+                      : 'border-transparent shadow-sm'
+                  }`}
+                  onClick={() => setSelected(s => s?.session_id === sess.session_id ? null : sess)}>
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-slate-900 truncate">{sess.student_name}</p>
+                        <p className="text-xs text-slate-400 truncate">{sess.student_email}</p>
+                        <p className="text-xs text-indigo-600 font-medium mt-0.5 truncate">{sess.exam_title}</p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1.5 shrink-0">
+                        <Badge variant="outline" className={`text-xs ${
+                          sess.status === 'ACTIVE'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-amber-50 text-amber-700 border-amber-200'
+                        }`}>
+                          {sess.status}
+                        </Badge>
+                        <div className="flex items-center gap-1 text-xs text-slate-400">
+                          {sess.proctor_connected
+                            ? <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                            : <XCircle className="h-3 w-3 text-slate-300" />}
+                          <Server className="h-3 w-3" />
+                          {sess.proctor_engine_url?.replace(/https?:\/\//, '').split(':')[1] ?? '—'}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <RiskBar score={sess.risk_score} />
+                    <RiskBar score={sess.risk_score} />
 
-                  <div className="flex items-center gap-4 text-xs text-slate-500">
-                    <span className="flex items-center gap-1">
-                      <ShieldAlert className="h-3 w-3 text-rose-400" /> {sess.violation_count} violations
-                    </span>
-                    {sess.last_heartbeat && (
+                    <div className="flex items-center gap-4 text-xs text-slate-500">
                       <span className="flex items-center gap-1">
-                        <Activity className="h-3 w-3 text-emerald-400" />
-                        {new Date(sess.last_heartbeat + 'Z').toLocaleTimeString()}
+                        <ShieldAlert className="h-3 w-3 text-rose-400" /> {sess.violation_count} violations
                       </span>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                      {sess.last_heartbeat && (
+                        <span className="flex items-center gap-1">
+                          <Activity className="h-3 w-3 text-emerald-400" />
+                          {new Date(sess.last_heartbeat + 'Z').toLocaleTimeString()}
+                        </span>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))
+            )}
           </div>
 
           {/* Detail panel */}

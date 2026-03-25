@@ -368,16 +368,26 @@ export default function ActiveExamPage() {
   // Fullscreen exit detection
   useEffect(() => {
     if (loading) return;
-    const onFsChange = () => {
+    const onFsChange = async () => {
       if (!document.fullscreenElement && !terminated && !submitting) {
         setFullscreenExited(true);
+        // Report fullscreen exit violation to engine (same channel as tab switch)
+        try {
+          const res = await api.post(`/exam/${examId}/proctor-violation`, { reason: 'fullscreen_exit' });
+          const risk = res.data?.risk;
+          if (risk?.terminated) {
+            router.replace(`/student/exam/${examId}/terminated`);
+          }
+        } catch {
+          // Engine unreachable — show overlay anyway, continue exam
+        }
       } else {
         setFullscreenExited(false);
       }
     };
     document.addEventListener('fullscreenchange', onFsChange);
     return () => document.removeEventListener('fullscreenchange', onFsChange);
-  }, [loading, terminated, submitting]);
+  }, [loading, terminated, submitting, examId]);
 
   // Tab switch monitoring
   useEffect(() => {
@@ -393,18 +403,16 @@ export default function ActiveExamPage() {
       });
 
       // Report to engine via backend and act on the response
-      if (proctorPcIdRef.current) {
-        try {
-          const res = await api.post(`/exam/${examId}/proctor-violation`, { reason: 'tab_switch' });
-          const risk = res.data?.risk;
-          if (risk?.terminated) {
-            // Engine auto-terminated (occ >= 3) — redirect to terminated page
-            if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-            router.replace(`/student/exam/${examId}/terminated`);
-          }
-        } catch {
-          // Engine unreachable — violation already logged locally, continue
+      try {
+        const res = await api.post(`/exam/${examId}/proctor-violation`, { reason: 'tab_switch' });
+        const risk = res.data?.risk;
+        if (risk?.terminated) {
+          // Engine auto-terminated — redirect to terminated page
+          if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+          router.replace(`/student/exam/${examId}/terminated`);
         }
+      } catch {
+        // Engine unreachable — violation already logged locally, continue
       }
     };
     document.addEventListener('visibilitychange', onVisibility);

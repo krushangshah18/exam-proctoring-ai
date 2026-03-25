@@ -1019,7 +1019,7 @@ async def proctor_connect(
     detection_config = build_engine_detection_config(exam.detection_config, engine_settings)
 
     try:
-        answer = await proxy_offer(engine_url, body.sdp, body.type, detection_config)
+        answer = await proxy_offer(engine_url, body.sdp, body.type, detection_config, initial_score=session.risk_score or 0.0)
     except Exception as e:
         log.error("Engine /offer failed (url=%s exam=%s): %s", engine_url, exam_id, e)
         raise HTTPException(status_code=503, detail="Proctoring engine is unreachable. Exam cannot start.")

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Loader2, RefreshCw, ShieldAlert, CheckCircle2,
-  AlertTriangle, FileText, Users, Clock, HardDrive
+  AlertTriangle, FileText, Users, Clock, HardDrive, Eye, X, AlertCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -85,6 +85,153 @@ function fmtDateTime(iso: string | null): string {
   return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+function fmtElapsed(s: number): string {
+  const m = Math.floor(s / 60);
+  const sec = Math.round(s % 60);
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+// ── Full Report Modal ─────────────────────────────────────────────────────────
+
+function FullReportModal({
+  examId,
+  session,
+  onClose,
+}: {
+  examId: string;
+  session: SessionReport;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.get(`/admin/exams/${examId}/sessions/${session.session_id}/report/full`)
+      .then(r => setData(r.data))
+      .catch(e => setError(e.response?.data?.detail || 'Failed to load report'))
+      .finally(() => setLoading(false));
+  }, [examId, session.session_id]);
+
+  function proofUrl(raw: string): string {
+    if (!raw || !session.engine_url) return raw;
+    // If raw is an absolute URL, return as-is
+    if (raw.startsWith('http')) return `/api/admin/proxy-proof?engine_url=${encodeURIComponent(session.engine_url)}&path=${encodeURIComponent(new URL(raw).pathname)}`;
+    // Engine-relative path like /proofs/xxx.jpg
+    return `/api/admin/proxy-proof?engine_url=${encodeURIComponent(session.engine_url)}&path=${encodeURIComponent(raw)}`;
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-slate-200">
+          <div>
+            <p className="font-bold text-slate-900">{session.student_name}</p>
+            <p className="text-xs text-slate-400 mt-0.5">{session.student_email}</p>
+            {session.report_id && (
+              <p className="text-xs text-slate-300 font-mono mt-0.5">{session.report_id}</p>
+            )}
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          {loading && (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="h-8 w-8 animate-spin text-slate-300" />
+            </div>
+          )}
+          {error && (
+            <div className="flex items-center gap-2 p-4 bg-rose-50 rounded-lg border border-rose-200 text-rose-700">
+              <AlertCircle className="h-4 w-4 shrink-0" /> {error}
+            </div>
+          )}
+          {data && (
+            <>
+              {/* Summary grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { label: 'Risk State', value: <RiskBadge state={data.risk_state} /> },
+                  { label: 'Final Score', value: <span className="font-bold text-slate-800">{data.final_score?.toFixed(0) ?? '—'}</span> },
+                  { label: 'Alerts', value: <span className="font-bold text-rose-500">{data.alert_count ?? 0}</span> },
+                  { label: 'Warnings', value: <span className="font-bold text-amber-500">{data.warning_count ?? 0}</span> },
+                  { label: 'Duration', value: fmtDuration(data.duration_s) },
+                  { label: 'Size', value: data.size_kb ? `${data.size_kb.toFixed(0)} KB` : '—' },
+                  { label: 'Proofs', value: data.proof_count ?? 0 },
+                  { label: 'Terminated', value: data.terminated ? <span className="text-rose-500 font-semibold">Yes</span> : 'No' },
+                ].map(({ label, value }) => (
+                  <div key={label} className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                    <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">{label}</p>
+                    <div className="text-sm">{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Events */}
+              {(() => {
+                const alerts: any[] = (data.alert_log ?? []).map((e: any) => ({ ...e, _type: 'alert' }));
+                const warnings: any[] = (data.warning_log ?? []).map((e: any) => ({ ...e, _type: 'warning' }));
+                const legacy: any[] = (data.events ?? []).map((e: any) => ({ ...e, _type: e.type ?? 'alert' }));
+                const all = alerts.length || warnings.length ? [...alerts, ...warnings] : legacy;
+                if (!all.length) return null;
+                return (
+                  <div>
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                      Events ({all.length})
+                    </p>
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                      {all.map((ev: any, i: number) => (
+                        <div key={i} className={`flex items-start gap-2 px-3 py-2 rounded-lg text-xs border ${
+                          ev._type === 'alert'
+                            ? 'bg-rose-50/50 border-rose-100 text-rose-700'
+                            : 'bg-amber-50/50 border-amber-100 text-amber-700'
+                        }`}>
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium">{ev.message || ev.key || ev._type}</p>
+                            {ev.score_added > 0 && (
+                              <p className="text-xs opacity-75">+{(ev.score_added as number).toFixed(1)} pts</p>
+                            )}
+                            {ev.proof_url && (
+                              <a
+                                href={proofUrl(ev.proof_url)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-blue-500 underline text-xs"
+                              >
+                                View proof
+                              </a>
+                            )}
+                          </div>
+                          <span className="text-xs opacity-60 shrink-0">
+                            {ev.elapsed_s != null ? fmtElapsed(ev.elapsed_s) : ev.time ?? ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Raw JSON toggle */}
+              <details>
+                <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">View raw JSON</summary>
+                <pre className="mt-2 text-xs bg-slate-50 border border-slate-200 rounded-lg p-3 overflow-auto max-h-48">
+                  {JSON.stringify(data, null, 2)}
+                </pre>
+              </details>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ExamReportsPage() {
@@ -95,6 +242,7 @@ export default function ExamReportsPage() {
   const [reports, setReports] = useState<SessionReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [examTitle, setExamTitle] = useState('');
+  const [viewSession, setViewSession] = useState<SessionReport | null>(null);
 
   const fetchReports = useCallback(async () => {
     try {
@@ -120,7 +268,6 @@ export default function ExamReportsPage() {
   const withReports = reports.filter(r => r.report_id);
   const totalAlerts = withReports.reduce((s, r) => s + (r.alert_count ?? 0), 0);
   const totalSize = withReports.reduce((s, r) => s + (r.size_kb ?? 0), 0);
-  const terminated = withReports.filter(r => r.terminated).length;
 
   if (loading) {
     return (
@@ -132,6 +279,15 @@ export default function ExamReportsPage() {
 
   return (
     <div className="space-y-6 pb-12">
+      {/* Full report modal */}
+      {viewSession && (
+        <FullReportModal
+          examId={examId}
+          session={viewSession}
+          onClose={() => setViewSession(null)}
+        />
+      )}
+
       {/* Header */}
       <div className="flex items-center gap-4">
         <Button variant="outline" size="icon" onClick={() => router.back()} className="h-10 w-10 border-slate-200">
@@ -217,7 +373,7 @@ export default function ExamReportsPage() {
 
                   {/* Report metrics */}
                   {r.report_id ? (
-                    <div className="flex items-center gap-5 shrink-0">
+                    <div className="flex items-center gap-4 shrink-0 flex-wrap">
                       <div className="text-center">
                         <RiskBadge state={r.risk_state} />
                         <p className="text-xs text-slate-400 mt-1">Risk State</p>
@@ -244,6 +400,14 @@ export default function ExamReportsPage() {
                           <p className="text-xs text-slate-400">Proofs</p>
                         </div>
                       )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 border-slate-200 text-slate-600 hover:text-indigo-600 hover:border-indigo-200"
+                        onClick={() => setViewSession(r)}
+                      >
+                        <Eye className="h-3.5 w-3.5" /> View
+                      </Button>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2 text-slate-400 shrink-0">

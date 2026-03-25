@@ -189,6 +189,68 @@ def _send_exam_cancelled_emails(exam_title: str, emails: List[str]):
 
 
 # =====================================================
+# DASHBOARD STATS
+# =====================================================
+
+@router.get("/stats")
+def get_admin_stats(
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role(UserRole.ADMIN, UserRole.SYSADMIN)),
+):
+    """
+    Live stats for the exam admin dashboard.
+    Scoped to exams created by this admin.
+    """
+    now = datetime.now(UTC)
+
+    # Exams created by this admin
+    my_exam_ids_q = (
+        db.query(models.Exam.id)
+        .filter(models.Exam.created_by == current_admin.id, models.Exam.is_deleted == False)
+        .subquery()
+    )
+
+    total_exams = db.query(func.count(models.Exam.id)).filter(
+        models.Exam.created_by == current_admin.id, models.Exam.is_deleted == False
+    ).scalar() or 0
+
+    live_exams = db.query(func.count(models.Exam.id)).filter(
+        models.Exam.created_by == current_admin.id,
+        models.Exam.is_deleted == False,
+        models.Exam.status == ExamStatus.LIVE.value,
+    ).scalar() or 0
+
+    total_sessions = db.query(func.count(models.ExamSession.id)).filter(
+        models.ExamSession.exam_id.in_(my_exam_ids_q)
+    ).scalar() or 0
+
+    live_sessions = db.query(func.count(models.ExamSession.id)).filter(
+        models.ExamSession.exam_id.in_(my_exam_ids_q),
+        models.ExamSession.status == SessionStatus.ACTIVE.value,
+    ).scalar() or 0
+
+    pending_appeals = db.query(func.count(models.ResumeRequest.id)).join(
+        models.ExamSession, models.ExamSession.id == models.ResumeRequest.session_id
+    ).filter(
+        models.ExamSession.exam_id.in_(my_exam_ids_q),
+        models.ResumeRequest.status == ResumeStatus.PENDING.value,
+    ).scalar() or 0
+
+    total_students = db.query(func.count(func.distinct(models.ExamInvite.student_email))).filter(
+        models.ExamInvite.exam_id.in_(my_exam_ids_q)
+    ).scalar() or 0
+
+    return {
+        "total_exams": total_exams,
+        "live_exams": live_exams,
+        "total_sessions": total_sessions,
+        "live_sessions": live_sessions,
+        "pending_appeals": pending_appeals,
+        "total_students": total_students,
+    }
+
+
+# =====================================================
 # EXAM CRUD
 # =====================================================
 
@@ -396,16 +458,16 @@ def update_exam(
             detail=f"Cannot edit an exam with status '{exam.status}'.",
         )
 
-    # Block editing within 15 minutes of start
+    # Block editing within 10 minutes of start
     exam_start_utc = (
         exam.start_window.replace(tzinfo=UTC)
         if exam.start_window.tzinfo is None
         else exam.start_window
     )
-    if exam_start_utc <= datetime.now(UTC) + timedelta(minutes=15):
+    if exam_start_utc <= datetime.now(UTC) + timedelta(minutes=10):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot edit exam within 15 minutes of its scheduled start time.",
+            detail="Cannot edit exam within 10 minutes of its scheduled start time.",
         )
 
     def _utc(dt: datetime) -> datetime:
@@ -1192,6 +1254,72 @@ async def list_exam_reports(
     return result
 
 
+@router.get("/{exam_id}/sessions/{session_id}/report/full")
+async def get_exam_session_full_report(
+    exam_id: str,
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role(UserRole.ADMIN, UserRole.SYSADMIN)),
+):
+    """Proxy full report JSON from an engine container for an exam session."""
+    import httpx as _httpx
+
+    exam = (
+        db.query(models.Exam)
+        .filter(
+            models.Exam.id == exam_id,
+            models.Exam.created_by == current_admin.id,
+            models.Exam.is_deleted == False,
+        )
+        .first()
+    )
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    sess = db.query(models.ExamSession).filter(
+        models.ExamSession.id == session_id,
+        models.ExamSession.exam_id == exam_id,
+    ).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not sess.proctor_report_id or not sess.proctor_engine_url:
+        raise HTTPException(status_code=404, detail="No engine report for this session")
+
+    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=15.0, write=4.0, pool=4.0)) as client:
+        try:
+            r = await client.get(f"{sess.proctor_engine_url}/report/{sess.proctor_report_id}")
+            r.raise_for_status()
+            raw = r.json()
+
+            def _get(d: dict, *keys, default=None):
+                for k in keys:
+                    if k in d:
+                        return d[k]
+                return default
+
+            return {
+                "report_id":     raw.get("id") or raw.get("report_id") or sess.proctor_report_id,
+                "engine_url":    sess.proctor_engine_url,
+                "risk_state":    _get(raw, "risk_state", "state", "final_state"),
+                "final_score":   _get(raw, "final_score", "score", "risk_score"),
+                "alert_count":   _get(raw, "alert_count", "alerts_count", default=len(raw.get("alert_log", []))),
+                "warning_count": _get(raw, "warning_count", "warnings_count", default=len(raw.get("warning_log", []))),
+                "size_kb":       _get(raw, "size_kb"),
+                "proof_count":   _get(raw, "proof_count", default=len(raw.get("proofs", []))),
+                "duration_s":    _get(raw, "duration_s", "duration"),
+                "terminated":    _get(raw, "terminated"),
+                "session_start": _get(raw, "session_start", "start_time"),
+                "session_end":   _get(raw, "session_end", "end_time"),
+                "alert_log":     raw.get("alert_log", []),
+                "warning_log":   raw.get("warning_log", []),
+            }
+        except _httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail=f"Engine error: {exc}")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Engine unreachable: {exc}")
+
+
 # =====================================================
 # SYSTEM ADMIN — ENGINE SETTINGS
 # =====================================================
@@ -1319,7 +1447,9 @@ def get_engine_containers(
     _=Depends(require_role("SYSADMIN")),
 ):
     """List all configured engine containers with their current session load."""
-    containers = db.query(models.EngineContainer).order_by(models.EngineContainer.url).all()
+    containers = db.query(models.EngineContainer).filter(
+        models.EngineContainer.is_active == True
+    ).order_by(models.EngineContainer.url).all()
     result = []
     for c in containers:
         active_sessions = (
@@ -1574,6 +1704,15 @@ async def list_all_reports(
     report_to_session: dict[str, models.ExamSession] = {
         s.proctor_report_id: s for s in sessions_with_reports
     }
+    # Secondary lookup by pc_id for reports not yet linked via proctor_report_id
+    sessions_with_pc = (
+        db.query(models.ExamSession)
+        .filter(models.ExamSession.proctor_pc_id.isnot(None))
+        .all()
+    )
+    pc_to_session: dict[str, models.ExamSession] = {
+        s.proctor_pc_id: s for s in sessions_with_pc
+    }
 
     result = []
     async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=8.0, write=4.0, pool=4.0)) as client:
@@ -1607,7 +1746,39 @@ async def list_all_reports(
                     "student_email": None,
                     "session_status": None,
                 }
+                # Try primary lookup by report_id, fall back to device_id (pc_id),
+                # then fall back to session_start timestamp matching.
                 sess = report_to_session.get(rep["id"])
+                if sess is None:
+                    pc_id = rep.get("device_id") or rep.get("pc_id")
+                    if pc_id:
+                        sess = pc_to_session.get(pc_id)
+                        if sess and sess.proctor_report_id is None:
+                            sess.proctor_report_id = rep["id"]
+                            db.commit()
+                # Timestamp-based fallback: match session_start within 30 s
+                if sess is None and rep.get("session_start"):
+                    try:
+                        rep_start_str = rep["session_start"]
+                        if not rep_start_str.endswith("Z") and "+" not in rep_start_str[10:]:
+                            rep_start_str += "Z"
+                        rep_start = datetime.fromisoformat(rep_start_str.replace("Z", "+00:00"))
+                        for s in sessions_with_pc:
+                            if s.proctor_engine_url != c.url or s.start_time is None:
+                                continue
+                            s_start = (
+                                s.start_time if s.start_time.tzinfo
+                                else s.start_time.replace(tzinfo=UTC)
+                            )
+                            if abs((rep_start - s_start).total_seconds()) <= 30:
+                                sess = s
+                                if sess.proctor_report_id is None:
+                                    sess.proctor_report_id = rep["id"]
+                                    db.commit()
+                                break
+                    except Exception:
+                        pass
+
                 if sess:
                     user = db.query(models.User).filter(models.User.id == sess.user_id).first()
                     exam = db.query(models.Exam).filter(models.Exam.id == sess.exam_id).first()
@@ -1662,3 +1833,296 @@ async def delete_report(
 
     log.info("SYSADMIN deleted report %s from engine %s", report_id, engine_url)
     return {"ok": True, "deleted": report_id}
+
+
+# =====================================================
+# SYSTEM ADMIN — DASHBOARD STATS
+# =====================================================
+
+@_system_settings_router.get("/stats")
+def get_dashboard_stats(
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Live dashboard summary numbers."""
+    from datetime import datetime, timezone as _tz
+    from sqlalchemy import or_ as _or
+
+    now = datetime.now(_tz.utc)
+
+    total_users = (
+        db.query(models.User)
+        .filter(models.User.is_deleted == False)
+        .count()
+    )
+    active_exams = (
+        db.query(models.Exam)
+        .filter(models.Exam.status == "ACTIVE", models.Exam.is_deleted == False)
+        .count()
+    )
+    live_sessions = (
+        db.query(models.ExamSession)
+        .filter(models.ExamSession.status.in_(["ACTIVE", "DISCONNECTED"]))
+        .count()
+    )
+    pending_applications = (
+        db.query(models.AdminApplication)
+        .filter(models.AdminApplication.status == "PENDING")
+        .count()
+    )
+    locked_users = (
+        db.query(models.User)
+        .filter(
+            models.User.is_deleted == False,
+            models.User.locked_until > now,
+        )
+        .count()
+    )
+    active_containers = (
+        db.query(models.EngineContainer)
+        .filter(models.EngineContainer.is_active == True)
+        .count()
+    )
+    total_exams = (
+        db.query(models.Exam)
+        .filter(models.Exam.is_deleted == False)
+        .count()
+    )
+
+    return {
+        "total_users": total_users,
+        "active_exams": active_exams,
+        "live_sessions": live_sessions,
+        "pending_applications": pending_applications,
+        "locked_users": locked_users,
+        "active_containers": active_containers,
+        "total_exams": total_exams,
+    }
+
+
+# =====================================================
+# SYSTEM ADMIN — USER MANAGEMENT
+# =====================================================
+
+@_system_settings_router.get("/users")
+def list_users(
+    q: str | None = None,
+    role: str | None = None,
+    locked: bool | None = None,
+    page: int = 1,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """List all users with optional search, role, and lock-status filters."""
+    from datetime import datetime, timezone as _tz
+    from sqlalchemy import or_ as _or
+
+    now = datetime.now(_tz.utc)
+
+    query = db.query(models.User).filter(models.User.is_deleted == False)
+
+    if q:
+        query = query.filter(
+            _or(
+                models.User.full_name.ilike(f"%{q}%"),
+                models.User.email.ilike(f"%{q}%"),
+            )
+        )
+    if role:
+        query = query.filter(models.User.role == role)
+    if locked is True:
+        query = query.filter(models.User.locked_until > now)
+    elif locked is False:
+        from sqlalchemy import or_ as _or2
+        query = query.filter(
+            _or2(
+                models.User.locked_until == None,
+                models.User.locked_until <= now,
+            )
+        )
+
+    total = query.count()
+    users = (
+        query
+        .order_by(models.User.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+
+    result = []
+    for u in users:
+        lu = u.locked_until
+        if lu and lu.tzinfo is None:
+            from datetime import timezone as _tz2
+            lu = lu.replace(tzinfo=_tz2.utc)
+        is_locked = bool(lu and lu > now)
+        result.append({
+            "id": str(u.id),
+            "full_name": u.full_name,
+            "email": u.email,
+            "role": u.role,
+            "is_active": u.is_active,
+            "is_locked": is_locked,
+            "locked_until": u.locked_until.isoformat() if u.locked_until else None,
+            "failed_login_attempts": u.failed_login_attempts,
+            "unlock_requests": u.unlock_requests,
+            "last_login": u.last_login.isoformat() if u.last_login else None,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+        })
+
+    return {"total": total, "users": result}
+
+
+# =====================================================
+# SYSTEM ADMIN — FULL REPORT VIEW
+# =====================================================
+
+@_system_settings_router.get("/report/{report_id}/full")
+async def get_full_report(
+    report_id: str,
+    engine_url: str,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Proxy full report JSON from an engine container."""
+    import httpx as _httpx
+
+    container = db.query(models.EngineContainer).filter(
+        models.EngineContainer.url == engine_url
+    ).first()
+    if not container:
+        raise HTTPException(status_code=400, detail="Unknown engine URL")
+
+    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=15.0, write=4.0, pool=4.0)) as client:
+        try:
+            r = await client.get(f"{engine_url}/report/{report_id}")
+            r.raise_for_status()
+            raw = r.json()
+
+            # Normalize field names — engines may use different key conventions.
+            # We map common aliases to the canonical names expected by the frontend.
+            def _get(d: dict, *keys, default=None):
+                for k in keys:
+                    if k in d:
+                        return d[k]
+                return default
+
+            normalized = {
+                "report_id":    raw.get("id") or raw.get("report_id") or report_id,
+                "risk_state":   _get(raw, "risk_state", "state", "final_state"),
+                "final_score":  _get(raw, "final_score", "score", "risk_score"),
+                "alert_count":  _get(raw, "alert_count", "alerts_count", default=len(raw.get("alert_log", []))),
+                "warning_count": _get(raw, "warning_count", "warnings_count", default=len(raw.get("warning_log", []))),
+                "size_kb":      _get(raw, "size_kb"),
+                "proof_count":  _get(raw, "proof_count", default=len(raw.get("proofs", []))),
+                "duration_s":   _get(raw, "duration_s", "duration"),
+                "terminated":   _get(raw, "terminated"),
+                "session_start": _get(raw, "session_start", "start_time"),
+                "session_end":  _get(raw, "session_end", "end_time"),
+                # Alert and warning logs for the detailed view
+                "alert_log":    raw.get("alert_log", []),
+                "warning_log":  raw.get("warning_log", []),
+            }
+            return normalized
+        except _httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail=f"Engine error: {exc}")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Engine unreachable: {exc}")
+
+
+# =====================================================
+# SYSTEM ADMIN — DELETE ALL REPORTS
+# =====================================================
+
+@_system_settings_router.delete("/reports")
+async def delete_all_reports(
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Delete ALL reports from all active engine containers and clear DB references."""
+    import httpx as _httpx
+
+    containers = (
+        db.query(models.EngineContainer)
+        .filter(models.EngineContainer.is_active == True)
+        .all()
+    )
+
+    deleted_total = 0
+    errors = []
+
+    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=15.0, write=4.0, pool=4.0)) as client:
+        for c in containers:
+            try:
+                # Get list of reports from this engine
+                r = await client.get(f"{c.url}/reports/meta")
+                r.raise_for_status()
+                engine_reports = r.json()
+            except Exception as exc:
+                errors.append({"engine_url": c.url, "error": f"Could not list: {exc}"})
+                continue
+
+            for rep in engine_reports:
+                rid = rep.get("id")
+                if not rid:
+                    continue
+                try:
+                    dr = await client.delete(f"{c.url}/report/{rid}")
+                    if dr.status_code not in (200, 204, 404):
+                        errors.append({"engine_url": c.url, "report_id": rid, "error": f"HTTP {dr.status_code}"})
+                        continue
+                    deleted_total += 1
+                    # Clear DB reference
+                    sess = db.query(models.ExamSession).filter(
+                        models.ExamSession.proctor_report_id == rid
+                    ).first()
+                    if sess:
+                        sess.proctor_report_id = None
+                except Exception as exc:
+                    errors.append({"engine_url": c.url, "report_id": rid, "error": str(exc)})
+
+    db.commit()
+    log.info("SYSADMIN deleted all reports: %d deleted, %d errors", deleted_total, len(errors))
+    return {"deleted": deleted_total, "errors": errors}
+
+
+# =====================================================
+# PROOF PROXY — accessible to both ADMIN and SYSADMIN
+# =====================================================
+
+@_system_settings_router.get("/proxy-proof")
+async def proxy_proof(
+    engine_url: str,
+    path: str,
+    db: Session = Depends(get_db),
+    _=Depends(require_role(UserRole.ADMIN, UserRole.SYSADMIN)),
+):
+    """
+    Proxy a proof file (image/audio) from an engine container.
+    path should be like /proofs/20260325_abc123.jpg
+    """
+    import httpx as _httpx
+    from fastapi.responses import Response as FastAPIResponse
+
+    container = db.query(models.EngineContainer).filter(
+        models.EngineContainer.url == engine_url
+    ).first()
+    if not container:
+        raise HTTPException(status_code=400, detail="Unknown engine URL")
+
+    if not path.startswith("/"):
+        path = "/" + path
+
+    full_url = f"{engine_url.rstrip('/')}{path}"
+    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=30.0, write=4.0, pool=4.0)) as client:
+        try:
+            r = await client.get(full_url)
+            r.raise_for_status()
+            content_type = r.headers.get("content-type", "application/octet-stream")
+            return FastAPIResponse(content=r.content, media_type=content_type)
+        except _httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail="Proof not found on engine")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Engine unreachable: {exc}")

@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Loader2, RefreshCw, Users, Activity,
   ShieldAlert, Clock, CheckCircle2, XCircle, AlertTriangle,
-  Eye, Timer, MessageSquare, ChevronRight, Bot, Ban
+  Eye, Timer, MessageSquare, ChevronRight, Bot, Ban, Search
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -205,7 +205,11 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
   const [alerts, setAlerts] = useState<AlertEntry[]>([]);
   const [warnings, setWarnings] = useState<WarningEntry[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
-  const [liveRisk, setLiveRisk] = useState<RiskInfo>({ score: session.risk_score, fixed: 0, state: 'NORMAL' });
+  const [liveRisk, setLiveRisk] = useState<RiskInfo>(() => {
+    const s = session.risk_score;
+    const state = s >= 70 ? 'HIGH_RISK' : s >= 40 ? 'WARNING' : 'NORMAL';
+    return { score: s, fixed: s, state };
+  });
   const [alertTab, setAlertTab] = useState<'alerts' | 'warnings'>('alerts');
   const [debugMode, setDebugMode] = useState(false);
   const [togglingDebug, setTogglingDebug] = useState(false);
@@ -226,9 +230,11 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
       const blob = await res.blob();
       if (!blob.size) return;
       const url = URL.createObjectURL(blob);
-      if (prevFrameUrl.current) URL.revokeObjectURL(prevFrameUrl.current);
+      const old = prevFrameUrl.current;
       prevFrameUrl.current = url;
       setFrameUrl(url);
+      // Delay revocation so the browser has time to paint the new frame
+      if (old) setTimeout(() => URL.revokeObjectURL(old), 1000);
     } catch {}
   }, [examId, session.session_id]);
 
@@ -266,7 +272,7 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
     if (session.status !== 'ACTIVE') return;
 
     fetchFrame();
-    frameIntervalRef.current = setInterval(fetchFrame, 2000);
+    frameIntervalRef.current = setInterval(fetchFrame, 1500);
 
     const token = localStorage.getItem('access_token') || '';
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -797,6 +803,7 @@ export default function MonitoringDashboard() {
   const [activeTab, setActiveTab] = useState<"sessions" | "appeals">("sessions");
   const [bulkMinutes, setBulkMinutes] = useState("");
   const [bulkExtending, setBulkExtending] = useState(false);
+  const [search, setSearch] = useState('');
 
   // Keep selectedSession in sync with latest session data from polls
   useEffect(() => {
@@ -847,6 +854,12 @@ export default function MonitoringDashboard() {
 
   const activeSessions = sessions.filter((s) => s.status === "ACTIVE");
   const pendingAppeals = sessions.filter((s) => s.has_pending_appeal).length;
+  const filteredSessions = search.trim()
+    ? sessions.filter(s =>
+        s.student_name.toLowerCase().includes(search.toLowerCase()) ||
+        s.student_email.toLowerCase().includes(search.toLowerCase())
+      )
+    : sessions;
 
   if (loading) {
     return (
@@ -986,13 +999,25 @@ export default function MonitoringDashboard() {
         <div className="grid lg:grid-cols-2 gap-6">
           {/* Student cards */}
           <div className="space-y-3">
-            {sessions.length === 0 ? (
+            {/* Search */}
+            {sessions.length > 0 && (
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <Input
+                  placeholder="Search by name or email…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="pl-9 border-slate-200 h-9 text-sm"
+                />
+              </div>
+            )}
+            {filteredSessions.length === 0 ? (
               <div className="text-center py-16">
                 <Users className="h-12 w-12 text-slate-200 mx-auto mb-3" />
-                <p className="text-slate-400">No student sessions yet</p>
+                <p className="text-slate-400">{sessions.length === 0 ? 'No student sessions yet' : 'No students match your search'}</p>
               </div>
             ) : (
-              sessions.map((sess) => (
+              filteredSessions.map((sess) => (
                 <Card
                   key={sess.session_id}
                   className={`cursor-pointer transition-all hover:shadow-md border-2 ${selectedSession?.session_id === sess.session_id ? "border-indigo-400 shadow-md" : "border-transparent shadow-sm"}`}

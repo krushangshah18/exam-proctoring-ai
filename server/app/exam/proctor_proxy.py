@@ -29,15 +29,18 @@ SSE_KEEPALIVE_INTERVAL = 25  # seconds between ping comments on proxied SSE
 
 # ── WebRTC signaling ──────────────────────────────────────────────────────────
 
-async def proxy_offer(engine_url: str, sdp: str, sdp_type: str, detection_config: dict) -> dict:
+async def proxy_offer(engine_url: str, sdp: str, sdp_type: str, detection_config: dict, initial_score: float = 0.0) -> dict:
     """
     POST /offer to the engine.
     Returns the engine's answer JSON: {sdp, type, device_id, device_label, ...}
     Raises httpx.HTTPError on network failure.
+
+    initial_score: existing risk score to seed the engine session (used on reconnect
+                   so the score continues from where it left off rather than restarting at 0).
     """
     resp = await _client.post(
         f"{engine_url}/offer",
-        json={"sdp": sdp, "type": sdp_type, "detection_config": detection_config},
+        json={"sdp": sdp, "type": sdp_type, "detection_config": detection_config, "initial_score": initial_score},
         timeout=15.0,   # offer round-trip includes SDP negotiation
     )
     resp.raise_for_status()

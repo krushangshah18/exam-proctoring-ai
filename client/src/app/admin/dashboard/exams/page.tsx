@@ -1,29 +1,24 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/axios';
 import { fmtDate, fmtTimeTZ } from '@/lib/fmt-date';
-import { 
-  Plus, 
-  Search, 
-  Calendar, 
-  Clock, 
+import {
+  Plus,
+  Calendar,
+  Clock,
   Users,
-  MoreVertical,
   ChevronRight,
+  ChevronLeft,
   Loader2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { SearchInput } from '@/components/common/SearchInput';
+
+const PAGE_SIZE = 10;
 
 interface Exam {
   id: string;
@@ -42,6 +37,7 @@ export default function AdminExamsPage() {
   const [exams, setExams] = useState<Exam[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     fetchExams();
@@ -59,7 +55,14 @@ export default function AdminExamsPage() {
     }
   };
 
+  const handleSearch = useCallback((val: string) => {
+    setSearch(val);
+    setPage(1);
+  }, []);
+
   const filteredExams = exams.filter(e => e.title.toLowerCase().includes(search.toLowerCase()));
+  const totalPages = Math.ceil(filteredExams.length / PAGE_SIZE);
+  const pagedExams = filteredExams.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const getStatusColor = (status: string) => {
     switch(status.toUpperCase()) {
@@ -84,15 +87,11 @@ export default function AdminExamsPage() {
       </div>
 
       <div className="flex items-center gap-4">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-          <Input 
-            placeholder="Search exams by title..." 
-            className="pl-9 bg-white"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
+        <SearchInput
+          placeholder="Search exams by title..."
+          onSearch={handleSearch}
+          isLoading={loading}
+        />
       </div>
 
       <Card className="border-slate-200 shadow-sm overflow-hidden">
@@ -119,14 +118,14 @@ export default function AdminExamsPage() {
                 <tr>
                   <td colSpan={5} className="px-6 py-12 text-center h-48">
                     <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-slate-100 mb-4">
-                      <Search className="h-6 w-6 text-slate-400" />
+                      <Loader2 className="h-6 w-6 text-slate-400" />
                     </div>
                     <p className="text-slate-900 font-medium">No exams found</p>
                     <p className="text-slate-500 mt-1">Try adjusting your search or create a new exam.</p>
                   </td>
                 </tr>
               ) : (
-                filteredExams.map((exam) => (
+                pagedExams.map((exam) => (
                   <tr key={exam.id} className="hover:bg-slate-50/50 transition-colors group cursor-pointer" onClick={() => router.push(`/admin/dashboard/exams/${exam.id}`)}>
                     <td className="px-6 py-4">
                       <div className="flex flex-col gap-1">
@@ -171,6 +170,21 @@ export default function AdminExamsPage() {
           </table>
         </div>
       </Card>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between text-sm text-slate-500">
+          <span>Page {page} of {totalPages} · {filteredExams.length} exams</span>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="gap-1">
+              <ChevronLeft className="h-4 w-4" /> Prev
+            </Button>
+            <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} className="gap-1">
+              Next <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
