@@ -76,11 +76,13 @@ class ProctorSession:
         session_dir: Path,
         config: dict | None = None,
         use_webrtc_audio: bool = True,
+        report_metadata: dict | None = None,
     ):
         self.session_id  = session_id
         self.session_dir = Path(session_dir)
         self.proof_dir   = self.session_dir / "proof"
         self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.report_metadata = report_metadata or {}
 
         cfg = {**_DEFAULTS, **(config or {})}
         self._cfg = cfg
@@ -716,6 +718,7 @@ class ProctorSession:
             "alert_log"       : self.alert_log,
             "warning_log"     : self.warning_log,
             "risk"            : self.risk.get_summary(),
+            **self.report_metadata,
         }
 
         path = self.session_dir / "report.json"

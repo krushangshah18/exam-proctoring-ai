@@ -606,18 +606,23 @@ async def list_reports_meta():
             size_bytes = sum(p.stat().st_size for p in d.rglob("*") if p.is_file())
             proof_count = sum(1 for p in (d / "proof").rglob("*") if p.is_file()) if (d / "proof").exists() else 0
             result.append({
-                "id"           : d.name,
-                "session_id"   : r.get("session_id", d.name),
+                "id": d.name,
+                "session_id": r.get("session_id", d.name),
+                "external_exam_session_id": r.get("external_exam_session_id"),
+                "external_exam_id": r.get("external_exam_id"),
+                "external_user_id": r.get("external_user_id"),
+                "external_student_name": r.get("external_student_name"),
+                "external_student_email": r.get("external_student_email"),
                 "session_start": r.get("session_start", ""),
-                "session_end"  : r.get("session_end", ""),
-                "duration_s"   : r.get("duration_s", 0),
-                "risk_state"   : r.get("risk", {}).get("final_state", "NORMAL"),
-                "final_score"  : r.get("risk", {}).get("final_score", 0),
-                "terminated"   : r.get("risk", {}).get("terminated", False),
-                "alert_count"  : r.get("total_api_alerts", 0),
+                "session_end": r.get("session_end", ""),
+                "duration_s": r.get("duration_s", 0),
+                "risk_state": r.get("risk", {}).get("final_state", "NORMAL"),
+                "final_score": r.get("risk", {}).get("final_score", 0),
+                "terminated": r.get("risk", {}).get("terminated", False),
+                "alert_count": r.get("total_api_alerts", 0),
                 "warning_count": r.get("total_warnings", 0),
-                "size_kb"      : round(size_bytes / 1024, 1),
-                "proof_count"  : proof_count,
+                "size_kb": round(size_bytes / 1024, 1),
+                "proof_count": proof_count,
             })
         except Exception:
             pass
@@ -998,6 +1003,7 @@ async def offer(request: Request):
 
     # Per-session detection overrides (from exam-level config set by admin)
     detection_override = params.get("detection_config", {})
+    report_metadata = params.get("metadata", {})
 
     pc    = RTCPeerConnection(configuration=_ICE_SERVERS)
     pc_id = str(id(pc))
@@ -1017,6 +1023,7 @@ async def offer(request: Request):
             session_id       = device_label,
             session_dir      = reports_dir,
             config           = session_cfg,
+            report_metadata  = report_metadata,
         )
         coordinator.add_session(pc_id, session)
         logger.info("[%s] ProctorSession created (report_id=%s)", device_label, file_prefix)

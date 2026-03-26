@@ -134,10 +134,11 @@ const SECTIONS: { title: string; fields: FieldMeta[] }[] = [
 // ── Slider + number input ─────────────────────────────────────────────────────
 
 function SettingSlider({
-  field, value, onChange,
+  field, value, savedValue, onChange,
 }: {
   field: FieldMeta;
   value: number;
+  savedValue: number;
   onChange: (v: number) => void;
 }) {
   const [localStr, setLocalStr] = useState(String(value));
@@ -157,7 +158,7 @@ function SettingSlider({
   }
 
   const pct = field.max === field.min ? 0 : ((value - field.min) / (field.max - field.min)) * 100;
-  const isChanged = value !== (DEFAULTS as any)[field.key];
+  const isChanged = value !== savedValue;
 
   return (
     <div className="space-y-1.5">
@@ -200,6 +201,7 @@ function SettingSlider({
 
 export default function SystemSettingsPage() {
   const [values, setValues] = useState<Settings>({ ...DEFAULTS });
+  const [savedValues, setSavedValues] = useState<Settings>({ ...DEFAULTS });
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
@@ -208,7 +210,9 @@ export default function SystemSettingsPage() {
     api.get('/admin/system-settings')
       .then(res => {
         const { id, updated_at, ...fields } = res.data;
-        setValues({ ...DEFAULTS, ...fields });
+        const fetched = { ...DEFAULTS, ...fields };
+        setValues(fetched);
+        setSavedValues(fetched);
         setLastUpdated(updated_at);
       })
       .catch(() => toast.error('Failed to load engine settings'))
@@ -222,9 +226,11 @@ export default function SystemSettingsPage() {
     try {
       await api.post('/admin/system-settings', values);
       toast.success('Engine settings saved and will apply to new sessions');
+      setSavedValues(values);
       setLastUpdated(new Date().toISOString());
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to save settings');
+      const detail = err.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : Array.isArray(detail) ? detail[0]?.msg : 'Failed to save settings');
     } finally {
       setIsSaving(false);
     }
@@ -236,7 +242,7 @@ export default function SystemSettingsPage() {
   };
 
   const changedCount = Object.entries(values).filter(
-    ([k, v]) => (DEFAULTS as any)[k] !== v
+    ([k, v]) => (savedValues as any)[k] !== v
   ).length;
 
   if (isLoading) {
@@ -285,6 +291,7 @@ export default function SystemSettingsPage() {
                 key={f.key}
                 field={f}
                 value={values[f.key] as number}
+                savedValue={savedValues[f.key] as number}
                 onChange={set(f.key)}
               />
             ))}

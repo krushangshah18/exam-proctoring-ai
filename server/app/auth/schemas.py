@@ -57,7 +57,7 @@ class TokenPayload(BaseModel):
 
 #Password Management
 class ChangePassword(BaseModel):
-    old_password: str
+    current_password: str
     new_password: str = Field(..., min_length=8,max_length=128,description="Strong Password")
 
 class SetupPasswordRequest(BaseModel):

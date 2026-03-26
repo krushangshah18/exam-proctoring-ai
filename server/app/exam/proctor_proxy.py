@@ -29,7 +29,14 @@ SSE_KEEPALIVE_INTERVAL = 25  # seconds between ping comments on proxied SSE
 
 # ── WebRTC signaling ──────────────────────────────────────────────────────────
 
-async def proxy_offer(engine_url: str, sdp: str, sdp_type: str, detection_config: dict, initial_score: float = 0.0) -> dict:
+async def proxy_offer(
+    engine_url: str,
+    sdp: str,
+    sdp_type: str,
+    detection_config: dict,
+    initial_score: float = 0.0,
+    metadata: dict | None = None,
+) -> dict:
     """
     POST /offer to the engine.
     Returns the engine's answer JSON: {sdp, type, device_id, device_label, ...}
@@ -40,7 +47,13 @@ async def proxy_offer(engine_url: str, sdp: str, sdp_type: str, detection_config
     """
     resp = await _client.post(
         f"{engine_url}/offer",
-        json={"sdp": sdp, "type": sdp_type, "detection_config": detection_config, "initial_score": initial_score},
+        json={
+            "sdp": sdp,
+            "type": sdp_type,
+            "detection_config": detection_config,
+            "initial_score": initial_score,
+            "metadata": metadata or {},
+        },
         timeout=15.0,   # offer round-trip includes SDP negotiation
     )
     resp.raise_for_status()

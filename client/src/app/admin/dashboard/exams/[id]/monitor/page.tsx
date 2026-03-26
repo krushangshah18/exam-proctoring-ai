@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft, Loader2, RefreshCw, Users, Activity,
   ShieldAlert, Clock, CheckCircle2, XCircle, AlertTriangle,
@@ -56,6 +56,7 @@ interface SessionCard {
   terminated_by: string | null;
   time_extension_seconds: number;
   has_pending_appeal: boolean;
+  proctor_engine_url?: string | null;
 }
 
 interface ResumeRequest {
@@ -164,9 +165,48 @@ function RiskBadge({ state }: { state: string }) {
   );
 }
 
-function ExpandableAlertRow({ entry, index }: { entry: AlertEntry; index: number }) {
+function ExpandableAlertRow({ entry, index, engineUrl }: { entry: AlertEntry; index: number; engineUrl?: string | null }) {
   const [expanded, setExpanded] = useState(false);
-  const base = process.env.NEXT_PUBLIC_ENGINE_URL || 'http://localhost:8001';
+  const [proofObjectUrl, setProofObjectUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadProof = async () => {
+      if (!expanded || !entry.proof_url || !engineUrl) return;
+      const rawPath = entry.proof_url.startsWith('http')
+        ? new URL(entry.proof_url).pathname
+        : entry.proof_url;
+      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const proxyUrl = `${base}/admin/proxy-proof?engine_url=${encodeURIComponent(engineUrl)}&path=${encodeURIComponent(rawPath)}`;
+
+      try {
+        const res = await api.get(proxyUrl, { responseType: 'blob' });
+        if (!active) return;
+        const url = URL.createObjectURL(res.data);
+        setProofObjectUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return url;
+        });
+      } catch {
+        if (active) {
+          setProofObjectUrl(null);
+          toast.error('Failed to load proof');
+        }
+      }
+    };
+
+    void loadProof();
+
+    return () => {
+      active = false;
+      setProofObjectUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+    };
+  }, [expanded, entry.proof_url, engineUrl]);
+
   return (
     <div className="rounded-lg overflow-hidden border border-rose-100 bg-rose-50/50">
       <button className="w-full px-3 py-2.5 flex items-start gap-2 text-left" onClick={() => setExpanded(e => !e)}>
@@ -183,13 +223,17 @@ function ExpandableAlertRow({ entry, index }: { entry: AlertEntry; index: number
       </button>
       {expanded && entry.proof_url && (
         <div className="px-3 pb-3">
-          {entry.proof_type === 'audio' ? (
+          {!proofObjectUrl ? (
+            <div className="flex items-center gap-2 py-3 text-xs text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading proof...
+            </div>
+          ) : entry.proof_type === 'audio' ? (
             <audio controls className="w-full h-8 mt-1">
-              <source src={`${base}${entry.proof_url}`} type="audio/wav" />
+              <source src={proofObjectUrl} type="audio/wav" />
             </audio>
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={`${base}${entry.proof_url}`} alt="Proof" className="w-full rounded-lg object-cover mt-1" style={{ maxHeight: 160 }} />
+            <img src={proofObjectUrl} alt="Proof" className="w-full rounded-lg object-cover mt-1" style={{ maxHeight: 160 }} />
           )}
         </div>
       )}
@@ -493,7 +537,14 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
             ) : alertTab === 'alerts' ? (
               alerts.length === 0
                 ? <p className="text-sm text-slate-400 text-center py-6">No alerts yet</p>
-                : alerts.map((a, i) => <ExpandableAlertRow key={i} entry={a} index={alerts.length - 1 - i} />)
+                : alerts.map((a, i) => (
+                  <ExpandableAlertRow
+                    key={i}
+                    entry={a}
+                    index={alerts.length - 1 - i}
+                    engineUrl={session.proctor_engine_url}
+                  />
+                ))
             ) : (
               warnings.length === 0
                 ? <p className="text-sm text-slate-400 text-center py-6">No warnings yet</p>
@@ -795,6 +846,7 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
 export default function MonitoringDashboard() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const examId = params.id as string;
 
   const [sessions, setSessions] = useState<SessionCard[]>([]);
@@ -804,6 +856,10 @@ export default function MonitoringDashboard() {
   const [bulkMinutes, setBulkMinutes] = useState("");
   const [bulkExtending, setBulkExtending] = useState(false);
   const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    setActiveTab(searchParams.get('tab') === 'appeals' ? 'appeals' : 'sessions');
+  }, [searchParams]);
 
   // Keep selectedSession in sync with latest session data from polls
   useEffect(() => {

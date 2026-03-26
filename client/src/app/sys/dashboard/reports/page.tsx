@@ -138,7 +138,10 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
   useEffect(() => {
     api.get(`/admin/report/${report.report_id}/full`, { params: { engine_url: report.engine_url } })
       .then(r => setData(r.data))
-      .catch(e => setError(e.response?.data?.detail || 'Failed to load report'))
+      .catch(e => {
+        const d = e.response?.data?.detail;
+        setError(typeof d === 'string' ? d : Array.isArray(d) ? d[0]?.msg : 'Failed to load report');
+      })
       .finally(() => setLoading(false));
   }, [report.report_id, report.engine_url]);
 
@@ -218,10 +221,17 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
                               let proxyHref: string;
                               try {
                                 const p = raw.startsWith('http') ? new URL(raw).pathname : raw;
-                                proxyHref = `/api/admin/proxy-proof?engine_url=${encodeURIComponent(eu)}&path=${encodeURIComponent(p)}`;
+                                proxyHref = `/admin/proxy-proof?engine_url=${encodeURIComponent(eu)}&path=${encodeURIComponent(p)}`;
                               } catch { proxyHref = raw; }
                               return (
-                                <a href={proxyHref} target="_blank" rel="noreferrer" className="text-blue-500 underline text-xs">View proof</a>
+                                <button type="button" onClick={async (e) => {
+                                  e.preventDefault();
+                                  try {
+                                    const res = await api.get(proxyHref, { responseType: 'blob' });
+                                    const url = URL.createObjectURL(res.data);
+                                    window.open(url, '_blank');
+                                  } catch { toast.error("Failed to load proof image"); }
+                                }} className="text-blue-500 underline text-xs text-left">View proof</button>
                               );
                             })()}
                           </div>

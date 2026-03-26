@@ -100,20 +100,20 @@ export default function ExamInfoPage() {
     };
   }, [examId, fetchStatus, pollInterval]);
 
-  const handleAppealSubmit = async (overrideReason?: string) => {
-    const reason = overrideReason || appealReason;
-    if (!reason.trim()) return toast.error("Please enter a reason.");
-    setSubmittingAppeal(true);
-    try {
-      await api.post(`/exam/${examId}/appeal`, { reason });
-      toast.success("Appeal submitted successfully.");
-      await fetchStatus();
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || "Failed to submit appeal");
-    } finally {
-      setSubmittingAppeal(false);
-    }
-  };
+  const handleAppealSubmit = async () => {
+  const reason = `Late joining: ${appealReason}`;
+  if (!reason.trim()) return toast.error('Please enter a reason.');
+  setSubmittingAppeal(true);
+  try {
+    await api.post(`/exam/${examId}/appeal`, { reason });
+    toast.success('Appeal submitted successfully.');
+    await fetchStatus();
+  } catch (err: any) {
+    toast.error(err.response?.data?.detail || 'Failed to submit appeal');
+  } finally {
+    setSubmittingAppeal(false);
+  }
+};
 
   if (loading) {
     return (

@@ -40,6 +40,33 @@ interface AlertEntry {
 }
 interface WarningEntry { message: string; ts: number; }
 interface RiskInfo { score: number; fixed: number; decaying?: number; state: string; }
+interface HistoryLogEntry {
+  message?: string;
+  key?: string;
+  score_added?: number;
+  proof_url?: string;
+  proof_type?: string;
+  elapsed_s?: number;
+  time?: string;
+}
+interface AlertHistoryResponse {
+  alerts: HistoryLogEntry[];
+  warnings: HistoryLogEntry[];
+}
+interface LiveStreamEvent {
+  type?: string;
+  message?: string;
+  key?: string;
+  score_added?: number;
+  proof_url?: string;
+  proof_type?: string;
+  risk?: {
+    score?: number;
+    fixed?: number;
+    decaying?: number;
+    state?: string;
+  };
+}
 
 // ── Persistence helpers ───────────────────────────────────────────────────────
 
@@ -92,7 +119,7 @@ function RiskBar({ score }: { score: number }) {
   );
 }
 
-function openSSE(url: string, token: string, handlers: Record<string, (d: any) => void>): () => void {
+function openSSE(url: string, token: string, handlers: Record<string, (d: unknown) => void>): () => void {
   let cancelled = false;
   const controller = new AbortController();
   (async () => {
@@ -122,6 +149,18 @@ function openSSE(url: string, token: string, handlers: Record<string, (d: any) =
   return () => { cancelled = true; controller.abort(); };
 }
 
+function buildProofUrl(engineUrl: string | null, rawPath?: string): string | null {
+  if (!engineUrl || !rawPath) return null;
+  const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  let path = rawPath;
+  try {
+    path = rawPath.startsWith('http') ? new URL(rawPath).pathname : rawPath;
+  } catch {
+    path = rawPath;
+  }
+  return `${base}/admin/proxy-proof?engine_url=${encodeURIComponent(engineUrl)}&path=${encodeURIComponent(path)}`;
+}
+
 // ── Session detail panel ──────────────────────────────────────────────────────
 
 function SessionDetailPanel({ session, onScoreUpdate }: {
@@ -133,6 +172,7 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
   const [warnings, setWarnings]   = useState<WarningEntry[]>(() => loadWarnings(session.session_id));
   const [liveRisk, setLiveRisk]   = useState<RiskInfo>({ score: session.risk_score, fixed: 0, state: 'NORMAL' });
   const [alertTab, setAlertTab]   = useState<'alerts' | 'warnings'>('alerts');
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const sseRef   = useRef<(() => void) | null>(null);
   const frameRef = useRef<NodeJS.Timeout | null>(null);
   const prevFrameUrl = useRef<string | null>(null);
@@ -142,6 +182,43 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
   // keep refs in sync for persistence
   useEffect(() => { alertsRef.current = alerts;   saveAlerts(session.session_id, alerts);   }, [alerts, session.session_id]);
   useEffect(() => { warningsRef.current = warnings; saveWarnings(session.session_id, warnings); }, [warnings, session.session_id]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    api.get<AlertHistoryResponse>(`/admin/sessions/${session.session_id}/alert-history`)
+      .then((res) => {
+        if (cancelled) return;
+        const now = Date.now();
+        const histAlerts: AlertEntry[] = (res.data?.alerts ?? []).map((e) => ({
+          message: e.message || 'Alert',
+          key: e.key,
+          score_added: e.score_added,
+          proof_url: e.proof_url,
+          proof_type: e.proof_type ?? 'image',
+          ts: now - (e.elapsed_s ?? 0) * 1000,
+        }));
+        const histWarnings: WarningEntry[] = (res.data?.warnings ?? []).map((e) => ({
+          message: e.message || 'Warning',
+          ts: now - (e.elapsed_s ?? 0) * 1000,
+        }));
+        setAlerts(histAlerts);
+        setWarnings(histWarnings);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAlerts(loadAlerts(session.session_id));
+          setWarnings(loadWarnings(session.session_id));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoaded(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session.session_id]);
 
   const fetchFrame = useCallback(async () => {
     const token = localStorage.getItem('access_token') || '';
@@ -164,13 +241,11 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
   }, [session.session_id]);
 
   useEffect(() => {
-    // Don't clear alerts/warnings on session change — they're pre-loaded from sessionStorage
-    setFrameUrl(null);
-    setLiveRisk({ score: session.risk_score, fixed: 0, state: 'NORMAL' });
-
     if (session.status !== 'ACTIVE') return;
 
-    fetchFrame();
+    const initialFrameTimer = setTimeout(() => {
+      void fetchFrame();
+    }, 0);
     frameRef.current = setInterval(fetchFrame, 1500); // tighter poll for less lag
 
     const token = localStorage.getItem('access_token') || '';
@@ -179,7 +254,8 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
       `${base}/admin/sessions/${session.session_id}/live-stream`,
       token,
       {
-        message: (d: any) => {
+        message: (payload: unknown) => {
+          const d = payload as LiveStreamEvent;
           if (d?.risk) {
             const risk: RiskInfo = {
               score: d.risk.score ?? 0,
@@ -203,6 +279,7 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
     );
 
     return () => {
+      clearTimeout(initialFrameTimer);
       if (frameRef.current) clearInterval(frameRef.current);
       sseRef.current?.();
       if (prevFrameUrl.current) URL.revokeObjectURL(prevFrameUrl.current);
@@ -277,38 +354,30 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
       {/* Alert / Warning log */}
       <Card>
         <CardHeader className="pb-0 border-b border-slate-100">
-          <div className="flex items-center justify-between">
-            <div className="flex gap-1">
-              {(['alerts', 'warnings'] as const).map(tab => (
-                <button key={tab} onClick={() => setAlertTab(tab)}
-                  className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors capitalize
-                    ${alertTab === tab
-                      ? (tab === 'alerts' ? 'border-rose-500 text-rose-600' : 'border-amber-500 text-amber-600')
-                      : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
-                  {tab}
-                  {(tab === 'alerts' ? alerts : warnings).length > 0 && (
-                    <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${tab === 'alerts' ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-600'}`}>
-                      {(tab === 'alerts' ? alerts : warnings).length}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-            {/* Clear button */}
-            <button
-              className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1"
-              onClick={() => {
-                if (alertTab === 'alerts') { setAlerts([]); saveAlerts(session.session_id, []); }
-                else { setWarnings([]); saveWarnings(session.session_id, []); }
-              }}
-            >
-              Clear
-            </button>
+          <div className="flex gap-1">
+            {(['alerts', 'warnings'] as const).map(tab => (
+              <button key={tab} onClick={() => setAlertTab(tab)}
+                className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors capitalize
+                  ${alertTab === tab
+                    ? (tab === 'alerts' ? 'border-rose-500 text-rose-600' : 'border-amber-500 text-amber-600')
+                    : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
+                {tab}
+                {(tab === 'alerts' ? alerts : warnings).length > 0 && (
+                  <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${tab === 'alerts' ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-600'}`}>
+                    {(tab === 'alerts' ? alerts : warnings).length}
+                  </span>
+                )}
+              </button>
+            ))}
           </div>
         </CardHeader>
         <CardContent className="pt-3">
           <div className="space-y-2 max-h-56 overflow-y-auto">
-            {alertTab === 'alerts' && (alerts.length === 0
+            {!historyLoaded ? (
+              <div className="flex items-center justify-center gap-2 py-6 text-slate-400 text-sm">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading history…
+              </div>
+            ) : alertTab === 'alerts' ? (alerts.length === 0
               ? <p className="text-sm text-slate-400 text-center py-6">No alerts yet</p>
               : alerts.map((a, i) => (
                 <div key={i} className="flex items-start gap-2 px-3 py-2 bg-rose-50/50 rounded-lg border border-rose-100 text-xs">
@@ -318,15 +387,29 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
                     <div className="flex items-center gap-3 mt-0.5 text-rose-400">
                       {a.score_added !== undefined && a.score_added > 0 && <span>+{a.score_added.toFixed(1)} pts</span>}
                       <span>{new Date(a.ts).toLocaleTimeString()}</span>
-                      {a.proof_url && (
-                        <a href={a.proof_url} target="_blank" rel="noreferrer" className="text-blue-500 underline">proof</a>
+                      {buildProofUrl(session.proctor_engine_url, a.proof_url) && (
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            try {
+                              const res = await api.get(buildProofUrl(session.proctor_engine_url, a.proof_url)!, { responseType: 'blob' });
+                              const url = URL.createObjectURL(res.data);
+                              window.open(url, '_blank');
+                            } catch {
+                              toast.error('Failed to load proof image');
+                            }
+                          }}
+                          className="text-blue-500 underline"
+                        >
+                          proof
+                        </button>
                       )}
                     </div>
                   </div>
                 </div>
               ))
-            )}
-            {alertTab === 'warnings' && (warnings.length === 0
+            ) : (warnings.length === 0
               ? <p className="text-sm text-slate-400 text-center py-6">No warnings yet</p>
               : warnings.map((w, i) => (
                 <div key={i} className="flex items-start gap-2 px-3 py-2 bg-amber-50/50 rounded-lg border border-amber-100 text-xs">
@@ -531,7 +614,11 @@ export default function SessionsMonitorPage() {
                   </h2>
                   <button onClick={() => setSelected(null)} className="text-xs text-slate-400 hover:text-slate-600">Close ×</button>
                 </div>
-                <SessionDetailPanel session={selected} onScoreUpdate={handleScoreUpdate} />
+                <SessionDetailPanel
+                  key={selected.session_id}
+                  session={selected}
+                  onScoreUpdate={handleScoreUpdate}
+                />
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-64 border-2 border-dashed border-slate-200 rounded-xl">

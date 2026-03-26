@@ -878,7 +878,7 @@ def end_exam(
             )
             risk = log_data.get("risk", {})
             session.risk_score = int(risk.get("final_score", session.risk_score or 0))
-            report_id = log_data.get("report_id") or log_data.get("session_id")
+            report_id = log_data.get("report_id") or log_data.get("session_id") or log_data.get("id")
             if report_id:
                 session.proctor_report_id = report_id
             db.commit()
@@ -1019,7 +1019,20 @@ async def proctor_connect(
     detection_config = build_engine_detection_config(exam.detection_config, engine_settings)
 
     try:
-        answer = await proxy_offer(engine_url, body.sdp, body.type, detection_config, initial_score=session.risk_score or 0.0)
+        answer = await proxy_offer(
+            engine_url,
+            body.sdp,
+            body.type,
+            detection_config,
+            initial_score=session.risk_score or 0.0,
+            metadata={
+                "external_exam_session_id": str(session.id),
+                "external_exam_id": str(exam.id),
+                "external_user_id": str(current_user.id),
+                "external_student_name": current_user.full_name,
+                "external_student_email": current_user.email,
+            },
+        )
     except Exception as e:
         log.error("Engine /offer failed (url=%s exam=%s): %s", engine_url, exam_id, e)
         raise HTTPException(status_code=503, detail="Proctoring engine is unreachable. Exam cannot start.")

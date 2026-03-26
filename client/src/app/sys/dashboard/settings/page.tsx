@@ -48,7 +48,8 @@ export default function SettingsPage() {
       toast.success('Password updated successfully');
       setCurrent(''); setNewPass(''); setConfirm('');
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to change password');
+      const detail = err.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : Array.isArray(detail) ? detail[0]?.msg : 'Failed to change password');
     } finally {
       setSavingPw(false);
     }

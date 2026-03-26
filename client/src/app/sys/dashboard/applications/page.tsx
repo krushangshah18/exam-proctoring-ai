@@ -141,7 +141,8 @@ export default function ApplicationsPage() {
       fetchApplications(); // Refresh data
     } catch (error: any) {
       console.error(error);
-      toast.error(error.response?.data?.detail || 'Failed to process application');
+      const detail = error.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : Array.isArray(detail) ? detail[0]?.msg : 'Failed to process application');
     } finally {
       setProcessing(false);
     }

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Loader2, RefreshCw, ShieldAlert, CheckCircle2,
-  AlertTriangle, FileText, Users, Clock, HardDrive, Eye, X, AlertCircle,
+  AlertTriangle, FileText, Users, Clock, HardDrive, Eye, X, AlertCircle, ChevronRight, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,6 +15,7 @@ import api from '@/lib/axios';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface SessionReport {
+  row_id?: string;
   session_id: string;
   report_id: string | null;
   engine_url: string | null;
@@ -26,6 +27,8 @@ interface SessionReport {
   risk_score: number;
   start_time: string | null;
   end_time: string | null;
+  report_start_time?: string | null;
+  report_end_time?: string | null;
   // Engine report metadata
   risk_state: string | null;
   final_score: number | null;
@@ -35,6 +38,13 @@ interface SessionReport {
   proof_count: number | null;
   duration_s: number | null;
   terminated: boolean | null;
+}
+
+interface StudentGroup {
+  studentKey: string;
+  studentName: string;
+  studentEmail: string;
+  reports: SessionReport[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -105,20 +115,40 @@ function FullReportModal({
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleted, setDeleted] = useState(false);
 
   useEffect(() => {
-    api.get(`/admin/exams/${examId}/sessions/${session.session_id}/report/full`)
+    setLoading(true);
+    setError(null);
+    setDeleted(false);
+    setData(null);
+    api.get(`/admin/exams/${examId}/sessions/${session.session_id}/report/full`, {
+      params: {
+        report_id: session.report_id,
+        engine_url: session.engine_url,
+      },
+    })
       .then(r => setData(r.data))
-      .catch(e => setError(e.response?.data?.detail || 'Failed to load report'))
+      .catch(e => {
+        const detail = e.response?.data?.detail;
+        const status = e.response?.status;
+        if (status === 410) {
+          setDeleted(true);
+          setError('Report no longer exists and has been deleted.');
+          return;
+        }
+        setError(detail || 'Failed to load report');
+      })
       .finally(() => setLoading(false));
-  }, [examId, session.session_id]);
+  }, [examId, session.engine_url, session.report_id, session.session_id]);
 
   function proofUrl(raw: string): string {
     if (!raw || !session.engine_url) return raw;
+    const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     // If raw is an absolute URL, return as-is
-    if (raw.startsWith('http')) return `/api/admin/proxy-proof?engine_url=${encodeURIComponent(session.engine_url)}&path=${encodeURIComponent(new URL(raw).pathname)}`;
+    if (raw.startsWith('http')) return `${base}/admin/proxy-proof?engine_url=${encodeURIComponent(session.engine_url)}&path=${encodeURIComponent(new URL(raw).pathname)}`;
     // Engine-relative path like /proofs/xxx.jpg
-    return `/api/admin/proxy-proof?engine_url=${encodeURIComponent(session.engine_url)}&path=${encodeURIComponent(raw)}`;
+    return `${base}/admin/proxy-proof?engine_url=${encodeURIComponent(session.engine_url)}&path=${encodeURIComponent(raw)}`;
   }
 
   return (
@@ -146,7 +176,11 @@ function FullReportModal({
             </div>
           )}
           {error && (
-            <div className="flex items-center gap-2 p-4 bg-rose-50 rounded-lg border border-rose-200 text-rose-700">
+            <div className={`flex items-center gap-2 p-4 rounded-lg border ${
+              deleted
+                ? 'bg-amber-50 border-amber-200 text-amber-800'
+                : 'bg-rose-50 border-rose-200 text-rose-700'
+            }`}>
               <AlertCircle className="h-4 w-4 shrink-0" /> {error}
             </div>
           )}
@@ -197,14 +231,22 @@ function FullReportModal({
                               <p className="text-xs opacity-75">+{(ev.score_added as number).toFixed(1)} pts</p>
                             )}
                             {ev.proof_url && (
-                              <a
-                                href={proofUrl(ev.proof_url)}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-blue-500 underline text-xs"
+                              <button
+                                type="button"
+                                onClick={async (e) => {
+                                  e.preventDefault();
+                                  try {
+                                    const res = await api.get(proofUrl(ev.proof_url), { responseType: 'blob' });
+                                    const url = URL.createObjectURL(res.data);
+                                    window.open(url, '_blank');
+                                  } catch {
+                                    toast.error('Failed to load proof image');
+                                  }
+                                }}
+                                className="text-blue-500 underline text-xs text-left"
                               >
                                 View proof
-                              </a>
+                              </button>
                             )}
                           </div>
                           <span className="text-xs opacity-60 shrink-0">
@@ -243,6 +285,7 @@ export default function ExamReportsPage() {
   const [loading, setLoading] = useState(true);
   const [examTitle, setExamTitle] = useState('');
   const [viewSession, setViewSession] = useState<SessionReport | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   const fetchReports = useCallback(async () => {
     try {
@@ -268,6 +311,28 @@ export default function ExamReportsPage() {
   const withReports = reports.filter(r => r.report_id);
   const totalAlerts = withReports.reduce((s, r) => s + (r.alert_count ?? 0), 0);
   const totalSize = withReports.reduce((s, r) => s + (r.size_kb ?? 0), 0);
+  const studentGroups: StudentGroup[] = Object.values(
+    reports.reduce<Record<string, StudentGroup>>((acc, report) => {
+      const key = report.student_email || report.session_id;
+      if (!acc[key]) {
+        acc[key] = {
+          studentKey: key,
+          studentName: report.student_name,
+          studentEmail: report.student_email,
+          reports: [],
+        };
+      }
+      acc[key].reports.push(report);
+      return acc;
+    }, {})
+  );
+
+  const toggleGroup = useCallback((studentKey: string) => {
+    setCollapsedGroups(prev => ({
+      ...prev,
+      [studentKey]: !prev[studentKey],
+    }));
+  }, []);
 
   if (loading) {
     return (
@@ -305,7 +370,7 @@ export default function ExamReportsPage() {
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
-          { label: 'Total Sessions', value: reports.length, icon: Users, color: 'indigo' },
+          { label: 'Students', value: studentGroups.length, icon: Users, color: 'indigo' },
           { label: 'Reports Available', value: withReports.length, icon: FileText, color: 'emerald' },
           { label: 'Total Alerts', value: totalAlerts, icon: ShieldAlert, color: 'rose' },
           { label: 'Storage Used', value: `${(totalSize / 1024).toFixed(1)} MB`, icon: HardDrive, color: 'amber' },
@@ -326,7 +391,7 @@ export default function ExamReportsPage() {
         ))}
       </div>
 
-      {/* Sessions table */}
+      {/* Student groups */}
       {reports.length === 0 ? (
         <Card className="border-slate-200 shadow-none">
           <CardContent className="py-16 text-center">
@@ -336,87 +401,114 @@ export default function ExamReportsPage() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {reports.map((r) => (
-            <Card key={r.session_id} className={`border shadow-none ${r.report_id ? 'border-slate-200' : 'border-dashed border-slate-200 opacity-70'}`}>
-              <CardContent className="p-5">
-                <div className="flex flex-col sm:flex-row sm:items-start gap-4">
-                  {/* Student info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <p className="font-semibold text-slate-900">{r.student_name}</p>
-                      <StatusBadge status={r.session_status} />
-                      {r.terminated && (
-                        <Badge variant="outline" className="text-xs bg-rose-50 text-rose-600 border-rose-200">
-                          Terminated
-                        </Badge>
+          {studentGroups.map((group) => (
+            <Card key={group.studentKey} className="border-slate-200 shadow-none overflow-hidden">
+              <button
+                type="button"
+                onClick={() => toggleGroup(group.studentKey)}
+                className="w-full p-5 border-b border-slate-100 bg-slate-50/70 text-left"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0 flex items-start gap-3">
+                    <span className="mt-0.5 text-slate-400 shrink-0">
+                      {collapsedGroups[group.studentKey] ? (
+                        <ChevronRight className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
                       )}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-900">{group.studentName}</p>
+                      <p className="text-sm text-slate-500 truncate">{group.studentEmail}</p>
                     </div>
-                    <p className="text-sm text-slate-500">{r.student_email}</p>
-                    <div className="flex items-center gap-4 mt-2 text-xs text-slate-400">
-                      <span className="flex items-center gap-1">
-                        <Clock className="h-3.5 w-3.5" />
-                        {fmtDateTime(r.start_time)}
-                      </span>
-                      {r.end_time && (
-                        <span>→ {fmtDateTime(r.end_time)}</span>
-                      )}
-                      {r.duration_s != null && (
-                        <span>{fmtDuration(r.duration_s)}</span>
-                      )}
-                    </div>
-                    {r.terminated_reason && (
-                      <p className="text-xs text-rose-500 mt-1">
-                        Reason: {r.terminated_reason}
-                      </p>
-                    )}
                   </div>
-
-                  {/* Report metrics */}
-                  {r.report_id ? (
-                    <div className="flex items-center gap-4 shrink-0 flex-wrap">
-                      <div className="text-center">
-                        <RiskBadge state={r.risk_state} />
-                        <p className="text-xs text-slate-400 mt-1">Risk State</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-xl font-bold text-slate-800">{r.final_score?.toFixed(0) ?? r.risk_score}</p>
-                        <p className="text-xs text-slate-400">Score</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-xl font-bold text-rose-500">{r.alert_count ?? 0}</p>
-                        <p className="text-xs text-slate-400">Alerts</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-xl font-bold text-amber-500">{r.warning_count ?? 0}</p>
-                        <p className="text-xs text-slate-400">Warnings</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-sm font-semibold text-slate-500">{r.size_kb ? `${r.size_kb.toFixed(0)} KB` : '—'}</p>
-                        <p className="text-xs text-slate-400">Size</p>
-                      </div>
-                      {r.proof_count != null && r.proof_count > 0 && (
-                        <div className="text-center">
-                          <p className="text-sm font-semibold text-slate-500">{r.proof_count}</p>
-                          <p className="text-xs text-slate-400">Proofs</p>
-                        </div>
-                      )}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-1.5 border-slate-200 text-slate-600 hover:text-indigo-600 hover:border-indigo-200"
-                        onClick={() => setViewSession(r)}
-                      >
-                        <Eye className="h-3.5 w-3.5" /> View
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 text-slate-400 shrink-0">
-                      <AlertTriangle className="h-4 w-4" />
-                      <span className="text-sm">No engine report</span>
-                    </div>
-                  )}
+                  <Badge variant="outline" className="text-xs border-slate-200 text-slate-600 shrink-0">
+                    {group.reports.length} segment{group.reports.length !== 1 ? 's' : ''}
+                  </Badge>
                 </div>
-              </CardContent>
+              </button>
+              {!collapsedGroups[group.studentKey] && (
+                <CardContent className="p-4 space-y-3">
+                  {group.reports.map((r, idx) => (
+                    <div key={r.row_id || `${r.session_id}:${r.report_id || idx}`} className={`border rounded-xl p-4 ${r.report_id ? 'border-slate-200' : 'border-dashed border-slate-200 opacity-70'}`}>
+                      <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                            <p className="font-medium text-slate-900">Segment {group.reports.length - idx}</p>
+                            <StatusBadge status={r.session_status} />
+                            {r.terminated && (
+                              <Badge variant="outline" className="text-xs bg-rose-50 text-rose-600 border-rose-200">
+                                Terminated
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-4 mt-2 text-xs text-slate-400 flex-wrap">
+                            <span className="flex items-center gap-1">
+                              <Clock className="h-3.5 w-3.5" />
+                              {fmtDateTime(r.report_start_time || r.start_time)}
+                            </span>
+                            {(r.report_end_time || r.end_time) && (
+                              <span>→ {fmtDateTime(r.report_end_time || r.end_time)}</span>
+                            )}
+                            {r.duration_s != null && (
+                              <span>{fmtDuration(r.duration_s)}</span>
+                            )}
+                          </div>
+                          {r.terminated_reason && (
+                            <p className="text-xs text-rose-500 mt-1">
+                              Reason: {r.terminated_reason}
+                            </p>
+                          )}
+                        </div>
+
+                        {r.report_id ? (
+                          <div className="flex items-center gap-4 shrink-0 flex-wrap">
+                            <div className="text-center">
+                              <RiskBadge state={r.risk_state} />
+                              <p className="text-xs text-slate-400 mt-1">Risk State</p>
+                            </div>
+                            <div className="text-center">
+                              <p className="text-xl font-bold text-slate-800">{r.final_score?.toFixed(0) ?? r.risk_score}</p>
+                              <p className="text-xs text-slate-400">Score</p>
+                            </div>
+                            <div className="text-center">
+                              <p className="text-xl font-bold text-rose-500">{r.alert_count ?? 0}</p>
+                              <p className="text-xs text-slate-400">Alerts</p>
+                            </div>
+                            <div className="text-center">
+                              <p className="text-xl font-bold text-amber-500">{r.warning_count ?? 0}</p>
+                              <p className="text-xs text-slate-400">Warnings</p>
+                            </div>
+                            <div className="text-center">
+                              <p className="text-sm font-semibold text-slate-500">{r.size_kb ? `${r.size_kb.toFixed(0)} KB` : '—'}</p>
+                              <p className="text-xs text-slate-400">Size</p>
+                            </div>
+                            {r.proof_count != null && r.proof_count > 0 && (
+                              <div className="text-center">
+                                <p className="text-sm font-semibold text-slate-500">{r.proof_count}</p>
+                                <p className="text-xs text-slate-400">Proofs</p>
+                              </div>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="gap-1.5 border-slate-200 text-slate-600 hover:text-indigo-600 hover:border-indigo-200"
+                              onClick={() => setViewSession(r)}
+                            >
+                              <Eye className="h-3.5 w-3.5" /> View
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 text-slate-400 shrink-0">
+                            <AlertTriangle className="h-4 w-4" />
+                            <span className="text-sm">No engine report</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              )}
             </Card>
           ))}
         </div>

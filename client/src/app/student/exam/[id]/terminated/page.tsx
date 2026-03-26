@@ -250,8 +250,8 @@ export default function TerminatedPage() {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-slate-900 min-h-screen">
-        <Loader2 className="h-10 w-10 animate-spin text-indigo-400" />
+      <div className="flex-1 flex items-center justify-center bg-gray-50 min-h-screen">
+        <Loader2 className="h-10 w-10 animate-spin text-blue-600" />
       </div>
     );
   }
@@ -264,18 +264,19 @@ export default function TerminatedPage() {
     if (resumeState === 'AGAIN') {
       return (
         <div className="space-y-4">
-          <div className="p-4 bg-slate-800 border border-rose-800 rounded-lg">
-            <p className="text-rose-400 font-bold flex items-center gap-2">
-              <XCircle className="h-5 w-5" /> No Further Appeals Allowed
+          <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+            <p className="text-gray-900 font-semibold flex items-center gap-2">
+              <XCircle className="h-5 w-5 text-gray-500" /> No Further Appeals Allowed
             </p>
-            <p className="text-slate-400 text-sm mt-2 leading-relaxed">
+            <p className="text-gray-600 text-sm mt-1 leading-relaxed">
               Your session was terminated a second time after a previous appeal was approved.
               No further appeals are permitted.
             </p>
           </div>
           <Button
             onClick={handleDismiss}
-            className="w-full bg-slate-700 hover:bg-slate-600 text-white"
+            variant="outline"
+            className="w-full bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
           >
             <ArrowLeft className="h-4 w-4 mr-2" /> Return to Dashboard
           </Button>
@@ -287,22 +288,24 @@ export default function TerminatedPage() {
     if (resumeState === 'DENIED') {
       return (
         <div className="space-y-4">
-          <div className="p-4 bg-slate-800 border border-rose-800 rounded-lg">
-            <p className="text-rose-400 font-bold flex items-center gap-2">
-              <XCircle className="h-5 w-5" /> Appeal Denied
+          <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+            <p className="text-gray-900 font-semibold flex items-center gap-2">
+              <XCircle className="h-5 w-5 text-rose-500" /> Appeal Denied
             </p>
-            <p className="text-slate-400 text-sm mt-2 leading-relaxed">
+            <p className="text-gray-600 text-sm mt-1 leading-relaxed">
               Your appeal was reviewed and denied. Your exam session has been permanently closed.
             </p>
             {resumeRequest?.review_note && (
-              <p className="text-slate-300 text-sm mt-2 bg-slate-700/50 p-3 rounded">
-                <span className="text-slate-400">Admin note: </span>{resumeRequest.review_note}
-              </p>
+              <div className="mt-3 p-3 bg-white border border-gray-200 rounded text-sm">
+                <span className="font-medium text-gray-900">Admin note: </span>
+                <span className="text-gray-700">{resumeRequest.review_note}</span>
+              </div>
             )}
           </div>
           <Button
             onClick={handleDismiss}
-            className="w-full bg-slate-700 hover:bg-slate-600 text-white"
+            variant="outline"
+            className="w-full bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
           >
             <ArrowLeft className="h-4 w-4 mr-2" /> Return to Dashboard
           </Button>
@@ -314,14 +317,15 @@ export default function TerminatedPage() {
     if (resumeState === 'NOT_APPLIED') {
       return (
         <div className="space-y-4">
-          <div className="p-4 bg-slate-800 border border-slate-700 rounded-lg">
-            <p className="text-slate-400 text-sm leading-relaxed">
+          <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+            <p className="text-gray-600 text-sm leading-relaxed">
               You chose not to appeal your session termination. Your exam attempt has been closed.
             </p>
           </div>
           <Button
             onClick={() => router.replace('/student/dashboard')}
-            className="w-full bg-slate-700 hover:bg-slate-600 text-white"
+            variant="outline"
+            className="w-full bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
           >
             <ArrowLeft className="h-4 w-4 mr-2" /> Return to Dashboard
           </Button>
@@ -333,22 +337,27 @@ export default function TerminatedPage() {
     if (resumeState === 'PENDING') {
       return (
         <div className="space-y-4">
-          <div className="p-4 bg-amber-900/30 border border-amber-700 rounded-lg">
-            <p className="text-amber-400 font-semibold flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> Appeal Under Review
-            </p>
-            <p className="text-slate-400 text-sm mt-2">
-              Your request is being reviewed by the exam proctor. Keep this page open.
-            </p>
+          <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
+              <div>
+                <p className="text-blue-900 font-medium">Appeal Under Review</p>
+                <p className="text-blue-700 text-sm mt-0.5">
+                  Your request is being reviewed by the exam proctor. Please keep this page open.
+                </p>
+              </div>
+            </div>
             {resumeRequest?.reason && (
-              <p className="text-slate-500 text-sm italic mt-2">"{resumeRequest.reason}"</p>
+              <div className="mt-3 bg-white/60 p-3 rounded border border-blue-100">
+                <p className="text-gray-700 text-sm italic">"{resumeRequest.reason}"</p>
+              </div>
             )}
-            <p className="text-xs text-slate-600 mt-2">Checking for updates every 10 seconds…</p>
+            <p className="text-xs text-blue-600 mt-3 font-medium">Auto-checking for updates every 10s...</p>
           </div>
-          <p className="text-xs text-slate-500 text-center">
+          <p className="text-xs text-gray-500 text-center">
             {isDisconnect
-              ? 'If approved, you will receive extra time to compensate for what was lost.'
-              : 'If approved, your timer will continue from where it stopped. No extra time will be added.'}
+              ? 'If approved, you may receive extra time to compensate for the disconnection.'
+              : 'If approved, your session will resume where it stopped.'}
           </p>
         </div>
       );
@@ -356,35 +365,41 @@ export default function TerminatedPage() {
 
     // CAN_APPLY — show appeal option
     return (
-      <div className="space-y-4">
-        <p className="text-slate-400 text-sm leading-relaxed">
-          {isDisconnect
-            ? 'Your session was closed due to a disconnection. If this was unintentional, you can appeal for reinstatement with extra time.'
-            : 'If you believe this termination was in error, you can appeal once. The proctor will review your case.'}
-        </p>
-        <p className="text-xs text-amber-400 font-semibold uppercase tracking-wide flex items-center gap-1.5">
-          <AlertTriangle className="h-3.5 w-3.5" />
-          You have one appeal opportunity. Use it carefully.
-        </p>
+      <div className="space-y-5">
+        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+          <p className="text-gray-700 text-sm leading-relaxed">
+            {isDisconnect
+              ? 'Your session ended due to a disconnection summary. If this was an accident (e.g., network drop), you can appeal to resume the exam.'
+              : 'If you believe this termination was a system error, you may submit an appeal. A proctor will review your request.'}
+          </p>
+          <div className="mt-3 flex items-start gap-2 text-amber-700 bg-amber-50 p-2.5 rounded border border-amber-200">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <p className="text-xs font-medium">
+              You only have one opportunity to appeal. Please explain the situation clearly.
+            </p>
+          </div>
+        </div>
 
         {showAppealForm ? (
-          <div className="space-y-3">
-            <Textarea
-              placeholder={
-                isDisconnect
-                  ? 'My browser/tab closed unexpectedly during the exam. This was due to a network issue or accidental closure, not intentional.'
-                  : 'Clearly explain why you believe this termination was incorrect…'
-              }
-              value={appealReason}
-              onChange={(e) => setAppealReason(e.target.value)}
-              className="bg-slate-800 border-slate-700 text-slate-200 placeholder:text-slate-600"
-              rows={4}
-            />
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-900 mb-1.5">Appeal Reason</label>
+              <Textarea
+                placeholder={
+                  isDisconnect
+                    ? 'My browser/tab closed unexpectedly due to a system crash/network issue...'
+                    : 'Please explain why this termination should be reversed...'
+                }
+                value={appealReason}
+                onChange={(e) => setAppealReason(e.target.value)}
+                className="bg-white border-gray-300 text-gray-900 focus:ring-blue-500 focus:border-blue-500 min-h-[100px]"
+              />
+            </div>
             <div className="flex gap-3">
               <Button
                 onClick={handleAppealSubmit}
                 disabled={submitting}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-700"
+                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm"
               >
                 {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Submit Appeal
@@ -392,7 +407,7 @@ export default function TerminatedPage() {
               <Button
                 onClick={() => setShowAppealForm(false)}
                 variant="outline"
-                className="border-slate-700 text-slate-300 hover:bg-slate-800"
+                className="bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
               >
                 Cancel
               </Button>
@@ -402,18 +417,18 @@ export default function TerminatedPage() {
           <div className="flex flex-col gap-3">
             <Button
               onClick={() => setShowAppealForm(true)}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 gap-2"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm gap-2"
             >
-              <MessageSquare className="h-4 w-4" /> Appeal This Decision
+              <MessageSquare className="h-4 w-4" /> Request to Resume
             </Button>
             <Button
               onClick={handleDismiss}
               disabled={dismissing}
               variant="outline"
-              className="w-full border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+              className="w-full bg-white border-gray-300 text-gray-600 hover:bg-gray-50 hover:text-gray-900"
             >
               {dismissing && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              <ArrowLeft className="h-4 w-4 mr-2" /> Back to Dashboard (No Appeal)
+              Return to Dashboard (No Appeal)
             </Button>
           </div>
         )}
@@ -422,34 +437,38 @@ export default function TerminatedPage() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-slate-900 text-white">
+    <div className="flex flex-col min-h-screen bg-gray-50 text-gray-900 font-sans">
       <div className="flex-1 flex items-center justify-center p-6">
-        <Card className="w-full max-w-md bg-slate-900 border-rose-900 text-white shadow-2xl p-8">
+        <Card className="w-full max-w-md bg-white border border-gray-200 shadow-xl rounded-xl p-8">
 
           {/* Icon + Title */}
-          <div className="text-center mb-6">
-            <Ban className="h-16 w-16 text-rose-500 mx-auto mb-4" />
-            <Badge
-              className={`mb-3 text-xs font-semibold ${
-                isDisconnect
-                  ? 'bg-amber-900/60 text-amber-300 border-amber-700'
-                  : 'bg-rose-900/60 text-rose-300 border-rose-700'
-              }`}
-              variant="outline"
-            >
-              {terminationLabel}
-            </Badge>
-            <h1 className="text-2xl font-bold text-white">Session Terminated</h1>
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center p-4 bg-rose-50 rounded-full mb-4">
+              <Ban className="h-10 w-10 text-rose-600" />
+            </div>
+            <div>
+              <Badge
+                className={`mb-3 text-xs font-semibold uppercase tracking-wider ${
+                  isDisconnect
+                    ? 'bg-amber-100 text-amber-800 border-amber-200'
+                    : 'bg-rose-100 text-rose-800 border-rose-200'
+                }`}
+                variant="outline"
+              >
+                {terminationLabel}
+              </Badge>
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Session Terminated</h1>
             {examTitle && (
-              <p className="text-slate-400 text-sm mt-1">{examTitle}</p>
+              <p className="text-gray-500 text-sm mt-1.5">{examTitle}</p>
             )}
           </div>
 
           {/* Termination reason */}
           {terminatedReason && (
-            <div className="mb-5 p-3 bg-slate-800 rounded-lg border border-slate-700">
-              <p className="text-xs text-slate-500 uppercase tracking-wider mb-1">Reason</p>
-              <p className="text-slate-300 text-sm">{terminatedReason}</p>
+            <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider mb-1">Reason for Termination</p>
+              <p className="text-gray-900 text-sm font-medium">{terminatedReason}</p>
             </div>
           )}
 
@@ -461,7 +480,7 @@ export default function TerminatedPage() {
 
       {/* Camera PiP — always visible if available */}
       {cameraActive && (
-        <div className="fixed bottom-6 right-6 w-56 aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border-2 border-slate-700 pointer-events-none">
+        <div className="fixed bottom-6 right-6 w-48 aspect-video bg-black rounded-lg overflow-hidden shadow-lg border border-gray-300 pointer-events-none">
           <video
             ref={videoRef}
             autoPlay
@@ -470,8 +489,8 @@ export default function TerminatedPage() {
             className="w-full h-full object-cover"
             style={{ transform: 'scaleX(-1)' }}
           />
-          <div className="absolute top-1.5 left-1.5 bg-black/70 px-2 py-0.5 rounded text-[9px] font-bold text-amber-400 uppercase tracking-wider">
-            Session Ended
+          <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-[10px] font-semibold text-white backdrop-blur-sm">
+            Camera Active
           </div>
         </div>
       )}

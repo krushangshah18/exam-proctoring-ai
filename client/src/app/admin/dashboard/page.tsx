@@ -12,6 +12,7 @@ import {
   FileText,
   Loader2,
   BookOpen,
+  Siren,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/axios';
@@ -121,13 +122,24 @@ export default function AdminDashboard() {
               : 'Monitor your exams and review proctoring reports.'}
           </p>
         </div>
-        <Button
-          onClick={() => router.push('/admin/dashboard/exams/new')}
-          className="bg-white text-indigo-600 hover:bg-indigo-50 shadow-md font-semibold px-6 py-6"
-        >
-          <PlusCircle className="mr-2 h-5 w-5" />
-          Create New Exam
-        </Button>
+        <div className="flex flex-col sm:flex-row gap-3">
+          {stats && stats.pending_appeals > 0 && (
+            <Button
+              onClick={() => router.push('/admin/dashboard/appeals')}
+              className="bg-amber-400 text-slate-900 hover:bg-amber-300 shadow-md font-semibold px-6 py-6"
+            >
+              <Siren className="mr-2 h-5 w-5" />
+              Review Appeals Now
+            </Button>
+          )}
+          <Button
+            onClick={() => router.push('/admin/dashboard/exams/new')}
+            className="bg-white text-indigo-600 hover:bg-indigo-50 shadow-md font-semibold px-6 py-6"
+          >
+            <PlusCircle className="mr-2 h-5 w-5" />
+            Create New Exam
+          </Button>
+        </div>
       </div>
 
       {/* Metrics Grid */}
@@ -144,7 +156,12 @@ export default function AdminDashboard() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {metrics.map((metric, i) => (
-            <Card key={i} className="border-none shadow-md hover:shadow-lg transition-shadow">
+            <Card
+              key={i}
+              className={`border-none shadow-md hover:shadow-lg transition-shadow ${
+                metric.title === 'Pending Appeals' && metric.value > 0 ? 'ring-2 ring-amber-300/70' : ''
+              }`}
+            >
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">{metric.title}</CardTitle>
                 <div className={`p-2 rounded-full ${metric.bg} relative`}>
@@ -157,6 +174,15 @@ export default function AdminDashboard() {
               <CardContent>
                 <div className="text-3xl font-bold">{metric.value}</div>
                 <p className="text-xs text-muted-foreground mt-1">{metric.description}</p>
+                {metric.title === 'Pending Appeals' && metric.value > 0 && (
+                  <Button
+                    variant="link"
+                    className="px-0 h-auto mt-3 text-amber-700"
+                    onClick={() => router.push('/admin/dashboard/appeals')}
+                  >
+                    Open appeal inbox <ArrowRight className="ml-1 h-4 w-4" />
+                  </Button>
+                )}
               </CardContent>
             </Card>
           ))}

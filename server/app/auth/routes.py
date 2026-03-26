@@ -516,7 +516,7 @@ def change_password(
     """
 
     if not verify_password(
-        data.old_password,
+        data.current_password,
         current_user.password_hash
     ):
         raise HTTPException(
