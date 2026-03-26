@@ -5,13 +5,6 @@ import {
   Search, Users, Lock, Unlock, RefreshCw, Loader2,
   ShieldCheck, GraduationCap, ChevronLeft, ChevronRight,
 } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
   AlertDialogContent, AlertDialogDescription,
@@ -21,7 +14,6 @@ import { toast } from 'sonner';
 import api from '@/lib/axios';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-
 interface UserRow {
   id: string;
   full_name: string;
@@ -37,18 +29,19 @@ interface UserRow {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
 function RoleBadge({ role }: { role: string }) {
-  const map: Record<string, { label: string; cls: string; Icon: any }> = {
-    SYSADMIN: { label: 'SysAdmin', cls: 'bg-purple-100 text-purple-700 border-purple-200', Icon: ShieldCheck },
-    ADMIN:    { label: 'Teacher',  cls: 'bg-blue-100 text-blue-700 border-blue-200',       Icon: ShieldCheck },
-    STUDENT:  { label: 'Student',  cls: 'bg-slate-100 text-slate-600 border-slate-200',    Icon: GraduationCap },
+  const map: Record<string, { label: string; bg: string; color: string; border: string }> = {
+    SYSADMIN: { label: 'SysAdmin',  bg: '#F5F3FF', color: '#7C3AED', border: '#DDD6FE' },
+    ADMIN:    { label: 'Teacher',   bg: '#EFF6FF', color: '#22577A', border: '#BFDBFE' },
+    STUDENT:  { label: 'Student',   bg: '#F8FAFC', color: '#475569', border: '#E2E8F0' },
   };
-  const { label, cls, Icon } = map[role] ?? { label: role, cls: 'bg-slate-100 text-slate-600 border-slate-200', Icon: Users };
+  const s = map[role] ?? { label: role, bg: '#F8FAFC', color: '#475569', border: '#E2E8F0' };
   return (
-    <Badge variant="outline" className={`text-xs gap-1 ${cls}`}>
-      <Icon className="h-3 w-3" />{label}
-    </Badge>
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-semibold border"
+      style={{ background: s.bg, color: s.color, borderColor: s.border }}>
+      {role === 'SYSADMIN' ? <ShieldCheck className="h-3 w-3" /> : role === 'STUDENT' ? <GraduationCap className="h-3 w-3" /> : <ShieldCheck className="h-3 w-3" />}
+      {s.label}
+    </span>
   );
 }
 
@@ -56,7 +49,6 @@ function fmtDate(iso: string | null) {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' });
 }
-
 function fmtDateTime(iso: string | null) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
@@ -65,16 +57,15 @@ function fmtDateTime(iso: string | null) {
 const PAGE_SIZE = 25;
 
 // ── Page ─────────────────────────────────────────────────────────────────────
-
 export default function UsersPage() {
-  const [users, setUsers] = useState<UserRow[]>([]);
-  const [total, setTotal] = useState(0);
+  const [users, setUsers]     = useState<UserRow[]>([]);
+  const [total, setTotal]     = useState(0);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [roleFilter, setRoleFilter] = useState('all');
-  const [lockFilter, setLockFilter] = useState('all');
-  const [unlocking, setUnlocking] = useState<string | null>(null);
+  const [page, setPage]       = useState(1);
+  const [search, setSearch]   = useState('');
+  const [roleFilter, setRoleFilter]   = useState('all');
+  const [lockFilter, setLockFilter]   = useState('all');
+  const [unlocking, setUnlocking]     = useState<string | null>(null);
   const [confirmUnlock, setConfirmUnlock] = useState<UserRow | null>(null);
   const searchTimer = useRef<NodeJS.Timeout | null>(null);
 
@@ -89,29 +80,17 @@ export default function UsersPage() {
       const res = await api.get('/admin/users', { params });
       setUsers(res.data.users);
       setTotal(res.data.total);
-    } catch {
-      toast.error('Failed to load users');
-    } finally {
-      setLoading(false);
-    }
+    } catch { toast.error('Failed to load users'); }
+    finally { setLoading(false); }
   }, [page, search, roleFilter, lockFilter]);
 
-  useEffect(() => {
-    fetchUsers(1, search, roleFilter, lockFilter);
-    setPage(1);
-  }, [roleFilter, lockFilter]);
-
-  useEffect(() => {
-    fetchUsers(page, search, roleFilter, lockFilter);
-  }, [page]);
+  useEffect(() => { fetchUsers(1, search, roleFilter, lockFilter); setPage(1); }, [roleFilter, lockFilter]);
+  useEffect(() => { fetchUsers(page, search, roleFilter, lockFilter); }, [page]);
 
   const handleSearchChange = (v: string) => {
     setSearch(v);
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => {
-      setPage(1);
-      fetchUsers(1, v, roleFilter, lockFilter);
-    }, 400);
+    searchTimer.current = setTimeout(() => { setPage(1); fetchUsers(1, v, roleFilter, lockFilter); }, 400);
   };
 
   const handleUnlock = async (user: UserRow) => {
@@ -120,134 +99,144 @@ export default function UsersPage() {
       await api.post(`/admin-applications/users/unlock/${user.id}`);
       toast.success(`${user.full_name} unlocked`);
       setUsers(prev => prev.map(u => u.id === user.id ? { ...u, is_locked: false, failed_login_attempts: 0, locked_until: null } : u));
-    } catch {
-      toast.error('Failed to unlock user');
-    } finally {
-      setUnlocking(null);
-      setConfirmUnlock(null);
-    }
+    } catch { toast.error('Failed to unlock user'); }
+    finally { setUnlocking(null); setConfirmUnlock(null); }
   };
 
   const lockedCount = users.filter(u => u.is_locked).length;
-  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const totalPages  = Math.ceil(total / PAGE_SIZE);
+
+  const ROLES  = [{ v: 'all', l: 'All Roles' }, { v: 'STUDENT', l: 'Students' }, { v: 'ADMIN', l: 'Teachers' }, { v: 'SYSADMIN', l: 'SysAdmins' }];
+  const LOCKS  = [{ v: 'all', l: 'All Status' }, { v: 'locked', l: 'Locked' }, { v: 'unlocked', l: 'Active' }];
 
   return (
     <>
-      <div className="space-y-6 pb-12">
+      <div className="space-y-6 max-w-6xl pb-12">
+
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Users</h1>
-            <p className="text-sm text-slate-500 mt-0.5">
+            <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Users</h1>
+            <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>
               {total} user{total !== 1 ? 's' : ''} registered
-              {lockedCount > 0 && <span className="ml-2 text-rose-500">· {lockedCount} locked on this page</span>}
+              {lockedCount > 0 && <span className="ml-2 font-semibold" style={{ color: '#E11D48' }}>· {lockedCount} locked on this page</span>}
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={() => fetchUsers(page)} className="gap-2 border-slate-200">
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </Button>
+          <button
+            onClick={() => fetchUsers(page)}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-150"
+            style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
         </div>
 
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-            <Input
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4" style={{ color: '#94A3B8' }} />
+            <input
+              type="text"
               placeholder="Search by name or email…"
               value={search}
               onChange={e => handleSearchChange(e.target.value)}
-              className="pl-9 border-slate-200"
+              className="w-full pl-9 pr-4 py-2.5 text-sm rounded-lg border outline-none transition-all"
+              style={{ borderColor: '#E2E8F0', color: '#0F172A', background: '#fff' }}
+              onFocus={e => { (e.target as HTMLElement).style.borderColor = '#38A3A5'; (e.target as HTMLElement).style.boxShadow = '0 0 0 3px rgba(56,163,165,0.12)'; }}
+              onBlur={e => { (e.target as HTMLElement).style.borderColor = '#E2E8F0'; (e.target as HTMLElement).style.boxShadow = 'none'; }}
             />
           </div>
-          <Select value={roleFilter} onValueChange={setRoleFilter}>
-            <SelectTrigger className="w-40 border-slate-200">
-              <SelectValue placeholder="Role" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Roles</SelectItem>
-              <SelectItem value="STUDENT">Students</SelectItem>
-              <SelectItem value="ADMIN">Teachers</SelectItem>
-              <SelectItem value="SYSADMIN">SysAdmins</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={lockFilter} onValueChange={setLockFilter}>
-            <SelectTrigger className="w-40 border-slate-200">
-              <SelectValue placeholder="Status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="locked">Locked</SelectItem>
-              <SelectItem value="unlocked">Not Locked</SelectItem>
-            </SelectContent>
-          </Select>
+          {[
+            { val: roleFilter, set: setRoleFilter, opts: ROLES },
+            { val: lockFilter, set: setLockFilter, opts: LOCKS },
+          ].map((s, i) => (
+            <select
+              key={i}
+              value={s.val}
+              onChange={e => s.set(e.target.value)}
+              className="w-40 px-3 py-2.5 text-sm rounded-lg border outline-none cursor-pointer"
+              style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+            >
+              {s.opts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+            </select>
+          ))}
         </div>
 
         {/* Table */}
-        <Card className="border-slate-200 shadow-none overflow-hidden">
+        <div className="bg-white rounded-xl border overflow-hidden"
+          style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
           {loading ? (
-            <CardContent className="py-20 text-center">
-              <Loader2 className="h-8 w-8 animate-spin text-slate-300 mx-auto" />
-            </CardContent>
+            <div className="py-20 flex justify-center">
+              <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
+            </div>
           ) : users.length === 0 ? (
-            <CardContent className="py-20 text-center">
-              <Users className="h-12 w-12 text-slate-200 mx-auto mb-3" />
-              <p className="text-slate-400">No users found</p>
-            </CardContent>
+            <div className="py-20 text-center">
+              <Users className="h-10 w-10 mx-auto mb-3" style={{ color: '#E2E8F0' }} />
+              <p className="text-sm" style={{ color: '#94A3B8' }}>No users found</p>
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-slate-100 bg-slate-50">
+                  <tr style={{ borderBottom: '1px solid #F1F5F9', background: '#F8FAFC' }}>
                     {['Name / Email', 'Role', 'Status', 'Login Attempts', 'Last Login', 'Joined', ''].map(h => (
-                      <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                      <th key={h} className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider"
+                        style={{ color: '#94A3B8' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {users.map(u => (
-                    <tr key={u.id} className={`hover:bg-slate-50/50 transition-colors ${u.is_locked ? 'bg-rose-50/30' : ''}`}>
+                <tbody>
+                  {users.map((u, idx) => (
+                    <tr key={u.id}
+                      style={{
+                        borderBottom: idx < users.length - 1 ? '1px solid #F8FAFC' : 'none',
+                        background: u.is_locked ? 'rgba(239,68,68,0.02)' : 'transparent',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#F8FAFC'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = u.is_locked ? 'rgba(239,68,68,0.02)' : 'transparent'; }}
+                    >
                       <td className="px-4 py-3">
-                        <p className="font-medium text-slate-900">{u.full_name}</p>
-                        <p className="text-xs text-slate-400">{u.email}</p>
+                        <p className="font-semibold" style={{ color: '#0F172A' }}>{u.full_name}</p>
+                        <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{u.email}</p>
                       </td>
                       <td className="px-4 py-3"><RoleBadge role={u.role} /></td>
                       <td className="px-4 py-3">
                         {u.is_locked ? (
                           <div>
-                            <Badge variant="outline" className="text-xs bg-rose-50 text-rose-600 border-rose-200 gap-1">
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-semibold border"
+                              style={{ background: '#FFF1F2', color: '#BE123C', borderColor: '#FECDD3' }}>
                               <Lock className="h-3 w-3" /> Locked
-                            </Badge>
+                            </span>
                             {u.locked_until && (
-                              <p className="text-xs text-slate-400 mt-0.5">Until {fmtDateTime(u.locked_until)}</p>
+                              <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Until {fmtDateTime(u.locked_until)}</p>
                             )}
                           </div>
                         ) : (
-                          <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-600 border-emerald-200">Active</Badge>
+                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-semibold border"
+                            style={{ background: '#ECFDF5', color: '#15803D', borderColor: '#BBF7D0' }}>
+                            Active
+                          </span>
                         )}
                       </td>
-                      <td className="px-4 py-3">
-                        {u.failed_login_attempts > 0 ? (
-                          <span className="text-rose-500 font-semibold">{u.failed_login_attempts}</span>
-                        ) : (
-                          <span className="text-slate-400">0</span>
-                        )}
+                      <td className="px-4 py-3 tabular-nums font-semibold"
+                        style={{ color: u.failed_login_attempts > 0 ? '#DC2626' : '#94A3B8' }}>
+                        {u.failed_login_attempts}
                       </td>
-                      <td className="px-4 py-3 text-slate-500 text-xs">{fmtDateTime(u.last_login)}</td>
-                      <td className="px-4 py-3 text-slate-400 text-xs">{fmtDate(u.created_at)}</td>
+                      <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{fmtDateTime(u.last_login)}</td>
+                      <td className="px-4 py-3 text-xs" style={{ color: '#94A3B8' }}>{fmtDate(u.created_at)}</td>
                       <td className="px-4 py-3 text-right">
                         {u.is_locked && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 text-xs gap-1.5 border-rose-200 text-rose-600 hover:bg-rose-50"
+                          <button
                             disabled={unlocking === u.id}
                             onClick={() => setConfirmUnlock(u)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all duration-150"
+                            style={{ background: '#FFF1F2', color: '#BE123C', borderColor: '#FECDD3' }}
+                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#FFE4E6'; }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '#FFF1F2'; }}
                           >
-                            {unlocking === u.id
-                              ? <Loader2 className="h-3 w-3 animate-spin" />
-                              : <Unlock className="h-3 w-3" />}
+                            {unlocking === u.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unlock className="h-3 w-3" />}
                             Unlock
-                          </Button>
+                          </button>
                         )}
                       </td>
                     </tr>
@@ -256,37 +245,44 @@ export default function UsersPage() {
               </table>
             </div>
           )}
-        </Card>
+        </div>
 
         {/* Pagination */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between text-sm text-slate-500">
+          <div className="flex items-center justify-between text-sm" style={{ color: '#94A3B8' }}>
             <span>Page {page} of {totalPages} · {total} users</span>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="gap-1">
-                <ChevronLeft className="h-4 w-4" /> Prev
-              </Button>
-              <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} className="gap-1">
-                Next <ChevronRight className="h-4 w-4" />
-              </Button>
+              {[
+                { icon: ChevronLeft, label: 'Prev', action: () => setPage(p => p - 1), disabled: page <= 1 },
+                { icon: ChevronRight, label: 'Next', action: () => setPage(p => p + 1), disabled: page >= totalPages },
+              ].map(({ icon: Icon, label, action, disabled }) => (
+                <button key={label} onClick={action} disabled={disabled}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border transition-all duration-150"
+                  style={{ borderColor: '#E2E8F0', color: disabled ? '#CBD5E1' : '#475569', background: '#fff', cursor: disabled ? 'not-allowed' : 'pointer' }}>
+                  {label === 'Prev' && <Icon className="h-4 w-4" />}
+                  {label}
+                  {label === 'Next' && <Icon className="h-4 w-4" />}
+                </button>
+              ))}
             </div>
           </div>
         )}
       </div>
 
-      {/* Unlock confirmation */}
+      {/* Unlock dialog */}
       <AlertDialog open={!!confirmUnlock} onOpenChange={open => { if (!open) setConfirmUnlock(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Unlock Account</AlertDialogTitle>
             <AlertDialogDescription>
-              This will reset the failed login counter and allow <strong>{confirmUnlock?.full_name}</strong> ({confirmUnlock?.email}) to log in again.
+              This will reset the failed login counter and allow{' '}
+              <strong>{confirmUnlock?.full_name}</strong> ({confirmUnlock?.email}) to log in again.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-blue-600 hover:bg-blue-700"
+              style={{ background: '#22577A' }}
               onClick={() => confirmUnlock && handleUnlock(confirmUnlock)}
             >
               Unlock Account

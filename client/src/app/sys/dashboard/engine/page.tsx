@@ -5,14 +5,10 @@ import {
   Cpu, MemoryStick, Activity, Zap, Server, RefreshCw,
   AlertTriangle, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronUp,
 } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function fmt(n: number | undefined | null, dec = 1): string {
   if (n == null) return '—';
   return n.toFixed(dec);
@@ -21,100 +17,107 @@ function fmt(n: number | undefined | null, dec = 1): string {
 function GaugeBar({ value, max, color }: { value: number; max: number; color: string }) {
   const pct = max ? Math.min(100, (value / max) * 100) : 0;
   return (
-    <div className="h-2 rounded-full overflow-hidden bg-slate-100">
-      <div className="h-2 rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: color }} />
+    <div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#F1F5F9' }}>
+      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: color }} />
     </div>
   );
 }
 
-function StatCell({ label, value, sub, color }: { label: string; value: React.ReactNode; sub?: string; color?: string }) {
+function MetricCell({ label, value, sub, color }: { label: string; value: React.ReactNode; sub?: string; color?: string }) {
   return (
-    <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
-      <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold mb-1">{label}</p>
-      <p className="text-xl font-bold tabular-nums" style={{ color: color || '#0f172a' }}>{value}</p>
-      {sub && <p className="text-xs text-slate-400 mt-0.5">{sub}</p>}
+    <div className="rounded-lg p-3 border" style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
+      <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#94A3B8' }}>{label}</p>
+      <p className="text-lg font-bold tabular-nums" style={{ color: color || '#0F172A' }}>{value}</p>
+      {sub && <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{sub}</p>}
     </div>
   );
 }
 
-// ── Container card ────────────────────────────────────────────────────────────
-
+// ── Container card ─────────────────────────────────────────────────────────────
 interface ContainerInfo {
-  id: string;
-  url: string;
-  max_sessions: number;
-  is_active: boolean;
-  active_sessions: number;
+  id: string; url: string; max_sessions: number;
+  is_active: boolean; active_sessions: number;
 }
-
 interface MetricsResult {
-  url: string;
-  ok: boolean;
-  error?: string;
-  metrics?: any;
+  url: string; ok: boolean; error?: string; metrics?: any;
 }
 
 function ContainerCard({ container, metricsResult }: { container: ContainerInfo; metricsResult?: MetricsResult }) {
   const [expanded, setExpanded] = useState(true);
-  const m = metricsResult?.ok ? metricsResult.metrics : null;
+  const m   = metricsResult?.ok ? metricsResult.metrics : null;
   const sys = m?.system;
-
-  const slotPct = container.max_sessions ? (container.active_sessions / container.max_sessions) * 100 : 0;
-  const slotColor = slotPct >= 90 ? '#ef4444' : slotPct >= 60 ? '#f59e0b' : '#22c55e';
+  const slotPct   = container.max_sessions ? (container.active_sessions / container.max_sessions) * 100 : 0;
+  const slotColor = slotPct >= 90 ? '#EF4444' : slotPct >= 60 ? '#F59E0B' : '#22C55E';
 
   return (
-    <Card className="border-slate-200">
-      <CardHeader className="pb-3 border-b border-slate-100">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 min-w-0">
-            <Server className="h-4 w-4 text-indigo-500 shrink-0" />
-            <span className="font-mono text-sm font-semibold text-slate-800 truncate">{container.url}</span>
+    <div className="bg-white rounded-xl border overflow-hidden"
+      style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+      {/* Header */}
+      <div className="p-5" style={{ borderBottom: '1px solid #F1F5F9' }}>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="h-8 w-8 rounded-lg flex items-center justify-center shrink-0"
+              style={{ background: '#EFF6FF' }}>
+              <Server className="h-4 w-4" style={{ color: '#22577A' }} />
+            </div>
+            <span className="font-mono text-sm font-semibold truncate" style={{ color: '#0F172A' }}>{container.url}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {container.is_active
-              ? <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Active</Badge>
-              : <Badge className="bg-slate-100 text-slate-500 border-slate-200 text-xs">Inactive</Badge>}
+            <span className="px-2 py-0.5 rounded-md text-xs font-semibold border"
+              style={container.is_active
+                ? { background: '#ECFDF5', color: '#15803D', borderColor: '#BBF7D0' }
+                : { background: '#F8FAFC', color: '#94A3B8', borderColor: '#E2E8F0' }}>
+              {container.is_active ? 'Active' : 'Inactive'}
+            </span>
             {!metricsResult ? (
-              <Badge className="bg-slate-100 text-slate-400 text-xs">Fetching…</Badge>
+              <span className="px-2 py-0.5 rounded-md text-xs font-semibold border"
+                style={{ background: '#F8FAFC', color: '#94A3B8', borderColor: '#E2E8F0' }}>
+                Fetching…
+              </span>
             ) : metricsResult.ok ? (
-              <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs flex items-center gap-1">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border"
+                style={{ background: '#ECFDF5', color: '#15803D', borderColor: '#BBF7D0' }}>
                 <CheckCircle2 className="h-3 w-3" /> Reachable
-              </Badge>
+              </span>
             ) : (
-              <Badge className="bg-rose-100 text-rose-700 border-rose-200 text-xs flex items-center gap-1">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border"
+                style={{ background: '#FFF1F2', color: '#BE123C', borderColor: '#FECDD3' }}>
                 <XCircle className="h-3 w-3" /> Unreachable
-              </Badge>
+              </span>
             )}
-            <button onClick={() => setExpanded(e => !e)} className="text-slate-400 hover:text-slate-600">
+            <button onClick={() => setExpanded(e => !e)}
+              className="p-1 rounded-lg transition-colors"
+              style={{ color: '#94A3B8' }}>
               {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
             </button>
           </div>
         </div>
 
-        {/* Slot usage bar */}
-        <div className="mt-3 space-y-1">
-          <div className="flex justify-between text-xs text-slate-500">
-            <span>Session Slots</span>
-            <span className="font-semibold" style={{ color: slotColor }}>
+        {/* Slot bar */}
+        <div className="space-y-1.5">
+          <div className="flex justify-between text-xs">
+            <span style={{ color: '#94A3B8' }}>Session Slots</span>
+            <span className="font-semibold tabular-nums" style={{ color: slotColor }}>
               {container.active_sessions} / {container.max_sessions}
             </span>
           </div>
           <GaugeBar value={container.active_sessions} max={container.max_sessions} color={slotColor} />
         </div>
-      </CardHeader>
+      </div>
 
+      {/* Body */}
       {expanded && (
-        <CardContent className="pt-4 space-y-4">
+        <div className="p-5 space-y-5">
           {!metricsResult && (
-            <div className="flex items-center justify-center py-6 text-slate-400">
-              <Loader2 className="h-5 w-5 animate-spin mr-2" /> Fetching metrics…
+            <div className="flex items-center justify-center py-8 gap-2" style={{ color: '#94A3B8' }}>
+              <Loader2 className="h-5 w-5 animate-spin" /> Fetching metrics…
             </div>
           )}
-
           {metricsResult && !metricsResult.ok && (
-            <div className="flex items-center gap-2 p-3 bg-rose-50 rounded-lg border border-rose-100 text-sm text-rose-700">
+            <div className="flex items-center gap-2.5 p-3.5 rounded-lg border text-sm"
+              style={{ background: '#FFF1F2', borderColor: '#FECDD3', color: '#BE123C' }}>
               <AlertTriangle className="h-4 w-4 shrink-0" />
-              <span>Engine unreachable: {metricsResult.error}</span>
+              Engine unreachable: {metricsResult.error}
             </div>
           )}
 
@@ -122,100 +125,94 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
             <>
               {/* System resources */}
               <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">System Resources</p>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-xs text-slate-500">
-                      <span className="flex items-center gap-1"><Cpu className="h-3 w-3" /> CPU</span>
-                      <span className="font-semibold" style={{ color: sys.cpu_percent > 80 ? '#ef4444' : '#0f172a' }}>
-                        {fmt(sys.cpu_percent)}%
-                      </span>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>System Resources</p>
+                <div className="grid grid-cols-2 gap-4">
+                  {[
+                    { icon: Cpu, label: 'CPU', value: `${fmt(sys.cpu_percent)}%`, pct: sys.cpu_percent, max: 100, color: sys.cpu_percent > 80 ? '#EF4444' : '#22577A' },
+                    { icon: MemoryStick, label: 'RAM (RSS)', value: `${fmt(sys.mem_rss_mb, 0)} MB`, pct: sys.mem_rss_mb, max: Math.max(sys.mem_rss_mb * 1.5, 512), color: '#38A3A5' },
+                  ].map(({ icon: Icon, label, value, pct, max, color }) => (
+                    <div key={label} className="space-y-1.5">
+                      <div className="flex justify-between text-xs">
+                        <span className="flex items-center gap-1" style={{ color: '#94A3B8' }}>
+                          <Icon className="h-3.5 w-3.5" /> {label}
+                        </span>
+                        <span className="font-semibold tabular-nums" style={{ color }}>{value}</span>
+                      </div>
+                      <GaugeBar value={pct} max={max} color={color} />
                     </div>
-                    <GaugeBar value={sys.cpu_percent} max={100} color={sys.cpu_percent > 80 ? '#ef4444' : '#6366f1'} />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-xs text-slate-500">
-                      <span className="flex items-center gap-1"><MemoryStick className="h-3 w-3" /> RAM (RSS)</span>
-                      <span className="font-semibold">{fmt(sys.mem_rss_mb, 0)} MB</span>
-                    </div>
-                    <GaugeBar value={sys.mem_rss_mb} max={Math.max(sys.mem_rss_mb * 1.5, 512)} color="#06b6d4" />
-                  </div>
+                  ))}
                   {sys.gpu_mem_total_mb > 0 && (
                     <>
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-xs text-slate-500">
-                          <span className="flex items-center gap-1"><Zap className="h-3 w-3" /> GPU Util</span>
-                          <span className="font-semibold">{fmt(sys.gpu_util_pct)}%</span>
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between text-xs">
+                          <span className="flex items-center gap-1" style={{ color: '#94A3B8' }}><Zap className="h-3.5 w-3.5" /> GPU Util</span>
+                          <span className="font-semibold tabular-nums" style={{ color: '#7C3AED' }}>{fmt(sys.gpu_util_pct)}%</span>
                         </div>
-                        <GaugeBar value={sys.gpu_util_pct} max={100} color="#a855f7" />
+                        <GaugeBar value={sys.gpu_util_pct} max={100} color="#7C3AED" />
                       </div>
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-xs text-slate-500">
-                          <span>GPU VRAM</span>
-                          <span className="font-semibold">{fmt(sys.gpu_mem_used_mb, 0)} / {fmt(sys.gpu_mem_total_mb, 0)} MB</span>
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between text-xs">
+                          <span style={{ color: '#94A3B8' }}>GPU VRAM</span>
+                          <span className="font-semibold tabular-nums" style={{ color: '#DB2777' }}>{fmt(sys.gpu_mem_used_mb, 0)} / {fmt(sys.gpu_mem_total_mb, 0)} MB</span>
                         </div>
-                        <GaugeBar value={sys.gpu_mem_used_mb} max={sys.gpu_mem_total_mb} color="#ec4899" />
+                        <GaugeBar value={sys.gpu_mem_used_mb} max={sys.gpu_mem_total_mb} color="#DB2777" />
                       </div>
                     </>
                   )}
                 </div>
               </div>
 
-              {/* Inference perf */}
+              {/* Inference */}
               <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Inference Performance</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>Inference Performance</p>
                 <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                  <StatCell label="YOLO avg" value={`${fmt(m.yolo?.lat_avg_ms)} ms`} />
-                  <StatCell label="YOLO p95" value={`${fmt(m.yolo?.lat_p95_ms)} ms`}
-                    color={(m.yolo?.lat_p95_ms ?? 0) > 200 ? '#f59e0b' : undefined} />
-                  <StatCell label="YOLO p99" value={`${fmt(m.yolo?.lat_p99_ms)} ms`}
-                    color={(m.yolo?.lat_p99_ms ?? 0) > 500 ? '#ef4444' : undefined} />
-                  <StatCell label="Tick avg" value={`${fmt(m.coordinator?.tick_avg_ms)} ms`} />
-                  <StatCell label="Tick p95" value={`${fmt(m.coordinator?.tick_p95_ms)} ms`}
-                    color={(m.coordinator?.tick_p95_ms ?? 0) > 150 ? '#f59e0b' : undefined} />
-                  <StatCell label="Sessions" value={`${m.coordinator?.active_sessions ?? m.sessions?.active ?? 0} / ${m.coordinator?.max_sessions ?? container.max_sessions}`} />
+                  <MetricCell label="YOLO avg" value={`${fmt(m.yolo?.lat_avg_ms)} ms`} />
+                  <MetricCell label="YOLO p95" value={`${fmt(m.yolo?.lat_p95_ms)} ms`} color={(m.yolo?.lat_p95_ms ?? 0) > 200 ? '#F59E0B' : undefined} />
+                  <MetricCell label="YOLO p99" value={`${fmt(m.yolo?.lat_p99_ms)} ms`} color={(m.yolo?.lat_p99_ms ?? 0) > 500 ? '#EF4444' : undefined} />
+                  <MetricCell label="Tick avg" value={`${fmt(m.coordinator?.tick_avg_ms)} ms`} />
+                  <MetricCell label="Tick p95" value={`${fmt(m.coordinator?.tick_p95_ms)} ms`} color={(m.coordinator?.tick_p95_ms ?? 0) > 150 ? '#F59E0B' : undefined} />
+                  <MetricCell label="Sessions" value={`${m.coordinator?.active_sessions ?? 0} / ${m.coordinator?.max_sessions ?? container.max_sessions}`} />
                 </div>
               </div>
 
-              {/* Overview stats */}
+              {/* Overview */}
               <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Session Stats</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>Session Stats</p>
                 <div className="grid grid-cols-4 gap-2">
-                  <StatCell label="Uptime" value={m.uptime ?? '—'} />
-                  <StatCell label="Requests" value={(m.requests?.total ?? 0).toLocaleString()} />
-                  <StatCell label="Total Alerts" value={m.events?.alerts_total ?? 0}
-                    color={(m.events?.alerts_total ?? 0) > 0 ? '#ef4444' : undefined} />
-                  <StatCell label="Total Warnings" value={m.events?.warnings_total ?? 0}
-                    color={(m.events?.warnings_total ?? 0) > 0 ? '#f59e0b' : undefined} />
+                  <MetricCell label="Uptime" value={m.uptime ?? '—'} />
+                  <MetricCell label="Requests" value={(m.requests?.total ?? 0).toLocaleString()} />
+                  <MetricCell label="Total Alerts" value={m.events?.alerts_total ?? 0} color={(m.events?.alerts_total ?? 0) > 0 ? '#EF4444' : undefined} />
+                  <MetricCell label="Warnings" value={m.events?.warnings_total ?? 0} color={(m.events?.warnings_total ?? 0) > 0 ? '#F59E0B' : undefined} />
                 </div>
               </div>
 
-              {/* Active sessions on this engine */}
+              {/* Active session details */}
               {Array.isArray(m.coordinator?.active_session_details) && m.coordinator.active_session_details.length > 0 && (
                 <div>
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Active Engine Sessions</p>
-                  <div className="rounded-lg overflow-hidden border border-slate-100">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>Active Engine Sessions</p>
+                  <div className="rounded-lg overflow-hidden border" style={{ borderColor: '#E2E8F0' }}>
                     <table className="w-full text-xs">
                       <thead>
-                        <tr className="bg-slate-50 border-b border-slate-100">
+                        <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #F1F5F9' }}>
                           {['Label', 'State', 'FPS', 'Risk', 'Risk State', 'Alerts', 'Warnings'].map(h => (
-                            <th key={h} className="px-3 py-2 text-left font-semibold text-slate-400 uppercase tracking-wider">{h}</th>
+                            <th key={h} className="px-3 py-2.5 text-left font-semibold uppercase tracking-wider"
+                              style={{ color: '#94A3B8' }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {m.coordinator.active_session_details.map((s: any, i: number) => (
-                          <tr key={i} className={i > 0 ? 'border-t border-slate-50' : ''}>
-                            <td className="px-3 py-2 font-medium">{s.label || s.pc_id?.slice(0, 8)}</td>
-                            <td className="px-3 py-2 text-slate-500">{s.state}</td>
-                            <td className="px-3 py-2 tabular-nums">{s.fps ?? '—'}</td>
-                            <td className="px-3 py-2 tabular-nums font-bold"
-                              style={{ color: s.risk_score >= 70 ? '#ef4444' : s.risk_score >= 40 ? '#f59e0b' : '#22c55e' }}>
+                          <tr key={i} style={{ borderTop: i > 0 ? '1px solid #F8FAFC' : 'none' }}>
+                            <td className="px-3 py-2.5 font-medium" style={{ color: '#0F172A' }}>{s.label || s.pc_id?.slice(0, 8)}</td>
+                            <td className="px-3 py-2.5" style={{ color: '#475569' }}>{s.state}</td>
+                            <td className="px-3 py-2.5 tabular-nums" style={{ color: '#475569' }}>{s.fps ?? '—'}</td>
+                            <td className="px-3 py-2.5 tabular-nums font-bold"
+                              style={{ color: s.risk_score >= 70 ? '#EF4444' : s.risk_score >= 40 ? '#F59E0B' : '#22C55E' }}>
                               {Math.round(s.risk_score ?? 0)}
                             </td>
-                            <td className="px-3 py-2">{s.risk_state}</td>
-                            <td className="px-3 py-2 tabular-nums" style={{ color: s.alerts > 0 ? '#ef4444' : '#94a3b8' }}>{s.alerts ?? 0}</td>
-                            <td className="px-3 py-2 tabular-nums" style={{ color: s.warnings > 0 ? '#f59e0b' : '#94a3b8' }}>{s.warnings ?? 0}</td>
+                            <td className="px-3 py-2.5" style={{ color: '#475569' }}>{s.risk_state}</td>
+                            <td className="px-3 py-2.5 tabular-nums font-semibold" style={{ color: s.alerts > 0 ? '#EF4444' : '#94A3B8' }}>{s.alerts ?? 0}</td>
+                            <td className="px-3 py-2.5 tabular-nums font-semibold" style={{ color: s.warnings > 0 ? '#F59E0B' : '#94A3B8' }}>{s.warnings ?? 0}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -225,36 +222,31 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
               )}
             </>
           )}
-        </CardContent>
+        </div>
       )}
-    </Card>
+    </div>
   );
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
-
 export default function EngineMonitorPage() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
-  const [metrics, setMetrics] = useState<MetricsResult[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [metrics, setMetrics]       = useState<MetricsResult[]>([]);
+  const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true);
     try {
-      const [containersRes, metricsRes] = await Promise.all([
+      const [cr, mr] = await Promise.all([
         api.get('/admin/engine/containers'),
         api.get('/admin/engine/metrics'),
       ]);
-      setContainers(containersRes.data);
-      setMetrics(metricsRes.data);
-    } catch {
-      if (!silent) toast.error('Failed to fetch engine data');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+      setContainers(cr.data);
+      setMetrics(mr.data);
+    } catch { if (!silent) toast.error('Failed to fetch engine data'); }
+    finally { setLoading(false); setRefreshing(false); }
   }, []);
 
   useEffect(() => {
@@ -264,79 +256,62 @@ export default function EngineMonitorPage() {
   }, [fetchAll]);
 
   const totalSlots = containers.reduce((s, c) => s + c.max_sessions, 0);
-  const usedSlots = containers.reduce((s, c) => s + c.active_sessions, 0);
-  const reachable = metrics.filter(m => m.ok).length;
+  const usedSlots  = containers.reduce((s, c) => s + c.active_sessions, 0);
+  const reachable  = metrics.filter(m => m.ok).length;
+  const healthy    = reachable === metrics.length;
 
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
       </div>
     );
   }
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-6 max-w-6xl pb-12">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Engine Monitor</h1>
-          <p className="text-sm text-slate-500 mt-0.5">Real-time proctoring engine health and resource usage</p>
+          <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Engine Monitor</h1>
+          <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>Real-time proctoring engine health and resource usage</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => fetchAll()} disabled={refreshing} className="gap-2">
-          <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
+        <button
+          onClick={() => fetchAll()} disabled={refreshing}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-150"
+          style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
+        </button>
       </div>
 
-      {/* Summary row */}
+      {/* Summary */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <Card className="shadow-none border-slate-200">
-          <CardContent className="pt-5 pb-4">
-            <p className="text-2xl font-bold text-slate-900">{containers.filter(c => c.is_active).length}</p>
-            <p className="text-xs text-slate-500 mt-0.5">Active Containers</p>
-          </CardContent>
-        </Card>
-        <Card className="shadow-none border-slate-200">
-          <CardContent className="pt-5 pb-4">
-            <p className="text-2xl font-bold text-slate-900">{usedSlots} / {totalSlots}</p>
-            <p className="text-xs text-slate-500 mt-0.5">Session Slots Used</p>
-          </CardContent>
-        </Card>
-        <Card className="shadow-none border-slate-200">
-          <CardContent className="pt-5 pb-4">
-            <p className={`text-2xl font-bold ${reachable === metrics.length ? 'text-emerald-600' : 'text-rose-600'}`}>
-              {reachable} / {metrics.length}
-            </p>
-            <p className="text-xs text-slate-500 mt-0.5">Containers Reachable</p>
-          </CardContent>
-        </Card>
-        <Card className="shadow-none border-slate-200">
-          <CardContent className="pt-5 pb-4">
-            <p className={`text-2xl font-bold ${reachable === metrics.length ? 'text-emerald-600' : 'text-amber-600'}`}>
-              {reachable === metrics.length ? 'Healthy' : 'Degraded'}
-            </p>
-            <p className="text-xs text-slate-500 mt-0.5">Overall Status</p>
-          </CardContent>
-        </Card>
+        {[
+          { label: 'Active Containers',    value: containers.filter(c => c.is_active).length, color: '#0F172A' },
+          { label: 'Session Slots Used',   value: `${usedSlots} / ${totalSlots}`,              color: '#0F172A' },
+          { label: 'Containers Reachable', value: `${reachable} / ${metrics.length}`,          color: healthy ? '#15803D' : '#BE123C' },
+          { label: 'Overall Status',       value: healthy ? 'Healthy' : 'Degraded',            color: healthy ? '#15803D' : '#D97706' },
+        ].map(({ label, value, color }) => (
+          <div key={label} className="bg-white rounded-xl border p-5"
+            style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+            <p className="text-2xl font-bold tabular-nums" style={{ color }}>{value}</p>
+            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{label}</p>
+          </div>
+        ))}
       </div>
 
-      {/* Per-container cards */}
+      {/* Containers */}
       {containers.length === 0 ? (
-        <Card className="border-slate-200">
-          <CardContent className="py-16 text-center text-slate-400">
-            <Server className="h-10 w-10 mx-auto mb-3 text-slate-200" />
-            <p>No engine containers configured.</p>
-          </CardContent>
-        </Card>
+        <div className="bg-white rounded-xl border p-16 text-center"
+          style={{ borderColor: '#E2E8F0' }}>
+          <Server className="h-10 w-10 mx-auto mb-3" style={{ color: '#E2E8F0' }} />
+          <p style={{ color: '#94A3B8' }}>No engine containers configured.</p>
+        </div>
       ) : (
         <div className="space-y-4">
           {containers.map(c => (
-            <ContainerCard
-              key={c.id}
-              container={c}
-              metricsResult={metrics.find(m => m.url === c.url)}
-            />
+            <ContainerCard key={c.id} container={c} metricsResult={metrics.find(m => m.url === c.url)} />
           ))}
         </div>
       )}

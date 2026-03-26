@@ -6,9 +6,6 @@ import {
   Trash2, AlertTriangle, Clock, Server, ChevronDown, ChevronRight,
   Eye, X, AlertCircle, BookOpen,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
   AlertDialogContent, AlertDialogDescription,
@@ -56,15 +53,15 @@ const RISK_COLORS: Record<string, string> = {
 };
 
 function RiskBadge({ state }: { state: string | null }) {
-  if (!state) return <span className="text-xs text-slate-400">—</span>;
+  if (!state) return <span className="text-xs" style={{ color: '#94A3B8' }}>—</span>;
   const color = RISK_COLORS[state] ?? '#64748b';
   const labels: Record<string, string> = {
     NORMAL: 'Normal', WARNING: 'Warning', HIGH_RISK: 'High Risk',
     ADMIN_REVIEW: 'Review', TERMINATED: 'Terminated',
   };
   return (
-    <span className="text-xs font-bold px-2 py-0.5 rounded border"
-      style={{ background: `${color}22`, color, borderColor: `${color}44` }}>
+    <span className="text-xs font-bold px-2 py-0.5 rounded-md border"
+      style={{ background: `${color}18`, color, borderColor: `${color}40` }}>
       {labels[state] ?? state}
     </span>
   );
@@ -72,17 +69,19 @@ function RiskBadge({ state }: { state: string | null }) {
 
 function SessionStatusBadge({ status }: { status: string | null }) {
   if (!status) return null;
-  const map: Record<string, string> = {
-    ACTIVE: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-    ENDED: 'bg-slate-100 text-slate-600 border-slate-200',
-    TERMINATED: 'bg-rose-100 text-rose-700 border-rose-200',
-    DISCONNECTED: 'bg-amber-100 text-amber-700 border-amber-200',
-    CREATED: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+  const map: Record<string, { bg: string; color: string; border: string }> = {
+    ACTIVE:       { bg: '#ECFDF5', color: '#15803D', border: '#BBF7D0' },
+    ENDED:        { bg: '#F8FAFC', color: '#475569', border: '#E2E8F0' },
+    TERMINATED:   { bg: '#FFF1F2', color: '#BE123C', border: '#FECDD3' },
+    DISCONNECTED: { bg: '#FFFBEB', color: '#B45309', border: '#FDE68A' },
+    CREATED:      { bg: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' },
   };
+  const s = map[status] ?? { bg: '#F8FAFC', color: '#475569', border: '#E2E8F0' };
   return (
-    <Badge variant="outline" className={`text-xs ${map[status] ?? 'bg-slate-100 text-slate-600'}`}>
+    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold border"
+      style={{ background: s.bg, color: s.color, borderColor: s.border }}>
       {status.charAt(0) + status.slice(1).toLowerCase()}
-    </Badge>
+    </span>
   );
 }
 
@@ -103,7 +102,6 @@ function shortenUrl(url: string) {
   try { const u = new URL(url); return u.hostname + (u.port ? `:${u.port}` : ''); } catch { return url; }
 }
 
-// Group reports by exam
 function groupByExam(reports: EngineReport[]): ExamGroup[] {
   const map = new Map<string, ExamGroup>();
   for (const r of reports) {
@@ -122,7 +120,6 @@ function groupByExam(reports: EngineReport[]): ExamGroup[] {
     g.totalAlerts += r.alert_count ?? 0;
     g.totalSize += r.size_kb ?? 0;
   }
-  // Sort groups: named exams first, orphan last
   return Array.from(map.values()).sort((a, b) =>
     a.exam_id === null ? 1 : b.exam_id === null ? -1 : a.exam_title.localeCompare(b.exam_title)
   );
@@ -146,16 +143,21 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
   }, [report.report_id, report.engine_url]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(15,23,42,0.5)' }}>
+      <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden"
+        style={{ boxShadow: '0 20px 60px rgba(15,23,42,0.25)', border: '1px solid #E2E8F0' }}>
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-200">
+        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
           <div>
-            <p className="font-bold text-slate-900">{report.student_name ?? 'Unknown Student'}</p>
-            <p className="text-xs text-slate-400 mt-0.5 font-mono">{report.report_id}</p>
+            <p className="font-bold text-sm" style={{ color: '#0F172A' }}>{report.student_name ?? 'Unknown Student'}</p>
+            <p className="text-xs mt-0.5 font-mono" style={{ color: '#94A3B8' }}>{report.report_id}</p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-            <X className="h-5 w-5" />
+          <button onClick={onClose}
+            className="p-1.5 rounded-lg transition-colors"
+            style={{ color: '#94A3B8' }}
+            onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#475569'}
+            onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#94A3B8'}>
+            <X className="h-4 w-4" />
           </button>
         </div>
 
@@ -163,11 +165,12 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {loading && (
             <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-8 w-8 animate-spin text-slate-300" />
+              <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
             </div>
           )}
           {error && (
-            <div className="flex items-center gap-2 p-4 bg-rose-50 rounded-lg border border-rose-200 text-rose-700">
+            <div className="flex items-center gap-2 p-4 rounded-lg border text-sm"
+              style={{ background: '#FFF1F2', borderColor: '#FECDD3', color: '#BE123C' }}>
               <AlertCircle className="h-4 w-4 shrink-0" /> {error}
             </div>
           )}
@@ -176,23 +179,24 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
               {/* Summary grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
-                  { label: 'Risk State', value: <RiskBadge state={data.risk_state} /> },
-                  { label: 'Final Score', value: <span className="font-bold text-slate-800">{data.final_score?.toFixed(0) ?? '—'}</span> },
-                  { label: 'Alerts', value: <span className="font-bold text-rose-500">{data.alert_count ?? 0}</span> },
-                  { label: 'Warnings', value: <span className="font-bold text-amber-500">{data.warning_count ?? 0}</span> },
-                  { label: 'Duration', value: fmtDuration(data.duration_s) },
-                  { label: 'Size', value: data.size_kb ? `${data.size_kb.toFixed(0)} KB` : '—' },
-                  { label: 'Proofs', value: data.proof_count ?? 0 },
-                  { label: 'Terminated', value: data.terminated ? <span className="text-rose-500 font-semibold">Yes</span> : 'No' },
+                  { label: 'Risk State',  value: <RiskBadge state={data.risk_state} /> },
+                  { label: 'Final Score', value: <span className="font-bold" style={{ color: '#0F172A' }}>{data.final_score?.toFixed(0) ?? '—'}</span> },
+                  { label: 'Alerts',      value: <span className="font-bold" style={{ color: '#BE123C' }}>{data.alert_count ?? 0}</span> },
+                  { label: 'Warnings',    value: <span className="font-bold" style={{ color: '#B45309' }}>{data.warning_count ?? 0}</span> },
+                  { label: 'Duration',    value: <span style={{ color: '#475569' }}>{fmtDuration(data.duration_s)}</span> },
+                  { label: 'Size',        value: <span style={{ color: '#475569' }}>{data.size_kb ? `${data.size_kb.toFixed(0)} KB` : '—'}</span> },
+                  { label: 'Proofs',      value: <span style={{ color: '#475569' }}>{data.proof_count ?? 0}</span> },
+                  { label: 'Terminated',  value: data.terminated ? <span className="font-semibold" style={{ color: '#BE123C' }}>Yes</span> : <span style={{ color: '#475569' }}>No</span> },
                 ].map(({ label, value }) => (
-                  <div key={label} className="bg-slate-50 rounded-lg p-3 border border-slate-100">
-                    <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">{label}</p>
+                  <div key={label} className="rounded-lg p-3 border"
+                    style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#94A3B8' }}>{label}</p>
                     <div className="text-sm">{value}</div>
                   </div>
                 ))}
               </div>
 
-              {/* Events — handle alert_log/warning_log or legacy events array */}
+              {/* Events */}
               {(() => {
                 const alerts: any[] = (data.alert_log ?? []).map((e: any) => ({ ...e, _type: 'alert' }));
                 const warnings: any[] = (data.warning_log ?? []).map((e: any) => ({ ...e, _type: 'warning' }));
@@ -201,20 +205,26 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
                 if (!all.length) return null;
                 return (
                   <div>
-                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: '#94A3B8' }}>
                       Events ({all.length})
                     </p>
                     <div className="space-y-1.5 max-h-64 overflow-y-auto">
                       {all.map((ev: any, i: number) => (
-                        <div key={i} className={`flex items-start gap-2 px-3 py-2 rounded-lg text-xs border ${
-                          ev._type === 'alert'
-                            ? 'bg-rose-50/50 border-rose-100 text-rose-700'
-                            : 'bg-amber-50/50 border-amber-100 text-amber-700'
-                        }`}>
-                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs border"
+                          style={ev._type === 'alert'
+                            ? { background: '#FFF1F2', borderColor: '#FECDD3' }
+                            : { background: '#FFFBEB', borderColor: '#FDE68A' }}>
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5"
+                            style={{ color: ev._type === 'alert' ? '#BE123C' : '#B45309' }} />
                           <div className="flex-1 min-w-0">
-                            <p className="font-medium">{ev.message || ev.key || ev._type}</p>
-                            {ev.score_added > 0 && <p className="text-xs opacity-75">+{(ev.score_added as number).toFixed(1)} pts</p>}
+                            <p className="font-medium" style={{ color: ev._type === 'alert' ? '#BE123C' : '#B45309' }}>
+                              {ev.message || ev.key || ev._type}
+                            </p>
+                            {ev.score_added > 0 && (
+                              <p className="text-xs mt-0.5 opacity-75" style={{ color: ev._type === 'alert' ? '#BE123C' : '#B45309' }}>
+                                +{(ev.score_added as number).toFixed(1)} pts
+                              </p>
+                            )}
                             {ev.proof_url && (() => {
                               const raw: string = ev.proof_url;
                               const eu = report.engine_url ?? '';
@@ -230,12 +240,14 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
                                     const res = await api.get(proxyHref, { responseType: 'blob' });
                                     const url = URL.createObjectURL(res.data);
                                     window.open(url, '_blank');
-                                  } catch { toast.error("Failed to load proof image"); }
-                                }} className="text-blue-500 underline text-xs text-left">View proof</button>
+                                  } catch { toast.error('Failed to load proof image'); }
+                                }} className="underline text-xs text-left mt-0.5" style={{ color: '#22577A' }}>
+                                  View proof
+                                </button>
                               );
                             })()}
                           </div>
-                          <span className="text-xs opacity-60 shrink-0">
+                          <span className="text-xs shrink-0 opacity-60" style={{ color: ev._type === 'alert' ? '#BE123C' : '#B45309' }}>
                             {ev.elapsed_s != null ? `${Math.floor(ev.elapsed_s / 60)}:${String(Math.round(ev.elapsed_s % 60)).padStart(2, '0')}` : ev.time ?? ''}
                           </span>
                         </div>
@@ -247,8 +259,13 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
 
               {/* Raw JSON toggle */}
               <details>
-                <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">View raw JSON</summary>
-                <pre className="mt-2 text-xs bg-slate-50 border border-slate-200 rounded-lg p-3 overflow-auto max-h-48">
+                <summary className="text-xs cursor-pointer transition-colors" style={{ color: '#94A3B8' }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#475569'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#94A3B8'}>
+                  View raw JSON
+                </summary>
+                <pre className="mt-2 text-xs rounded-lg p-3 overflow-auto max-h-48"
+                  style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', color: '#475569' }}>
                   {JSON.stringify(data, null, 2)}
                 </pre>
               </details>
@@ -276,84 +293,124 @@ function ExamGroupCard({
   const [open, setOpen] = useState(false);
 
   return (
-    <Card className="border-slate-200 shadow-none overflow-hidden">
+    <div className="bg-white rounded-xl border overflow-hidden"
+      style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
       {/* Group header */}
       <button
-        className="w-full flex items-center justify-between p-4 hover:bg-slate-50 transition-colors"
+        className="w-full flex items-center justify-between px-5 py-4 transition-colors text-left"
+        style={{ background: open ? '#F8FAFC' : '#fff' }}
+        onMouseEnter={e => { if (!open) (e.currentTarget as HTMLElement).style.background = '#F8FAFC'; }}
+        onMouseLeave={e => { if (!open) (e.currentTarget as HTMLElement).style.background = '#fff'; }}
         onClick={() => setOpen(o => !o)}
       >
         <div className="flex items-center gap-3 min-w-0">
-          <BookOpen className="h-4 w-4 text-indigo-500 shrink-0" />
+          <div className="p-1.5 rounded-lg shrink-0" style={{ background: '#EFF6FF' }}>
+            <BookOpen className="h-4 w-4" style={{ color: '#22577A' }} />
+          </div>
           <div className="text-left min-w-0">
-            <p className="font-semibold text-slate-900 truncate">{group.exam_title}</p>
-            <p className="text-xs text-slate-400">
+            <p className="font-semibold text-sm truncate" style={{ color: '#0F172A' }}>{group.exam_title}</p>
+            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
               {group.reports.length} report{group.reports.length !== 1 ? 's' : ''}
               {' · '}
-              <span className="text-rose-500">{group.totalAlerts} alerts</span>
+              <span style={{ color: '#BE123C' }}>{group.totalAlerts} alerts</span>
               {' · '}
               {(group.totalSize / 1024).toFixed(1)} MB
             </p>
           </div>
         </div>
-        {open ? <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" /> : <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />}
+        {open
+          ? <ChevronDown className="h-4 w-4 shrink-0" style={{ color: '#94A3B8' }} />
+          : <ChevronRight className="h-4 w-4 shrink-0" style={{ color: '#94A3B8' }} />
+        }
       </button>
 
       {/* Reports list */}
       {open && (
-        <div className="border-t border-slate-100 divide-y divide-slate-50">
-          {group.reports.map(r => (
-            <div key={`${r.engine_url}:${r.report_id}`} className="p-4 flex flex-col sm:flex-row sm:items-center gap-4">
+        <div style={{ borderTop: '1px solid #F1F5F9' }}>
+          {group.reports.map((r, idx) => (
+            <div key={`${r.engine_url}:${r.report_id}`}
+              className="flex flex-col sm:flex-row sm:items-center gap-4 px-5 py-4"
+              style={{ borderTop: idx > 0 ? '1px solid #F8FAFC' : undefined }}>
               {/* Student info */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap mb-1">
-                  <p className="font-medium text-slate-800 text-sm">
-                    {r.student_name ?? <span className="text-slate-400 italic text-xs">Unknown student</span>}
+                  <p className="font-medium text-sm" style={{ color: '#0F172A' }}>
+                    {r.student_name ?? <span className="italic text-xs" style={{ color: '#94A3B8' }}>Unknown student</span>}
                   </p>
                   <SessionStatusBadge status={r.session_status} />
                   {r.terminated && (
-                    <Badge variant="outline" className="text-xs bg-rose-50 text-rose-600 border-rose-200">Terminated</Badge>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold border"
+                      style={{ background: '#FFF1F2', color: '#BE123C', borderColor: '#FECDD3' }}>
+                      Terminated
+                    </span>
                   )}
                 </div>
-                {r.student_email && <p className="text-xs text-slate-400">{r.student_email}</p>}
-                <div className="flex items-center gap-3 text-xs text-slate-400 mt-1 flex-wrap">
-                  <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{fmtDateTime(r.session_end)}</span>
+                {r.student_email && <p className="text-xs" style={{ color: '#94A3B8' }}>{r.student_email}</p>}
+                <div className="flex items-center gap-3 text-xs mt-1 flex-wrap" style={{ color: '#94A3B8' }}>
+                  <span className="flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    {fmtDateTime(r.session_end)}
+                  </span>
                   <span>{fmtDuration(r.duration_s)}</span>
-                  <span className="flex items-center gap-1"><Server className="h-3 w-3" />{shortenUrl(r.engine_url)}</span>
-                  <span className="font-mono text-slate-300 text-xs">{r.report_id.slice(0, 12)}…</span>
+                  <span className="flex items-center gap-1">
+                    <Server className="h-3 w-3" />
+                    {shortenUrl(r.engine_url)}
+                  </span>
+                  <span className="font-mono" style={{ color: '#CBD5E1' }}>{r.report_id.slice(0, 12)}…</span>
                 </div>
               </div>
 
               {/* Metrics */}
               <div className="flex items-center gap-4 shrink-0 flex-wrap">
-                <div className="text-center"><RiskBadge state={r.risk_state} /><p className="text-xs text-slate-400 mt-1">Risk</p></div>
-                <div className="text-center"><p className="text-lg font-bold text-rose-500">{r.alert_count ?? 0}</p><p className="text-xs text-slate-400">Alerts</p></div>
-                <div className="text-center"><p className="text-lg font-bold text-amber-500">{r.warning_count ?? 0}</p><p className="text-xs text-slate-400">Warns</p></div>
-                <div className="text-center"><p className="text-sm font-semibold text-slate-500">{r.size_kb ? `${r.size_kb.toFixed(0)} KB` : '—'}</p><p className="text-xs text-slate-400">Size</p></div>
+                <div className="text-center">
+                  <RiskBadge state={r.risk_state} />
+                  <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Risk</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-bold" style={{ color: '#BE123C' }}>{r.alert_count ?? 0}</p>
+                  <p className="text-xs" style={{ color: '#94A3B8' }}>Alerts</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-bold" style={{ color: '#B45309' }}>{r.warning_count ?? 0}</p>
+                  <p className="text-xs" style={{ color: '#94A3B8' }}>Warns</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-semibold" style={{ color: '#475569' }}>
+                    {r.size_kb ? `${r.size_kb.toFixed(0)} KB` : '—'}
+                  </p>
+                  <p className="text-xs" style={{ color: '#94A3B8' }}>Size</p>
+                </div>
 
                 {/* Actions */}
                 <div className="flex gap-1">
-                  <Button
-                    variant="outline" size="icon"
-                    className="h-8 w-8 border-slate-200 text-slate-500 hover:bg-slate-50"
+                  <button
                     onClick={() => onView(r)}
+                    className="h-8 w-8 flex items-center justify-center rounded-lg border transition-all duration-150"
+                    style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#F8FAFC'; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '#fff'; }}
                   >
                     <Eye className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="outline" size="icon"
-                    className="h-8 w-8 border-rose-200 text-rose-500 hover:bg-rose-50"
+                  </button>
+                  <button
+                    className="h-8 w-8 flex items-center justify-center rounded-lg border transition-all duration-150"
+                    style={{ borderColor: '#FECDD3', color: '#BE123C', background: '#fff' }}
                     disabled={deleting === r.report_id}
                     onClick={() => onDelete(r)}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#FFF1F2'; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '#fff'; }}
                   >
-                    {deleting === r.report_id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                  </Button>
+                    {deleting === r.report_id
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Trash2 className="h-4 w-4" />}
+                  </button>
                 </div>
               </div>
             </div>
           ))}
         </div>
       )}
-    </Card>
+    </div>
   );
 }
 
@@ -415,12 +472,11 @@ export default function SysAdminReportsPage() {
   const groups = groupByExam(reports);
   const totalAlerts = reports.reduce((s, r) => s + (r.alert_count ?? 0), 0);
   const totalSize = reports.reduce((s, r) => s + (r.size_kb ?? 0), 0);
-  const engineCount = new Set(reports.map(r => r.engine_url)).size;
 
   if (loading) {
     return (
       <div className="flex items-center justify-center p-24">
-        <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
       </div>
     );
   }
@@ -431,21 +487,27 @@ export default function SysAdminReportsPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Engine Reports</h1>
-            <p className="text-sm text-slate-500 mt-0.5">All proctoring session reports, grouped by exam</p>
+            <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Engine Reports</h1>
+            <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>All proctoring session reports, grouped by exam</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={fetchReports} className="gap-2 border-slate-200">
-              <RefreshCw className="h-4 w-4" /> Refresh
-            </Button>
+            <button
+              onClick={fetchReports}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-150"
+              style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            </button>
             {reports.length > 0 && (
-              <Button
-                variant="outline" size="sm"
-                className="gap-2 border-rose-200 text-rose-600 hover:bg-rose-50"
+              <button
                 onClick={() => setConfirmDeleteAll(true)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-150"
+                style={{ borderColor: '#FECDD3', color: '#BE123C', background: '#fff' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#FFF1F2'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '#fff'; }}
               >
-                <Trash2 className="h-4 w-4" /> Delete All
-              </Button>
+                <Trash2 className="h-3.5 w-3.5" /> Delete All
+              </button>
             )}
           </div>
         </div>
@@ -453,35 +515,33 @@ export default function SysAdminReportsPage() {
         {/* Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           {[
-            { label: 'Total Reports',  value: reports.length,                      icon: FileText,   color: 'indigo'  },
-            { label: 'Total Alerts',   value: totalAlerts,                          icon: ShieldAlert, color: 'rose'   },
-            { label: 'Storage Used',   value: `${(totalSize / 1024).toFixed(1)} MB`, icon: HardDrive,  color: 'amber'  },
-            { label: 'Exam Groups',    value: groups.length,                        icon: BookOpen,   color: 'emerald' },
-          ].map(({ label, value, icon: Icon, color }) => (
-            <Card key={label} className="shadow-none border-slate-200">
-              <CardContent className="pt-5 pb-4">
-                <div className="flex items-center gap-3">
-                  <div className={`bg-${color}-100 p-2 rounded-lg`}>
-                    <Icon className={`h-5 w-5 text-${color}-600`} />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold text-slate-900">{value}</p>
-                    <p className="text-xs text-slate-500">{label}</p>
-                  </div>
+            { label: 'Total Reports', value: reports.length,                         iconBg: '#EFF6FF', iconColor: '#22577A', Icon: FileText   },
+            { label: 'Total Alerts',  value: totalAlerts,                             iconBg: '#FFF1F2', iconColor: '#BE123C', Icon: ShieldAlert },
+            { label: 'Storage Used',  value: `${(totalSize / 1024).toFixed(1)} MB`,  iconBg: '#FFFBEB', iconColor: '#B45309', Icon: HardDrive   },
+            { label: 'Exam Groups',   value: groups.length,                           iconBg: '#ECFDF5', iconColor: '#15803D', Icon: BookOpen    },
+          ].map(({ label, value, iconBg, iconColor, Icon }) => (
+            <div key={label} className="bg-white rounded-xl border p-5"
+              style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg shrink-0" style={{ background: iconBg }}>
+                  <Icon className="h-5 w-5" style={{ color: iconColor }} />
                 </div>
-              </CardContent>
-            </Card>
+                <div>
+                  <p className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.02em' }}>{value}</p>
+                  <p className="text-xs" style={{ color: '#94A3B8' }}>{label}</p>
+                </div>
+              </div>
+            </div>
           ))}
         </div>
 
         {/* Grouped reports */}
         {groups.length === 0 ? (
-          <Card className="border-slate-200 shadow-none">
-            <CardContent className="py-16 text-center">
-              <FileText className="h-12 w-12 text-slate-300 mx-auto mb-3" />
-              <p className="text-slate-500">No reports found across any engine.</p>
-            </CardContent>
-          </Card>
+          <div className="bg-white rounded-xl border py-16 text-center"
+            style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+            <FileText className="h-12 w-12 mx-auto mb-3" style={{ color: '#E2E8F0' }} />
+            <p className="text-sm" style={{ color: '#94A3B8' }}>No reports found across any engine.</p>
+          </div>
         ) : (
           <div className="space-y-3">
             {groups.map(g => (
@@ -514,7 +574,8 @@ export default function SysAdminReportsPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction className="bg-rose-600 hover:bg-rose-700"
+            <AlertDialogAction
+              style={{ background: '#DC2626' }}
               onClick={() => confirmDelete && handleDelete(confirmDelete)}>
               Delete
             </AlertDialogAction>
@@ -534,11 +595,11 @@ export default function SysAdminReportsPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-rose-600 hover:bg-rose-700"
+              style={{ background: '#DC2626' }}
               onClick={handleDeleteAll}
               disabled={deletingAll}
             >
-              {deletingAll ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              {deletingAll ? <Loader2 className="h-4 w-4 animate-spin mr-2 inline" /> : null}
               Delete All Reports
             </AlertDialogAction>
           </AlertDialogFooter>

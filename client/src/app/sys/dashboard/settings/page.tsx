@@ -1,13 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import {
-  User, Lock, Save, Loader2, Eye, EyeOff, ShieldCheck,
-} from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { User, Lock, Save, Loader2, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
 
@@ -19,17 +13,38 @@ interface Profile {
   created_at: string | null;
 }
 
+function Section({ title, icon: Icon, children }: { title: string; icon: any; children: React.ReactNode }) {
+  return (
+    <div className="bg-white rounded-xl border overflow-hidden"
+      style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+      <div className="flex items-center gap-2.5 px-5 py-4"
+        style={{ borderBottom: '1px solid #F1F5F9' }}>
+        <Icon className="h-4 w-4" style={{ color: '#22577A' }} />
+        <p className="text-sm font-semibold" style={{ color: '#0F172A' }}>{title}</p>
+      </div>
+      <div className="p-5">{children}</div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: '#94A3B8' }}>{label}</p>
+      <div className="text-sm font-medium" style={{ color: '#0F172A' }}>{children}</div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-
-  // Password change state
-  const [current, setCurrent] = useState('');
-  const [newPass, setNewPass] = useState('');
-  const [confirm, setConfirm] = useState('');
+  const [current, setCurrent]     = useState('');
+  const [newPass, setNewPass]     = useState('');
+  const [confirm, setConfirm]     = useState('');
   const [showCurrent, setShowCurrent] = useState(false);
-  const [showNew, setShowNew] = useState(false);
-  const [savingPw, setSavingPw] = useState(false);
+  const [showNew, setShowNew]         = useState(false);
+  const [savingPw, setSavingPw]       = useState(false);
 
   useEffect(() => {
     api.get('/auth/me')
@@ -50,127 +65,132 @@ export default function SettingsPage() {
     } catch (err: any) {
       const detail = err.response?.data?.detail;
       toast.error(typeof detail === 'string' ? detail : Array.isArray(detail) ? detail[0]?.msg : 'Failed to change password');
-    } finally {
-      setSavingPw(false);
-    }
+    } finally { setSavingPw(false); }
   };
 
   if (loading) {
     return (
       <div className="flex items-center justify-center p-24">
-        <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
       </div>
     );
   }
 
+  const inputBase = "w-full px-3 py-2.5 text-sm rounded-lg border outline-none transition-all";
+
   return (
-    <div className="max-w-2xl space-y-6 pb-12">
+    <div className="max-w-xl space-y-6 pb-12">
+      {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Settings</h1>
-        <p className="text-sm text-slate-500 mt-0.5">Manage your account and security preferences</p>
+        <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Settings</h1>
+        <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>Manage your account and security preferences</p>
       </div>
 
-      {/* Profile card (read-only) */}
-      <Card className="border-slate-200 shadow-none">
-        <CardHeader className="pb-3 border-b border-slate-100">
-          <CardTitle className="text-base flex items-center gap-2 text-slate-800">
-            <User className="h-4 w-4 text-indigo-500" /> Account Info
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-5 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <Label className="text-xs text-slate-400">Full Name</Label>
-              <p className="text-sm font-medium text-slate-800 mt-0.5">{profile?.full_name ?? '—'}</p>
-            </div>
-            <div>
-              <Label className="text-xs text-slate-400">Email</Label>
-              <p className="text-sm font-medium text-slate-800 mt-0.5">{profile?.email ?? '—'}</p>
-            </div>
-            <div>
-              <Label className="text-xs text-slate-400">Role</Label>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <ShieldCheck className="h-3.5 w-3.5 text-purple-500" />
-                <p className="text-sm font-medium text-slate-800">{profile?.role ?? '—'}</p>
-              </div>
-            </div>
-            <div>
-              <Label className="text-xs text-slate-400">Last Login</Label>
-              <p className="text-sm text-slate-600 mt-0.5">
-                {profile?.last_login ? new Date(profile.last_login).toLocaleString() : 'Never'}
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Profile */}
+      <Section title="Account Info" icon={User}>
+        <div className="grid grid-cols-2 gap-5">
+          <Field label="Full Name">{profile?.full_name ?? '—'}</Field>
+          <Field label="Email">{profile?.email ?? '—'}</Field>
+          <Field label="Role">
+            <span className="inline-flex items-center gap-1.5">
+              <ShieldCheck className="h-3.5 w-3.5" style={{ color: '#7C3AED' }} />
+              {profile?.role ?? '—'}
+            </span>
+          </Field>
+          <Field label="Last Login">
+            <span style={{ color: '#475569', fontWeight: 400 }}>
+              {profile?.last_login ? new Date(profile.last_login).toLocaleString() : 'Never'}
+            </span>
+          </Field>
+        </div>
+      </Section>
 
       {/* Change password */}
-      <Card className="border-slate-200 shadow-none">
-        <CardHeader className="pb-3 border-b border-slate-100">
-          <CardTitle className="text-base flex items-center gap-2 text-slate-800">
-            <Lock className="h-4 w-4 text-indigo-500" /> Change Password
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-5">
-          <form onSubmit={handleChangePassword} className="space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-sm">Current Password</Label>
-              <div className="relative">
-                <Input
-                  type={showCurrent ? 'text' : 'password'}
-                  value={current}
-                  onChange={e => setCurrent(e.target.value)}
-                  placeholder="Enter current password"
-                  className="pr-10 border-slate-200"
-                  required
-                />
-                <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  onClick={() => setShowCurrent(v => !v)}>
-                  {showCurrent ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-sm">New Password</Label>
-              <div className="relative">
-                <Input
-                  type={showNew ? 'text' : 'password'}
-                  value={newPass}
-                  onChange={e => setNewPass(e.target.value)}
-                  placeholder="At least 8 characters"
-                  className="pr-10 border-slate-200"
-                  required minLength={8}
-                />
-                <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  onClick={() => setShowNew(v => !v)}>
-                  {showNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-sm">Confirm New Password</Label>
-              <Input
-                type="password"
-                value={confirm}
-                onChange={e => setConfirm(e.target.value)}
-                placeholder="Repeat new password"
-                className={`border-slate-200 ${confirm && confirm !== newPass ? 'border-rose-300 focus-visible:ring-rose-300' : ''}`}
+      <Section title="Change Password" icon={Lock}>
+        <form onSubmit={handleChangePassword} className="space-y-4">
+          {/* Current password */}
+          <div>
+            <label className="block text-sm font-medium mb-1.5" style={{ color: '#475569' }}>Current Password</label>
+            <div className="relative">
+              <input
+                type={showCurrent ? 'text' : 'password'}
+                value={current}
+                onChange={e => setCurrent(e.target.value)}
+                placeholder="Enter current password"
                 required
+                className={inputBase}
+                style={{ borderColor: '#E2E8F0', color: '#0F172A', paddingRight: '2.5rem' }}
+                onFocus={e => { (e.target as HTMLElement).style.borderColor = '#38A3A5'; (e.target as HTMLElement).style.boxShadow = '0 0 0 3px rgba(56,163,165,0.12)'; }}
+                onBlur={e => { (e.target as HTMLElement).style.borderColor = '#E2E8F0'; (e.target as HTMLElement).style.boxShadow = 'none'; }}
               />
-              {confirm && confirm !== newPass && (
-                <p className="text-xs text-rose-500">Passwords do not match</p>
-              )}
+              <button type="button" onClick={() => setShowCurrent(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 transition-colors"
+                style={{ color: '#94A3B8' }}>
+                {showCurrent ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
             </div>
+          </div>
 
-            <Button type="submit" disabled={savingPw || !current || !newPass || newPass !== confirm} className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white">
-              {savingPw ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              Update Password
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+          {/* New password */}
+          <div>
+            <label className="block text-sm font-medium mb-1.5" style={{ color: '#475569' }}>New Password</label>
+            <div className="relative">
+              <input
+                type={showNew ? 'text' : 'password'}
+                value={newPass}
+                onChange={e => setNewPass(e.target.value)}
+                placeholder="At least 8 characters"
+                required minLength={8}
+                className={inputBase}
+                style={{ borderColor: '#E2E8F0', color: '#0F172A', paddingRight: '2.5rem' }}
+                onFocus={e => { (e.target as HTMLElement).style.borderColor = '#38A3A5'; (e.target as HTMLElement).style.boxShadow = '0 0 0 3px rgba(56,163,165,0.12)'; }}
+                onBlur={e => { (e.target as HTMLElement).style.borderColor = '#E2E8F0'; (e.target as HTMLElement).style.boxShadow = 'none'; }}
+              />
+              <button type="button" onClick={() => setShowNew(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 transition-colors"
+                style={{ color: '#94A3B8' }}>
+                {showNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+
+          {/* Confirm */}
+          <div>
+            <label className="block text-sm font-medium mb-1.5" style={{ color: '#475569' }}>Confirm New Password</label>
+            <input
+              type="password"
+              value={confirm}
+              onChange={e => setConfirm(e.target.value)}
+              placeholder="Repeat new password"
+              required
+              className={inputBase}
+              style={{
+                borderColor: confirm && confirm !== newPass ? '#EF4444' : '#E2E8F0',
+                color: '#0F172A',
+                boxShadow: confirm && confirm !== newPass ? '0 0 0 3px rgba(239,68,68,0.10)' : 'none',
+              }}
+              onFocus={e => { if (!confirm || confirm === newPass) { (e.target as HTMLElement).style.borderColor = '#38A3A5'; (e.target as HTMLElement).style.boxShadow = '0 0 0 3px rgba(56,163,165,0.12)'; } }}
+              onBlur={e => { if (!confirm || confirm === newPass) { (e.target as HTMLElement).style.borderColor = '#E2E8F0'; (e.target as HTMLElement).style.boxShadow = 'none'; } }}
+            />
+            {confirm && confirm !== newPass && (
+              <p className="text-xs mt-1.5" style={{ color: '#EF4444' }}>Passwords do not match</p>
+            )}
+          </div>
+
+          <button
+            type="submit"
+            disabled={savingPw || !current || !newPass || newPass !== confirm}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-white transition-all duration-150"
+            style={{
+              background: savingPw || !current || !newPass || newPass !== confirm ? '#94A3B8' : '#22577A',
+              cursor: savingPw || !current || !newPass || newPass !== confirm ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {savingPw ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Update Password
+          </button>
+        </form>
+      </Section>
     </div>
   );
 }

@@ -2,11 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, AlertTriangle, ClipboardCheck, Loader2, MessageSquare, ArrowRight } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, ClipboardCheck, Loader2, MessageSquare, ArrowRight, RefreshCw } from 'lucide-react';
 import api from '@/lib/axios';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 
 interface PendingAppeal {
   resume_request_id: string;
@@ -47,94 +44,124 @@ export default function AdminAppealsInboxPage() {
   }, [fetchAppeals]);
 
   return (
-    <div className="space-y-6 pb-10">
+    <div className="space-y-6 pb-10 max-w-3xl">
+      {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <Button variant="outline" size="icon" onClick={() => router.push('/admin/dashboard')} className="h-10 w-10">
+          <button
+            onClick={() => router.push('/admin/dashboard')}
+            className="h-9 w-9 flex items-center justify-center rounded-lg border transition-all duration-150"
+            style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+            onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#F8FAFC'}
+            onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = '#fff'}
+          >
             <ArrowLeft className="h-4 w-4" />
-          </Button>
+          </button>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Appeal Inbox</h1>
-            <p className="text-sm text-slate-500">Pending student appeals that need fast review.</p>
+            <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Appeal Inbox</h1>
+            <p className="text-sm mt-0.5" style={{ color: '#94A3B8' }}>Pending student appeals that need fast review.</p>
           </div>
         </div>
-        <Button variant="outline" onClick={fetchAppeals}>Refresh</Button>
+        <button
+          onClick={fetchAppeals}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-150"
+          style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+        >
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </button>
       </div>
 
-      <Card className="border-amber-200 bg-amber-50/60 shadow-none">
-        <CardContent className="pt-6 flex items-center gap-4">
-          <div className="h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
-            <ClipboardCheck className="h-6 w-6 text-amber-700" />
-          </div>
-          <div>
-            <p className="text-2xl font-bold text-slate-900">{appeals.length}</p>
-            <p className="text-sm text-slate-600">Pending appeal{appeals.length !== 1 ? 's' : ''} waiting for review</p>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Count indicator */}
+      <div className="bg-white rounded-xl border flex items-center gap-4 p-5"
+        style={{ borderColor: '#FDE68A', boxShadow: '0 0 0 3px rgba(245,158,11,0.08)' }}>
+        <div className="h-12 w-12 rounded-full flex items-center justify-center shrink-0"
+          style={{ background: '#FFFBEB' }}>
+          <ClipboardCheck className="h-6 w-6" style={{ color: '#B45309' }} />
+        </div>
+        <div>
+          <p className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.03em' }}>{appeals.length}</p>
+          <p className="text-sm" style={{ color: '#475569' }}>
+            Pending appeal{appeals.length !== 1 ? 's' : ''} waiting for review
+          </p>
+        </div>
+      </div>
 
+      {/* Content */}
       {loading ? (
         <div className="flex items-center justify-center p-20">
-          <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+          <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
         </div>
       ) : appeals.length === 0 ? (
-        <Card className="shadow-none border-slate-200">
-          <CardContent className="py-16 text-center">
-            <MessageSquare className="h-12 w-12 text-slate-300 mx-auto mb-3" />
-            <p className="text-slate-600 font-medium">No pending appeals</p>
-            <p className="text-sm text-slate-400 mt-1">This inbox updates automatically.</p>
-          </CardContent>
-        </Card>
+        <div className="bg-white rounded-xl border py-16 text-center"
+          style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+          <MessageSquare className="h-12 w-12 mx-auto mb-3" style={{ color: '#E2E8F0' }} />
+          <p className="font-medium text-sm" style={{ color: '#475569' }}>No pending appeals</p>
+          <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>This inbox updates automatically.</p>
+        </div>
       ) : (
         <div className="space-y-4">
           {appeals.map((appeal) => (
-            <Card key={appeal.resume_request_id} className="shadow-none border-slate-200">
-              <CardHeader className="pb-3">
-                <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
-                  <div>
-                    <CardTitle className="text-lg">{appeal.student_name}</CardTitle>
-                    <CardDescription>{appeal.student_email}</CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100">Pending</Badge>
-                    <Badge variant="outline" className="border-slate-200 text-slate-600">
-                      {fmtDateTime(appeal.created_at)}
-                    </Badge>
-                  </div>
+            <div key={appeal.resume_request_id} className="bg-white rounded-xl border overflow-hidden"
+              style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+              {/* Card header */}
+              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 px-5 py-4"
+                style={{ borderBottom: '1px solid #F1F5F9' }}>
+                <div>
+                  <p className="font-semibold" style={{ color: '#0F172A' }}>{appeal.student_name}</p>
+                  <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{appeal.student_email}</p>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold border"
+                    style={{ background: '#FFFBEB', color: '#B45309', borderColor: '#FDE68A' }}>
+                    Pending
+                  </span>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs border"
+                    style={{ borderColor: '#E2E8F0', color: '#94A3B8' }}>
+                    {fmtDateTime(appeal.created_at)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Card content */}
+              <div className="p-5 space-y-4">
                 <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-xs uppercase tracking-wide text-slate-400 mb-1">Exam</p>
-                    <p className="font-medium text-slate-900">{appeal.exam_title}</p>
+                  <div className="rounded-lg border p-4"
+                    style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#94A3B8' }}>Exam</p>
+                    <p className="font-medium text-sm" style={{ color: '#0F172A' }}>{appeal.exam_title}</p>
                   </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-xs uppercase tracking-wide text-slate-400 mb-1">Termination</p>
-                    <p className="font-medium text-slate-900">{appeal.terminated_by || 'Late Join'}</p>
+                  <div className="rounded-lg border p-4"
+                    style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#94A3B8' }}>Termination</p>
+                    <p className="font-medium text-sm" style={{ color: '#0F172A' }}>{appeal.terminated_by || 'Late Join'}</p>
                     {appeal.terminated_reason && (
-                      <p className="text-sm text-slate-500 mt-1">{appeal.terminated_reason}</p>
+                      <p className="text-xs mt-1" style={{ color: '#475569' }}>{appeal.terminated_reason}</p>
                     )}
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="h-4 w-4 text-amber-700 mt-0.5 shrink-0" />
-                    <div>
-                      <p className="text-xs uppercase tracking-wide text-amber-700 mb-1">Student Appeal</p>
-                      <p className="text-sm text-slate-700 whitespace-pre-wrap">{appeal.reason || 'No reason provided.'}</p>
-                    </div>
+                <div className="rounded-lg border p-4 flex items-start gap-2"
+                  style={{ background: '#FFFBEB', borderColor: '#FDE68A' }}>
+                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" style={{ color: '#B45309' }} />
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#B45309' }}>Student Appeal</p>
+                    <p className="text-sm whitespace-pre-wrap" style={{ color: '#475569' }}>{appeal.reason || 'No reason provided.'}</p>
                   </div>
                 </div>
 
                 <div className="flex justify-end">
-                  <Button onClick={() => router.push(`/admin/dashboard/exams/${appeal.exam_id}/monitor?tab=appeals`)}>
-                    Review In Monitor <ArrowRight className="ml-2 h-4 w-4" />
-                  </Button>
+                  <button
+                    onClick={() => router.push(`/admin/dashboard/exams/${appeal.exam_id}/monitor?tab=appeals`)}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-white transition-all duration-150"
+                    style={{ background: '#22577A' }}
+                    onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#1a4560'}
+                    onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = '#22577A'}
+                  >
+                    Review In Monitor <ArrowRight className="h-4 w-4" />
+                  </button>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           ))}
         </div>
       )}

@@ -1,18 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import {
-  PlusCircle,
-  Users,
-  ClipboardCheck,
-  Activity,
-  ArrowRight,
-  FileText,
-  Loader2,
-  BookOpen,
-  Siren,
+  PlusCircle, Users, ClipboardCheck, Activity, ArrowRight, FileText,
+  Loader2, BookOpen, Siren, ArrowUpRight, Calendar, Clock,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/axios';
@@ -35,11 +26,12 @@ interface RecentExam {
   invite_count: number;
 }
 
-const STATUS_STYLES: Record<string, string> = {
-  LIVE: 'bg-emerald-100 text-emerald-700',
-  SCHEDULED: 'bg-blue-100 text-blue-700',
-  ENDED: 'bg-slate-100 text-slate-500',
-  CANCELLED: 'bg-rose-100 text-rose-600',
+const STATUS_STYLES: Record<string, { bg: string; color: string; border: string }> = {
+  LIVE:      { bg: '#ECFDF5', color: '#15803D', border: '#BBF7D0' },
+  SCHEDULED: { bg: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' },
+  ENDED:     { bg: '#F8FAFC', color: '#475569', border: '#E2E8F0' },
+  CANCELLED: { bg: '#FFF1F2', color: '#BE123C', border: '#FECDD3' },
+  DRAFT:     { bg: '#F8FAFC', color: '#64748B', border: '#E2E8F0' },
 };
 
 function fmtWindow(iso: string | null) {
@@ -72,8 +64,7 @@ export default function AdminDashboard() {
       value: stats.live_sessions,
       icon: Activity,
       description: `${stats.total_sessions} total sessions`,
-      color: 'text-emerald-600',
-      bg: 'bg-emerald-100',
+      iconBg: '#ECFDF5', iconColor: '#15803D',
       alert: stats.live_sessions > 0,
     },
     {
@@ -81,8 +72,7 @@ export default function AdminDashboard() {
       value: stats.live_exams,
       icon: BookOpen,
       description: `${stats.total_exams} total exams created`,
-      color: 'text-blue-600',
-      bg: 'bg-blue-100',
+      iconBg: '#EFF6FF', iconColor: '#22577A',
       alert: false,
     },
     {
@@ -90,8 +80,7 @@ export default function AdminDashboard() {
       value: stats.total_students,
       icon: Users,
       description: 'Invited across all exams',
-      color: 'text-purple-600',
-      bg: 'bg-purple-100',
+      iconBg: '#F5F3FF', iconColor: '#7C3AED',
       alert: false,
     },
     {
@@ -99,140 +88,173 @@ export default function AdminDashboard() {
       value: stats.pending_appeals,
       icon: ClipboardCheck,
       description: 'Termination appeals awaiting review',
-      color: 'text-amber-600',
-      bg: 'bg-amber-100',
+      iconBg: '#FFFBEB', iconColor: '#B45309',
       alert: stats.pending_appeals > 0,
     },
   ] : [];
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 max-w-6xl">
 
       {/* Welcome banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl p-8 text-white shadow-lg">
-        <div>
-          <h1 className="text-3xl font-bold mb-2">
-            Welcome back, {user?.full_name?.split(' ')[0] || 'Admin'}!
-          </h1>
-          <p className="text-indigo-100 max-w-xl">
-            {stats?.pending_appeals
-              ? `You have ${stats.pending_appeals} pending appeal${stats.pending_appeals !== 1 ? 's' : ''} awaiting review.`
-              : stats?.live_sessions
-              ? `${stats.live_sessions} student${stats.live_sessions !== 1 ? 's' : ''} currently taking exams.`
-              : 'Monitor your exams and review proctoring reports.'}
-          </p>
-        </div>
-        <div className="flex flex-col sm:flex-row gap-3">
-          {stats && stats.pending_appeals > 0 && (
-            <Button
-              onClick={() => router.push('/admin/dashboard/appeals')}
-              className="bg-amber-400 text-slate-900 hover:bg-amber-300 shadow-md font-semibold px-6 py-6"
+      <div className="rounded-2xl p-8 text-white relative overflow-hidden"
+        style={{ background: 'linear-gradient(135deg, #22577A 0%, #38A3A5 100%)' }}>
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div>
+            <h1 className="text-3xl font-bold mb-2" style={{ letterSpacing: '-0.03em' }}>
+              Welcome back, {user?.full_name?.split(' ')[0] || 'Admin'}
+            </h1>
+            <p style={{ color: 'rgba(255,255,255,0.75)', maxWidth: '420px', fontSize: '0.9rem' }}>
+              {stats?.pending_appeals
+                ? `You have ${stats.pending_appeals} pending appeal${stats.pending_appeals !== 1 ? 's' : ''} awaiting review.`
+                : stats?.live_sessions
+                ? `${stats.live_sessions} student${stats.live_sessions !== 1 ? 's' : ''} currently taking exams.`
+                : 'Monitor your exams and review proctoring reports.'}
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3">
+            {stats && stats.pending_appeals > 0 && (
+              <button
+                onClick={() => router.push('/admin/dashboard/appeals')}
+                className="flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold transition-all duration-150"
+                style={{ background: '#F59E0B', color: '#0F172A' }}
+                onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#D97706'}
+                onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = '#F59E0B'}
+              >
+                <Siren className="h-4 w-4" /> Review Appeals Now
+              </button>
+            )}
+            <button
+              onClick={() => router.push('/admin/dashboard/exams/new')}
+              className="flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold transition-all duration-150"
+              style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', border: '1px solid rgba(255,255,255,0.25)' }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.22)'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.15)'}
             >
-              <Siren className="mr-2 h-5 w-5" />
-              Review Appeals Now
-            </Button>
-          )}
-          <Button
-            onClick={() => router.push('/admin/dashboard/exams/new')}
-            className="bg-white text-indigo-600 hover:bg-indigo-50 shadow-md font-semibold px-6 py-6"
-          >
-            <PlusCircle className="mr-2 h-5 w-5" />
-            Create New Exam
-          </Button>
+              <PlusCircle className="h-4 w-4" /> Create New Exam
+            </button>
+          </div>
         </div>
+        {/* Decorative circles */}
+        <div className="absolute -right-8 -top-8 h-40 w-40 rounded-full opacity-10" style={{ background: '#57CC99' }} />
+        <div className="absolute right-20 -bottom-12 h-28 w-28 rounded-full opacity-10" style={{ background: '#fff' }} />
       </div>
 
       {/* Metrics Grid */}
       {loadingStats ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {[1,2,3,4].map(i => (
-            <Card key={i} className="border-none shadow-md">
-              <CardContent className="pt-6 flex items-center justify-center h-24">
-                <Loader2 className="h-6 w-6 animate-spin text-slate-300" />
-              </CardContent>
-            </Card>
+            <div key={i} className="bg-white rounded-xl border p-5 flex items-center justify-center h-24"
+              style={{ borderColor: '#E2E8F0' }}>
+              <Loader2 className="h-5 w-5 animate-spin" style={{ color: '#CBD5E1' }} />
+            </div>
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {metrics.map((metric, i) => (
-            <Card
+            <div
               key={i}
-              className={`border-none shadow-md hover:shadow-lg transition-shadow ${
-                metric.title === 'Pending Appeals' && metric.value > 0 ? 'ring-2 ring-amber-300/70' : ''
-              }`}
+              className="bg-white rounded-xl border p-5 transition-shadow duration-150"
+              style={{
+                borderColor: metric.alert && metric.title === 'Pending Appeals' ? '#FDE68A' : '#E2E8F0',
+                boxShadow: metric.alert && metric.title === 'Pending Appeals'
+                  ? '0 0 0 3px rgba(245,158,11,0.12), 0 1px 3px rgba(15,23,42,0.04)'
+                  : '0 1px 3px rgba(15,23,42,0.04)',
+              }}
             >
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">{metric.title}</CardTitle>
-                <div className={`p-2 rounded-full ${metric.bg} relative`}>
-                  <metric.icon className={`h-4 w-4 ${metric.color}`} />
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>{metric.title}</p>
+                <div className="p-1.5 rounded-lg relative" style={{ background: metric.iconBg }}>
+                  <metric.icon className="h-4 w-4" style={{ color: metric.iconColor }} />
                   {metric.alert && (
-                    <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-amber-400 border-2 border-white" />
+                    <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full border-2 border-white"
+                      style={{ background: '#F59E0B' }} />
                   )}
                 </div>
-              </CardHeader>
-              <CardContent>
-                <div className="text-3xl font-bold">{metric.value}</div>
-                <p className="text-xs text-muted-foreground mt-1">{metric.description}</p>
-                {metric.title === 'Pending Appeals' && metric.value > 0 && (
-                  <Button
-                    variant="link"
-                    className="px-0 h-auto mt-3 text-amber-700"
-                    onClick={() => router.push('/admin/dashboard/appeals')}
-                  >
-                    Open appeal inbox <ArrowRight className="ml-1 h-4 w-4" />
-                  </Button>
-                )}
-              </CardContent>
-            </Card>
+              </div>
+              <p className="text-3xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.03em' }}>{metric.value}</p>
+              <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>{metric.description}</p>
+              {metric.title === 'Pending Appeals' && metric.value > 0 && (
+                <button
+                  className="mt-3 text-xs font-semibold flex items-center gap-1 transition-colors"
+                  style={{ color: '#B45309' }}
+                  onClick={() => router.push('/admin/dashboard/appeals')}
+                >
+                  Open appeal inbox <ArrowRight className="h-3 w-3" />
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}
 
       {/* Recent Exams */}
-      <Card className="shadow-sm">
-        <CardHeader className="flex flex-row items-center justify-between border-b pb-4">
+      <div className="bg-white rounded-xl border overflow-hidden"
+        style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
           <div>
-            <CardTitle>Recent Exams</CardTitle>
-            <CardDescription>Your latest exams</CardDescription>
+            <p className="text-sm font-semibold" style={{ color: '#0F172A' }}>Recent Exams</p>
+            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Your latest exams</p>
           </div>
-          <Button variant="ghost" className="text-indigo-600" onClick={() => router.push('/admin/dashboard/exams')}>
-            View All <ArrowRight className="ml-2 h-4 w-4" />
-          </Button>
-        </CardHeader>
-        <CardContent className="p-0">
-          {recentExams.length === 0 ? (
-            <div className="py-12 text-center text-slate-400 text-sm">No exams yet</div>
-          ) : (
-            <div className="divide-y">
-              {recentExams.map((exam) => (
-                <div key={exam.id} className="flex items-center justify-between p-5 hover:bg-gray-50 transition-colors">
+          <button
+            onClick={() => router.push('/admin/dashboard/exams')}
+            className="flex items-center gap-1.5 text-xs font-semibold transition-colors"
+            style={{ color: '#22577A' }}
+          >
+            View All <ArrowUpRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        {recentExams.length === 0 ? (
+          <div className="py-12 text-center text-sm" style={{ color: '#94A3B8' }}>No exams yet</div>
+        ) : (
+          <div>
+            {recentExams.map((exam, idx) => {
+              const s = STATUS_STYLES[exam.status] ?? STATUS_STYLES.DRAFT;
+              return (
+                <div
+                  key={exam.id}
+                  className="flex items-center justify-between px-5 py-4 cursor-pointer transition-colors"
+                  style={{ borderBottom: idx < recentExams.length - 1 ? '1px solid #F8FAFC' : 'none' }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#F8FAFC'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
+                  onClick={() => router.push(`/admin/dashboard/exams/${exam.id}`)}
+                >
                   <div className="flex items-center gap-4">
-                    <div className="h-10 w-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
-                      <FileText className="h-5 w-5 text-indigo-600" />
+                    <div className="h-10 w-10 rounded-lg flex items-center justify-center shrink-0"
+                      style={{ background: '#EFF6FF' }}>
+                      <FileText className="h-5 w-5" style={{ color: '#22577A' }} />
                     </div>
                     <div>
-                      <h4 className="font-semibold text-sm">{exam.title}</h4>
+                      <p className="font-semibold text-sm" style={{ color: '#0F172A' }}>{exam.title}</p>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${STATUS_STYLES[exam.status] ?? 'bg-slate-100 text-slate-500'}`}>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold"
+                          style={{ background: s.bg, color: s.color }}>
                           {exam.status}
                         </span>
-                        <span className="text-xs text-muted-foreground">{exam.invite_count} students · {exam.duration_minutes}m</span>
+                        <span className="text-xs flex items-center gap-1" style={{ color: '#94A3B8' }}>
+                          <Users className="h-3 w-3" /> {exam.invite_count}
+                          <Clock className="h-3 w-3 ml-1" /> {exam.duration_minutes}m
+                        </span>
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <p className="text-xs text-muted-foreground hidden md:block">{fmtWindow(exam.start_window)}</p>
-                    <Button variant="outline" size="sm" onClick={() => router.push(`/admin/dashboard/exams/${exam.id}`)}>
+                    <p className="text-xs hidden md:block" style={{ color: '#94A3B8' }}>
+                      <Calendar className="h-3 w-3 inline mr-1" />
+                      {fmtWindow(exam.start_window)}
+                    </p>
+                    <span className="text-xs font-semibold px-3 py-1.5 rounded-lg border"
+                      style={{ borderColor: '#E2E8F0', color: '#475569' }}>
                       Manage
-                    </Button>
+                    </span>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

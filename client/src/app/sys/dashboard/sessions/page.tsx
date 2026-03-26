@@ -5,10 +5,6 @@ import {
   RefreshCw, Users, ShieldAlert, Activity, Loader2,
   AlertTriangle, Eye, Bot, CheckCircle2, XCircle, Server, Search,
 } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
 
@@ -100,8 +96,8 @@ function RiskBadge({ state }: { state: string }) {
     ADMIN_REVIEW: 'Review', TERMINATED: 'Terminated',
   };
   return (
-    <span className="text-xs font-bold px-2 py-0.5 rounded border"
-      style={{ background: `${color}22`, color, borderColor: `${color}44` }}>
+    <span className="text-xs font-bold px-2 py-0.5 rounded-md border"
+      style={{ background: `${color}18`, color, borderColor: `${color}40` }}>
       {labels[state] ?? state}
     </span>
   );
@@ -111,8 +107,8 @@ function RiskBar({ score }: { score: number }) {
   const color = score >= 70 ? '#ef4444' : score >= 40 ? '#f59e0b' : '#22c55e';
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-        <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(score, 100)}%`, background: color }} />
+      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: '#F1F5F9' }}>
+        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(score, 100)}%`, background: color }} />
       </div>
       <span className="text-xs font-mono font-bold w-7 text-right" style={{ color }}>{score}</span>
     </div>
@@ -179,7 +175,6 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
   const alertsRef    = useRef(alerts);
   const warningsRef  = useRef(warnings);
 
-  // keep refs in sync for persistence
   useEffect(() => { alertsRef.current = alerts;   saveAlerts(session.session_id, alerts);   }, [alerts, session.session_id]);
   useEffect(() => { warningsRef.current = warnings; saveWarnings(session.session_id, warnings); }, [warnings, session.session_id]);
 
@@ -215,9 +210,7 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
         if (!cancelled) setHistoryLoaded(true);
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [session.session_id]);
 
   const fetchFrame = useCallback(async () => {
@@ -232,7 +225,6 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
       const blob = await res.blob();
       if (!blob.size) return;
       const url = URL.createObjectURL(blob);
-      // revoke after applying new URL to avoid flicker
       const old = prevFrameUrl.current;
       prevFrameUrl.current = url;
       setFrameUrl(url);
@@ -243,10 +235,8 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
   useEffect(() => {
     if (session.status !== 'ACTIVE') return;
 
-    const initialFrameTimer = setTimeout(() => {
-      void fetchFrame();
-    }, 0);
-    frameRef.current = setInterval(fetchFrame, 1500); // tighter poll for less lag
+    const initialFrameTimer = setTimeout(() => { void fetchFrame(); }, 0);
+    frameRef.current = setInterval(fetchFrame, 1500);
 
     const token = localStorage.getItem('access_token') || '';
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -290,101 +280,126 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
 
   return (
     <div className="space-y-4">
-      {/* Live camera */}
-      <Card className="bg-slate-900 border-slate-800">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm text-slate-300 flex items-center gap-2">
-            <Bot className="h-4 w-4 text-indigo-400" /> AI Feed — {session.student_name}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+      {/* Live camera — dark panel */}
+      <div className="rounded-xl overflow-hidden border" style={{ background: '#0F172A', borderColor: '#1E293B' }}>
+        <div className="flex items-center gap-2 px-4 py-3" style={{ borderBottom: '1px solid #1E293B' }}>
+          <Bot className="h-4 w-4" style={{ color: '#38A3A5' }} />
+          <p className="text-sm font-semibold" style={{ color: '#CBD5E1' }}>
+            AI Feed — {session.student_name}
+          </p>
+          <span className="ml-auto flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full animate-pulse" style={{ background: '#22c55e' }} />
+            <span className="text-xs" style={{ color: '#64748B' }}>LIVE</span>
+          </span>
+        </div>
+        <div className="p-4">
           {frameUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={frameUrl}
               alt="Live feed"
-              className="w-full aspect-video rounded-lg object-cover bg-slate-800"
+              className="w-full aspect-video rounded-lg object-cover"
+              style={{ background: '#1E293B' }}
               decoding="async"
             />
           ) : (
-            <div className="aspect-video bg-slate-800 rounded-lg flex items-center justify-center border border-slate-700">
-              <p className="text-slate-500 text-sm">
+            <div className="aspect-video rounded-lg flex items-center justify-center border"
+              style={{ background: '#1E293B', borderColor: '#334155' }}>
+              <p className="text-sm" style={{ color: '#475569' }}>
                 {session.status === 'ACTIVE' && session.proctor_connected ? 'Loading feed…' : 'Engine not connected'}
               </p>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      {/* Risk card */}
-      <Card>
-        <CardHeader className="pb-3 border-b border-slate-100">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-              <Activity className="h-4 w-4 text-indigo-500" /> Risk Assessment
-            </CardTitle>
-            <RiskBadge state={liveRisk.state} />
+      {/* Risk assessment */}
+      <div className="bg-white rounded-xl border overflow-hidden"
+        style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid #F1F5F9' }}>
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4" style={{ color: '#22577A' }} />
+            <p className="text-sm font-semibold" style={{ color: '#0F172A' }}>Risk Assessment</p>
           </div>
-        </CardHeader>
-        <CardContent className="pt-4 space-y-3">
+          <RiskBadge state={liveRisk.state} />
+        </div>
+        <div className="p-4 space-y-3">
           <div className="flex items-end gap-2">
-            <p className="text-5xl font-bold tabular-nums transition-all" style={{ color: scoreColor }}>
+            <p className="text-5xl font-bold tabular-nums transition-all" style={{ color: scoreColor, letterSpacing: '-0.03em' }}>
               {Math.round(liveRisk.score)}
             </p>
-            <span className="text-xs text-slate-400 mb-1.5">/ 100</span>
+            <span className="text-xs mb-1.5 font-medium" style={{ color: '#94A3B8' }}>/ 100</span>
           </div>
-          <div className="h-2 rounded-full overflow-hidden bg-slate-100">
+          <div className="h-2 rounded-full overflow-hidden" style={{ background: '#F1F5F9' }}>
             <div className="h-2 rounded-full transition-all duration-700"
               style={{ width: `${Math.min(liveRisk.score, 100)}%`, background: scoreColor }} />
           </div>
-          <div className="flex gap-4 text-xs text-slate-500">
-            <span>Fixed <span className="font-semibold text-slate-700">{Math.round(liveRisk.fixed)}</span></span>
+          <div className="flex gap-4 text-xs" style={{ color: '#94A3B8' }}>
+            <span>Fixed <span className="font-semibold" style={{ color: '#0F172A' }}>{Math.round(liveRisk.fixed)}</span></span>
             {liveRisk.decaying !== undefined && (
-              <span>Decaying <span className="font-semibold text-slate-700">{Math.round(liveRisk.decaying)}</span></span>
+              <span>Decaying <span className="font-semibold" style={{ color: '#0F172A' }}>{Math.round(liveRisk.decaying)}</span></span>
             )}
           </div>
-          <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100 text-center">
-            <div><p className="text-lg font-bold text-rose-500">{alerts.length}</p><p className="text-xs text-slate-400">Alerts</p></div>
-            <div><p className="text-lg font-bold text-amber-500">{warnings.length}</p><p className="text-xs text-slate-400">Warnings</p></div>
-            <div><p className="text-lg font-bold text-slate-700">{session.violation_count}</p><p className="text-xs text-slate-400">Violations</p></div>
+          <div className="grid grid-cols-3 gap-2 pt-3 text-center" style={{ borderTop: '1px solid #F1F5F9' }}>
+            <div className="rounded-lg py-2" style={{ background: '#FFF1F2' }}>
+              <p className="text-lg font-bold" style={{ color: '#BE123C' }}>{alerts.length}</p>
+              <p className="text-xs" style={{ color: '#94A3B8' }}>Alerts</p>
+            </div>
+            <div className="rounded-lg py-2" style={{ background: '#FFFBEB' }}>
+              <p className="text-lg font-bold" style={{ color: '#B45309' }}>{warnings.length}</p>
+              <p className="text-xs" style={{ color: '#94A3B8' }}>Warnings</p>
+            </div>
+            <div className="rounded-lg py-2" style={{ background: '#F8FAFC' }}>
+              <p className="text-lg font-bold" style={{ color: '#0F172A' }}>{session.violation_count}</p>
+              <p className="text-xs" style={{ color: '#94A3B8' }}>Violations</p>
+            </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Alert / Warning log */}
-      <Card>
-        <CardHeader className="pb-0 border-b border-slate-100">
-          <div className="flex gap-1">
-            {(['alerts', 'warnings'] as const).map(tab => (
-              <button key={tab} onClick={() => setAlertTab(tab)}
-                className={`px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors capitalize
-                  ${alertTab === tab
-                    ? (tab === 'alerts' ? 'border-rose-500 text-rose-600' : 'border-amber-500 text-amber-600')
-                    : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
-                {tab}
-                {(tab === 'alerts' ? alerts : warnings).length > 0 && (
-                  <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${tab === 'alerts' ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-600'}`}>
-                    {(tab === 'alerts' ? alerts : warnings).length}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        </CardHeader>
-        <CardContent className="pt-3">
+      <div className="bg-white rounded-xl border overflow-hidden"
+        style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+        <div className="flex" style={{ borderBottom: '1px solid #F1F5F9' }}>
+          {(['alerts', 'warnings'] as const).map(tab => (
+            <button key={tab} onClick={() => setAlertTab(tab)}
+              className="px-4 py-3 text-sm font-semibold transition-colors capitalize relative"
+              style={{
+                color: alertTab === tab
+                  ? (tab === 'alerts' ? '#BE123C' : '#B45309')
+                  : '#94A3B8',
+                borderBottom: alertTab === tab
+                  ? `2px solid ${tab === 'alerts' ? '#BE123C' : '#B45309'}`
+                  : '2px solid transparent',
+              }}>
+              {tab}
+              {(tab === 'alerts' ? alerts : warnings).length > 0 && (
+                <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full font-medium"
+                  style={{
+                    background: tab === 'alerts' ? '#FFF1F2' : '#FFFBEB',
+                    color: tab === 'alerts' ? '#BE123C' : '#B45309',
+                  }}>
+                  {(tab === 'alerts' ? alerts : warnings).length}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        <div className="p-4">
           <div className="space-y-2 max-h-56 overflow-y-auto">
             {!historyLoaded ? (
-              <div className="flex items-center justify-center gap-2 py-6 text-slate-400 text-sm">
+              <div className="flex items-center justify-center gap-2 py-6 text-sm" style={{ color: '#94A3B8' }}>
                 <Loader2 className="h-4 w-4 animate-spin" /> Loading history…
               </div>
             ) : alertTab === 'alerts' ? (alerts.length === 0
-              ? <p className="text-sm text-slate-400 text-center py-6">No alerts yet</p>
+              ? <p className="text-sm text-center py-6" style={{ color: '#94A3B8' }}>No alerts yet</p>
               : alerts.map((a, i) => (
-                <div key={i} className="flex items-start gap-2 px-3 py-2 bg-rose-50/50 rounded-lg border border-rose-100 text-xs">
-                  <AlertTriangle className="h-3.5 w-3.5 text-rose-500 shrink-0 mt-0.5" />
+                <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-lg border text-xs"
+                  style={{ background: '#FFF1F2', borderColor: '#FECDD3' }}>
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" style={{ color: '#BE123C' }} />
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium text-rose-700">{a.message}</p>
-                    <div className="flex items-center gap-3 mt-0.5 text-rose-400">
+                    <p className="font-medium" style={{ color: '#BE123C' }}>{a.message}</p>
+                    <div className="flex items-center gap-3 mt-0.5" style={{ color: '#FDA4AF' }}>
                       {a.score_added !== undefined && a.score_added > 0 && <span>+{a.score_added.toFixed(1)} pts</span>}
                       <span>{new Date(a.ts).toLocaleTimeString()}</span>
                       {buildProofUrl(session.proctor_engine_url, a.proof_url) && (
@@ -400,7 +415,8 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
                               toast.error('Failed to load proof image');
                             }
                           }}
-                          className="text-blue-500 underline"
+                          className="underline"
+                          style={{ color: '#22577A' }}
                         >
                           proof
                         </button>
@@ -410,20 +426,21 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
                 </div>
               ))
             ) : (warnings.length === 0
-              ? <p className="text-sm text-slate-400 text-center py-6">No warnings yet</p>
+              ? <p className="text-sm text-center py-6" style={{ color: '#94A3B8' }}>No warnings yet</p>
               : warnings.map((w, i) => (
-                <div key={i} className="flex items-start gap-2 px-3 py-2 bg-amber-50/50 rounded-lg border border-amber-100 text-xs">
-                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+                <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-lg border text-xs"
+                  style={{ background: '#FFFBEB', borderColor: '#FDE68A' }}>
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" style={{ color: '#B45309' }} />
                   <div>
-                    <p className="text-amber-700">{w.message}</p>
-                    <p className="text-amber-400 mt-0.5">{new Date(w.ts).toLocaleTimeString()}</p>
+                    <p style={{ color: '#B45309' }}>{w.message}</p>
+                    <p className="mt-0.5" style={{ color: '#D97706' }}>{new Date(w.ts).toLocaleTimeString()}</p>
                   </div>
                 </div>
               ))
             )}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
@@ -454,7 +471,6 @@ export default function SessionsMonitorPage() {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [fetchSessions]);
 
-  // Sync selected with latest data
   useEffect(() => {
     if (!selected) return;
     const latest = sessions.find(s => s.session_id === selected.session_id);
@@ -468,7 +484,6 @@ export default function SessionsMonitorPage() {
   const active       = sessions.filter(s => s.status === 'ACTIVE');
   const disconnected = sessions.filter(s => s.status === 'DISCONNECTED');
 
-  // Filtered list for display
   const q = search.trim().toLowerCase();
   const filtered = q
     ? sessions.filter(s =>
@@ -481,7 +496,7 @@ export default function SessionsMonitorPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
       </div>
     );
   }
@@ -491,116 +506,127 @@ export default function SessionsMonitorPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Live Sessions</h1>
-          <p className="text-sm text-slate-500 mt-0.5">All active exam sessions across every exam</p>
+          <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Live Sessions</h1>
+          <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>All active exam sessions across every exam</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => fetchSessions()} className="gap-2">
-          <RefreshCw className="h-4 w-4" /> Refresh
-        </Button>
+        <button
+          onClick={() => fetchSessions()}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-150"
+          style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+        >
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </button>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
-        <Card className="shadow-none border-slate-200">
-          <CardContent className="pt-5 pb-4 flex items-center gap-3">
-            <div className="bg-emerald-100 p-2 rounded-lg"><Users className="h-5 w-5 text-emerald-600" /></div>
-            <div><p className="text-2xl font-bold">{active.length}</p><p className="text-xs text-slate-500">Active</p></div>
-          </CardContent>
-        </Card>
-        <Card className="shadow-none border-slate-200">
-          <CardContent className="pt-5 pb-4 flex items-center gap-3">
-            <div className="bg-amber-100 p-2 rounded-lg"><Activity className="h-5 w-5 text-amber-600" /></div>
-            <div><p className="text-2xl font-bold">{disconnected.length}</p><p className="text-xs text-slate-500">Disconnected</p></div>
-          </CardContent>
-        </Card>
-        <Card className="shadow-none border-slate-200">
-          <CardContent className="pt-5 pb-4 flex items-center gap-3">
-            <div className="bg-rose-100 p-2 rounded-lg"><ShieldAlert className="h-5 w-5 text-rose-600" /></div>
-            <div>
-              <p className="text-2xl font-bold">{sessions.filter(s => s.risk_score >= 70).length}</p>
-              <p className="text-xs text-slate-500">High Risk</p>
+        {[
+          { label: 'Active',       value: active.length,                                    iconBg: '#ECFDF5', iconColor: '#15803D', Icon: Users      },
+          { label: 'Disconnected', value: disconnected.length,                               iconBg: '#FFFBEB', iconColor: '#B45309', Icon: Activity   },
+          { label: 'High Risk',    value: sessions.filter(s => s.risk_score >= 70).length,  iconBg: '#FFF1F2', iconColor: '#BE123C', Icon: ShieldAlert },
+        ].map(({ label, value, iconBg, iconColor, Icon }) => (
+          <div key={label} className="bg-white rounded-xl border p-5 flex items-center gap-3"
+            style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+            <div className="p-2 rounded-lg shrink-0" style={{ background: iconBg }}>
+              <Icon className="h-5 w-5" style={{ color: iconColor }} />
             </div>
-          </CardContent>
-        </Card>
+            <div>
+              <p className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.02em' }}>{value}</p>
+              <p className="text-xs" style={{ color: '#94A3B8' }}>{label}</p>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Search */}
       {sessions.length > 0 && (
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-          <Input
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4" style={{ color: '#94A3B8' }} />
+          <input
+            type="text"
             placeholder="Search by student name, email, or exam…"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="pl-9 border-slate-200"
+            className="w-full pl-9 pr-4 py-2.5 text-sm rounded-lg border outline-none transition-all"
+            style={{ borderColor: '#E2E8F0', color: '#0F172A', background: '#fff' }}
+            onFocus={e => { (e.target as HTMLElement).style.borderColor = '#38A3A5'; (e.target as HTMLElement).style.boxShadow = '0 0 0 3px rgba(56,163,165,0.12)'; }}
+            onBlur={e => { (e.target as HTMLElement).style.borderColor = '#E2E8F0'; (e.target as HTMLElement).style.boxShadow = 'none'; }}
           />
         </div>
       )}
 
+      {/* Empty state */}
       {sessions.length === 0 ? (
-        <Card className="border-slate-200">
-          <CardContent className="py-20 text-center text-slate-400">
-            <Users className="h-12 w-12 mx-auto mb-3 text-slate-200" />
-            <p className="font-medium">No active sessions</p>
-            <p className="text-sm mt-1">Sessions appear here when students are taking exams</p>
-          </CardContent>
-        </Card>
+        <div className="bg-white rounded-xl border py-20 text-center"
+          style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
+          <Users className="h-12 w-12 mx-auto mb-3" style={{ color: '#E2E8F0' }} />
+          <p className="text-sm font-medium" style={{ color: '#475569' }}>No active sessions</p>
+          <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Sessions appear here when students are taking exams</p>
+        </div>
       ) : (
         <div className="grid lg:grid-cols-2 gap-6">
           {/* Session cards */}
-          <div className="space-y-3">
+          <div className="space-y-2">
             {filtered.length === 0 ? (
-              <p className="text-sm text-slate-400 text-center py-6">No sessions match your search</p>
+              <p className="text-sm text-center py-6" style={{ color: '#94A3B8' }}>No sessions match your search</p>
             ) : (
-              filtered.map(sess => (
-                <Card key={sess.session_id}
-                  className={`cursor-pointer transition-all hover:shadow-md border-2 ${
-                    selected?.session_id === sess.session_id
-                      ? 'border-indigo-400 shadow-md'
-                      : 'border-transparent shadow-sm'
-                  }`}
-                  onClick={() => setSelected(s => s?.session_id === sess.session_id ? null : sess)}>
-                  <CardContent className="p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-slate-900 truncate">{sess.student_name}</p>
-                        <p className="text-xs text-slate-400 truncate">{sess.student_email}</p>
-                        <p className="text-xs text-indigo-600 font-medium mt-0.5 truncate">{sess.exam_title}</p>
-                      </div>
-                      <div className="flex flex-col items-end gap-1.5 shrink-0">
-                        <Badge variant="outline" className={`text-xs ${
-                          sess.status === 'ACTIVE'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : 'bg-amber-50 text-amber-700 border-amber-200'
-                        }`}>
-                          {sess.status}
-                        </Badge>
-                        <div className="flex items-center gap-1 text-xs text-slate-400">
-                          {sess.proctor_connected
-                            ? <CheckCircle2 className="h-3 w-3 text-emerald-500" />
-                            : <XCircle className="h-3 w-3 text-slate-300" />}
-                          <Server className="h-3 w-3" />
-                          {sess.proctor_engine_url?.replace(/https?:\/\//, '').split(':')[1] ?? '—'}
+              filtered.map(sess => {
+                const isSelected = selected?.session_id === sess.session_id;
+                return (
+                  <div
+                    key={sess.session_id}
+                    onClick={() => setSelected(s => s?.session_id === sess.session_id ? null : sess)}
+                    className="bg-white rounded-xl border cursor-pointer transition-all duration-150 overflow-hidden"
+                    style={{
+                      borderColor: isSelected ? '#22577A' : '#E2E8F0',
+                      boxShadow: isSelected
+                        ? '0 0 0 3px rgba(34,87,122,0.12), 0 1px 3px rgba(15,23,42,0.04)'
+                        : '0 1px 3px rgba(15,23,42,0.04)',
+                      borderLeft: isSelected ? '3px solid #22577A' : '3px solid transparent',
+                    }}
+                  >
+                    <div className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-sm truncate" style={{ color: '#0F172A' }}>{sess.student_name}</p>
+                          <p className="text-xs truncate mt-0.5" style={{ color: '#94A3B8' }}>{sess.student_email}</p>
+                          <p className="text-xs font-medium mt-0.5 truncate" style={{ color: '#22577A' }}>{sess.exam_title}</p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold border"
+                            style={sess.status === 'ACTIVE'
+                              ? { background: '#ECFDF5', color: '#15803D', borderColor: '#BBF7D0' }
+                              : { background: '#FFFBEB', color: '#B45309', borderColor: '#FDE68A' }}>
+                            {sess.status}
+                          </span>
+                          <div className="flex items-center gap-1 text-xs" style={{ color: '#94A3B8' }}>
+                            {sess.proctor_connected
+                              ? <CheckCircle2 className="h-3 w-3" style={{ color: '#22c55e' }} />
+                              : <XCircle className="h-3 w-3" style={{ color: '#CBD5E1' }} />}
+                            <Server className="h-3 w-3" />
+                            <span className="font-mono">{sess.proctor_engine_url?.replace(/https?:\/\//, '').split(':')[1] ?? '—'}</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <RiskBar score={sess.risk_score} />
+                      <RiskBar score={sess.risk_score} />
 
-                    <div className="flex items-center gap-4 text-xs text-slate-500">
-                      <span className="flex items-center gap-1">
-                        <ShieldAlert className="h-3 w-3 text-rose-400" /> {sess.violation_count} violations
-                      </span>
-                      {sess.last_heartbeat && (
+                      <div className="flex items-center gap-4 text-xs" style={{ color: '#94A3B8' }}>
                         <span className="flex items-center gap-1">
-                          <Activity className="h-3 w-3 text-emerald-400" />
-                          {new Date(sess.last_heartbeat + 'Z').toLocaleTimeString()}
+                          <ShieldAlert className="h-3 w-3" style={{ color: '#FDA4AF' }} />
+                          {sess.violation_count} violations
                         </span>
-                      )}
+                        {sess.last_heartbeat && (
+                          <span className="flex items-center gap-1">
+                            <Activity className="h-3 w-3" style={{ color: '#86EFAC' }} />
+                            {new Date(sess.last_heartbeat + 'Z').toLocaleTimeString()}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </CardContent>
-                </Card>
-              ))
+                  </div>
+                );
+              })
             )}
           </div>
 
@@ -609,10 +635,17 @@ export default function SessionsMonitorPage() {
             {selected ? (
               <div>
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
-                    <Eye className="h-5 w-5 text-indigo-500" /> {selected.student_name}
+                  <h2 className="text-sm font-semibold flex items-center gap-2" style={{ color: '#0F172A' }}>
+                    <Eye className="h-4 w-4" style={{ color: '#22577A' }} />
+                    {selected.student_name}
                   </h2>
-                  <button onClick={() => setSelected(null)} className="text-xs text-slate-400 hover:text-slate-600">Close ×</button>
+                  <button
+                    onClick={() => setSelected(null)}
+                    className="text-xs px-2 py-1 rounded-md border transition-colors"
+                    style={{ color: '#94A3B8', borderColor: '#E2E8F0' }}
+                  >
+                    Close
+                  </button>
                 </div>
                 <SessionDetailPanel
                   key={selected.session_id}
@@ -621,9 +654,10 @@ export default function SessionsMonitorPage() {
                 />
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center h-64 border-2 border-dashed border-slate-200 rounded-xl">
-                <Eye className="h-10 w-10 text-slate-200 mb-3" />
-                <p className="text-slate-400 text-sm">Select a session to monitor</p>
+              <div className="flex flex-col items-center justify-center h-64 rounded-xl border-2 border-dashed"
+                style={{ borderColor: '#E2E8F0' }}>
+                <Eye className="h-10 w-10 mb-3" style={{ color: '#E2E8F0' }} />
+                <p className="text-sm" style={{ color: '#94A3B8' }}>Select a session to monitor</p>
               </div>
             )}
           </div>
