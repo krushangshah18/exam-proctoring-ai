@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard, Users, Settings, LogOut, Shield,
   FileText, User, Menu, X, SlidersHorizontal, Cpu,
-  Activity, BarChart2,
+  Activity, BarChart2, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import RoleGuard from '@/components/auth/role-guard';
@@ -27,6 +27,7 @@ export default function SystemAdminLayout({ children }: { children: React.ReactN
   const router   = useRouter();
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [user, setUser]     = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -69,7 +70,7 @@ export default function SystemAdminLayout({ children }: { children: React.ReactN
         .nav-scrollbar::-webkit-scrollbar { width: 0; }
       `}</style>
 
-      <div className="sys-root min-h-screen flex bg-[#F8FAFC]">
+      <div className="sys-root min-h-screen bg-[#EEF2F7] lg:flex">
 
         {/* ── Mobile top bar ──────────────────────────────────────── */}
         <div className="lg:hidden fixed top-0 inset-x-0 z-50 h-13 flex items-center justify-between px-4 py-3"
@@ -77,7 +78,7 @@ export default function SystemAdminLayout({ children }: { children: React.ReactN
           <div className="flex items-center gap-2.5">
             <Shield className="h-5 w-5" style={{ color: '#57CC99' }} />
             <span className="font-bold text-white text-sm tracking-tight">ProctorAI</span>
-            <span className="text-[10px] font-medium tracking-widest uppercase" style={{ color: 'rgba(255,255,255,0.35)' }}>Console</span>
+            <span className="text-[10px] font-medium tracking-widest uppercase" style={{ color: 'rgba(255,255,255,0.55)' }}>Console</span>
           </div>
           <button onClick={() => setSidebarOpen(v => !v)} className="p-1 rounded-lg transition-colors" style={{ color: 'rgba(255,255,255,0.65)' }}>
             {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -92,29 +93,50 @@ export default function SystemAdminLayout({ children }: { children: React.ReactN
 
         {/* ── Sidebar ─────────────────────────────────────────────── */}
         <aside
-          className={`nav-scrollbar fixed inset-y-0 left-0 z-40 w-64 flex flex-col transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
-          style={{ background: '#22577A', borderRight: '1px solid rgba(255,255,255,0.06)', top: 52, height: 'calc(100vh - 52px)' }}
+          className={`nav-scrollbar fixed left-0 z-40 flex flex-col transition-[width,transform] duration-300 ease-in-out lg:sticky lg:top-0 lg:h-screen ${
+            sidebarCollapsed ? 'lg:w-20' : 'lg:w-64'
+          } ${
+            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          } top-[52px] h-[calc(100vh-52px)] w-64 lg:translate-x-0 lg:top-0`}
+          style={{ background: '#22577A', borderRight: '1px solid rgba(255,255,255,0.06)' }}
         >
           {/* Brand */}
-          <div className="hidden lg:flex h-16 items-center px-5 shrink-0"
+          <div className={`hidden lg:flex h-16 items-center shrink-0 ${sidebarCollapsed ? 'justify-center px-3' : 'justify-between px-5'}`}
             style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-            <div className="flex items-center gap-2.5">
+            <div className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-2.5'}`}>
               <div className="h-8 w-8 rounded-lg flex items-center justify-center shrink-0"
                 style={{ background: 'rgba(87,204,153,0.15)' }}>
                 <Shield className="h-4 w-4" style={{ color: '#57CC99' }} />
               </div>
-              <div>
-                <p className="text-white font-bold text-sm tracking-tight leading-none">ProctorAI</p>
-                <p className="text-[10px] font-medium tracking-widest uppercase leading-none mt-1"
-                  style={{ color: 'rgba(255,255,255,0.35)' }}>System Console</p>
-              </div>
+              {!sidebarCollapsed && (
+                <div>
+                  <p className="text-white font-bold text-sm tracking-tight leading-none">ProctorAI</p>
+                  <p className="text-[10px] font-medium tracking-widest uppercase leading-none mt-1"
+                    style={{ color: 'rgba(255,255,255,0.55)' }}>System Console</p>
+                </div>
+              )}
             </div>
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(v => !v)}
+              className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
+              style={{ color: 'rgba(255,255,255,0.6)' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.08)'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            </button>
           </div>
 
           {/* Nav label */}
-          <div className="px-5 pt-6 pb-2 shrink-0">
-            <p className="text-[10px] font-semibold tracking-widest uppercase"
-              style={{ color: 'rgba(255,255,255,0.28)' }}>Menu</p>
+          <div className={`shrink-0 ${sidebarCollapsed ? 'px-3 pt-5 pb-1' : 'px-5 pt-6 pb-2'}`}>
+            {sidebarCollapsed ? (
+              <div className="mx-auto h-px w-8" style={{ background: 'rgba(255,255,255,0.12)' }} />
+            ) : (
+              <p className="text-[10px] font-semibold tracking-widest uppercase"
+                style={{ color: 'rgba(255,255,255,0.45)' }}>Menu</p>
+            )}
           </div>
 
           {/* Nav items */}
@@ -126,7 +148,9 @@ export default function SystemAdminLayout({ children }: { children: React.ReactN
                   key={item.href}
                   href={item.href}
                   onClick={() => setSidebarOpen(false)}
-                  className="group relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150"
+                  className={`group relative flex items-center rounded-lg text-sm font-medium transition-all duration-150 ${
+                    sidebarCollapsed ? 'justify-center px-2 py-3' : 'gap-3 px-3 py-2.5'
+                  }`}
                   style={{
                     color: active ? '#ffffff' : 'rgba(255,255,255,0.58)',
                     background: active ? 'rgba(255,255,255,0.11)' : 'transparent',
@@ -141,46 +165,50 @@ export default function SystemAdminLayout({ children }: { children: React.ReactN
                   )}
                   <item.icon className="h-4 w-4 shrink-0 transition-colors"
                     style={{ color: active ? '#57CC99' : 'rgba(255,255,255,0.45)' }} />
-                  <span>{item.name}</span>
+                  {!sidebarCollapsed && <span>{item.name}</span>}
                 </Link>
               );
             })}
           </nav>
 
           {/* User section */}
-          <div className="shrink-0 p-4 space-y-3"
+          <div className={`shrink-0 space-y-3 ${sidebarCollapsed ? 'p-3' : 'p-4'}`}
             style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-            <div className="flex items-center gap-3 px-1">
+            <div className={`flex items-center ${sidebarCollapsed ? 'justify-center px-0' : 'gap-3 px-1'}`}>
               <div className="h-7 w-7 rounded-full flex items-center justify-center shrink-0"
                 style={{ background: 'rgba(255,255,255,0.10)' }}>
                 <User className="h-3.5 w-3.5" style={{ color: 'rgba(255,255,255,0.55)' }} />
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-white truncate leading-tight">
-                  {loading ? '…' : user?.full_name || 'Admin'}
-                </p>
-                <p className="text-[11px] truncate leading-tight" style={{ color: 'rgba(255,255,255,0.38)' }}>
-                  {user?.email}
-                </p>
-              </div>
+              {!sidebarCollapsed && (
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-white truncate leading-tight">
+                    {loading ? '…' : user?.full_name || 'Admin'}
+                  </p>
+                  <p className="text-[11px] truncate leading-tight" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                    {user?.email}
+                  </p>
+                </div>
+              )}
             </div>
             <button
               onClick={handleLogout}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150"
+              className={`w-full flex items-center rounded-lg text-sm font-medium transition-all duration-150 ${
+                sidebarCollapsed ? 'justify-center px-2 py-2.5' : 'gap-2.5 px-3 py-2'
+              }`}
               style={{ color: 'rgba(255,255,255,0.45)' }}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.cssText += 'color:#fca5a5;background:rgba(239,68,68,0.1)'; }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.45)'; (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
             >
               <LogOut className="h-3.5 w-3.5 shrink-0" />
-              Sign out
+              {!sidebarCollapsed && 'Sign out'}
             </button>
           </div>
         </aside>
 
         {/* ── Main content ─────────────────────────────────────────── */}
-        <main className="flex-1 overflow-y-auto min-w-0 mt-[52px] lg:mt-0"
-          style={{ background: '#F8FAFC' }}>
-          <div className="p-6 lg:p-8 min-h-screen">
+        <main className="min-w-0 flex-1 mt-[52px] lg:mt-0"
+          style={{ background: '#EEF2F7' }}>
+          <div className="min-h-screen p-6 lg:p-8">
             {children}
           </div>
         </main>

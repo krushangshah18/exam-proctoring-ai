@@ -3,20 +3,14 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowLeft, CheckCircle2, XCircle, Clock, AlertTriangle,
-  ShieldAlert, Calendar, Loader2, Ban, History
+  CheckCircle2, XCircle, Clock, AlertTriangle,
+  ShieldAlert, Loader2, Ban, History
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
 import RoleGuard from '@/components/auth/role-guard';
+import { StudentPageShell } from '@/components/student/StudentShell';
 import { parseUTC, fmtDateTimeTZ, fmtTimeTZ } from '@/lib/fmt-date';
-
-// ──────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────
 
 function formatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -26,36 +20,6 @@ function formatDuration(seconds: number): string {
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
-
-const EXAM_STATUS_CONFIG: Record<string, { label: string; classes: string }> = {
-  ENDED: { label: 'Ended', classes: 'bg-blue-50 text-blue-700 border-blue-200' },
-  CANCELLED: { label: 'Cancelled', classes: 'bg-slate-50 text-slate-500 border-slate-200' },
-  LIVE: { label: 'Live', classes: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  SCHEDULED: { label: 'Scheduled', classes: 'bg-amber-50 text-amber-700 border-amber-200' },
-};
-
-const SESSION_STATUS_CONFIG: Record<string, { label: string; icon: React.ReactNode; classes: string }> = {
-  ENDED: {
-    label: 'Submitted',
-    icon: <CheckCircle2 className="h-3.5 w-3.5" />,
-    classes: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  },
-  TERMINATED: {
-    label: 'Terminated',
-    icon: <Ban className="h-3.5 w-3.5" />,
-    classes: 'bg-rose-50 text-rose-700 border-rose-200',
-  },
-  ACTIVE: {
-    label: 'In Progress',
-    icon: <Clock className="h-3.5 w-3.5 animate-pulse" />,
-    classes: 'bg-indigo-50 text-indigo-700 border-indigo-200',
-  },
-  DISCONNECTED: {
-    label: 'Disconnected',
-    icon: <AlertTriangle className="h-3.5 w-3.5" />,
-    classes: 'bg-amber-50 text-amber-700 border-amber-200',
-  },
-};
 
 interface ExamHistoryItem {
   id: string;
@@ -71,9 +35,38 @@ interface ExamHistoryItem {
   session_end_time: string | null;
   duration_taken_seconds: number | null;
   risk_score: number;
-  violation_count: number;
   time_extension_seconds: number;
   terminated_reason: string | null;
+}
+
+function getSessionBadge(status: string | null): { label: string; className: string; icon: React.ReactNode } | null {
+  if (!status) return null;
+  const map: Record<string, { label: string; className: string; icon: React.ReactNode }> = {
+    ENDED: { label: 'Submitted', className: 'st-badge st-badge-live', icon: <CheckCircle2 style={{ width: '10px', height: '10px' }} /> },
+    TERMINATED: { label: 'Terminated', className: 'st-badge st-badge-terminated', icon: <Ban style={{ width: '10px', height: '10px' }} /> },
+    ACTIVE: { label: 'In Progress', className: 'st-badge st-badge-active', icon: <Clock style={{ width: '10px', height: '10px' }} /> },
+    DISCONNECTED: { label: 'Disconnected', className: 'st-badge st-badge-warning', icon: <AlertTriangle style={{ width: '10px', height: '10px' }} /> },
+  };
+  return map[status] ?? null;
+}
+
+function getExamStatusBadge(status: string): { label: string; className: string } {
+  const map: Record<string, { label: string; className: string }> = {
+    ENDED: { label: 'Ended', className: 'st-badge st-badge-ended' },
+    CANCELLED: { label: 'Cancelled', className: 'st-badge st-badge-muted' },
+    LIVE: { label: 'Live', className: 'st-badge st-badge-live' },
+    SCHEDULED: { label: 'Scheduled', className: 'st-badge st-badge-scheduled' },
+  };
+  return map[status] ?? { label: status, className: 'st-badge st-badge-muted' };
+}
+
+function StatCell({ label, value, color }: { label: string; value: React.ReactNode; color?: string }) {
+  return (
+    <div>
+      <p style={{ fontSize: '10.5px', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>{label}</p>
+      <p style={{ fontSize: '13.5px', fontWeight: 700, color: color || '#0F172A' }}>{value}</p>
+    </div>
+  );
 }
 
 export default function ExamHistoryPage() {
@@ -97,185 +90,146 @@ export default function ExamHistoryPage() {
 
   return (
     <RoleGuard allowedRoles={['STUDENT']}>
-      <div className="min-h-screen bg-slate-50">
-        {/* Header */}
-        <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-          <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center gap-4 h-16">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => router.push('/student/dashboard')}
-                className="h-9 w-9"
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-              <div className="flex items-center gap-2">
-                <History className="h-5 w-5 text-indigo-600" />
-                <h1 className="text-xl font-bold text-slate-900">Exam History</h1>
-              </div>
-            </div>
+      <StudentPageShell backHref="/student/dashboard" backLabel="Back to Dashboard">
+
+        {/* Page title */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+          <div style={{
+            width: '38px', height: '38px', borderRadius: '10px',
+            background: 'rgba(34,87,122,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <History style={{ width: '18px', height: '18px', color: '#22577A' }} />
           </div>
-        </header>
+          <div>
+            <h1 style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.02em' }}>Exam History</h1>
+            <p style={{ fontSize: '13px', color: '#94A3B8', marginTop: '1px' }}>
+              {loading ? '' : `${exams.length} exam${exams.length !== 1 ? 's' : ''} found`}
+            </p>
+          </div>
+        </div>
 
-        {/* Content */}
-        <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {loading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0', color: '#94A3B8' }}>
+            <Loader2 style={{ width: '28px', height: '28px', animation: 'spin 1s linear infinite' }} />
+            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+          </div>
+        ) : exams.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '80px 0' }}>
+            <History style={{ width: '52px', height: '52px', color: '#E2E8F0', margin: '0 auto 16px' }} />
+            <h2 style={{ fontSize: '17px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>No exam history yet</h2>
+            <p style={{ fontSize: '13.5px', color: '#94A3B8', marginBottom: '20px' }}>
+              Completed and past exams will appear here after they have ended.
+            </p>
+            <button onClick={() => router.push('/student/dashboard')} className="st-btn-ghost">
+              Back to Dashboard
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }} className="st-fadein">
+            {exams.map(exam => {
+              const sessionBadge = getSessionBadge(exam.session_status);
+              const examBadge = getExamStatusBadge(exam.exam_status);
+              const submittedAt = exam.session_end_time ? parseUTC(exam.session_end_time) : null;
 
-          {loading ? (
-            <div className="flex items-center justify-center py-24">
-              <Loader2 className="h-8 w-8 animate-spin text-slate-300" />
-            </div>
-          ) : exams.length === 0 ? (
-            <div className="text-center py-24">
-              <History className="h-14 w-14 text-slate-200 mx-auto mb-4" />
-              <h2 className="text-xl font-semibold text-slate-700 mb-2">No exam history yet</h2>
-              <p className="text-slate-400 text-sm">
-                Completed and past exams will appear here after they have ended.
-              </p>
-              <Button
-                variant="outline"
-                className="mt-6"
-                onClick={() => router.push('/student/dashboard')}
-              >
-                Back to Dashboard
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <p className="text-sm text-slate-500">{exams.length} exam{exams.length !== 1 ? 's' : ''} found</p>
-
-              {exams.map((exam) => {
-                const sessionCfg = exam.session_status ? SESSION_STATUS_CONFIG[exam.session_status] : null;
-                const examStatusCfg = EXAM_STATUS_CONFIG[exam.exam_status] ?? {
-                  label: exam.exam_status,
-                  classes: 'bg-slate-100 text-slate-500 border-slate-200',
-                };
-                const submittedAt = exam.session_end_time
-                  ? parseUTC(exam.session_end_time)
-                  : null;
-
-                return (
-                  <Card
-                    key={exam.id}
-                    className="bg-white shadow-sm border-slate-200 hover:shadow-md transition-shadow"
-                  >
-                    <CardContent className="p-6">
-                      <div className="flex items-start justify-between gap-4 flex-wrap">
-                        {/* Left: title + badges */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap mb-1">
-                            <h3 className="text-lg font-bold text-slate-900 truncate">{exam.title}</h3>
-                            <Badge variant="secondary" className="text-[10px] uppercase font-semibold">
-                              {exam.exam_mode}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <Badge variant="outline" className={`text-xs ${examStatusCfg.classes}`}>
-                              {examStatusCfg.label}
-                            </Badge>
-                            {sessionCfg && (
-                              <Badge variant="outline" className={`text-xs flex items-center gap-1 ${sessionCfg.classes}`}>
-                                {sessionCfg.icon} {sessionCfg.label}
-                              </Badge>
-                            )}
-                            {!exam.session_status && exam.exam_status === 'CANCELLED' && (
-                              <Badge variant="outline" className="text-xs bg-slate-50 text-slate-500 border-slate-200">
-                                Not Attempted
-                              </Badge>
-                            )}
-                            {!exam.session_status && exam.exam_status !== 'CANCELLED' && (
-                              <Badge variant="outline" className="text-xs bg-slate-50 text-slate-500 border-slate-200">
-                                No Session
-                              </Badge>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Right: date */}
-                        <div className="text-right shrink-0">
-                          <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Exam Date</p>
-                          <p className="text-sm font-semibold text-slate-700 mt-0.5">
-                            {parseUTC(exam.start_window).toLocaleDateString(undefined, {
-                              month: 'short',
-                              day: 'numeric',
-                              year: 'numeric',
-                            })}
-                          </p>
-                          <p className="text-xs text-slate-400">
-                            {fmtTimeTZ(exam.start_window)}
-                          </p>
-                        </div>
+              return (
+                <div key={exam.id} className="st-card" style={{ padding: '20px 22px' }}>
+                  {/* Header row */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap', marginBottom: '14px' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                        <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {exam.title}
+                        </h3>
+                        <span style={{
+                          fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+                          letterSpacing: '0.08em', color: '#94A3B8',
+                          background: '#F8FAFC', padding: '2px 7px', borderRadius: '4px', border: '1px solid #E2E8F0',
+                        }}>
+                          {exam.exam_mode}
+                        </span>
                       </div>
-
-                      {/* Stats row */}
-                      <div className="mt-5 pt-4 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-4 gap-4">
-                        <div>
-                          <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Allotted Time</p>
-                          <p className="text-sm font-semibold text-slate-800 mt-0.5">
-                            {exam.duration_minutes} min
-                            {exam.time_extension_seconds > 0 && (
-                              <span className="text-emerald-600 font-normal ml-1">
-                                (+{Math.round(exam.time_extension_seconds / 60)}m)
-                              </span>
-                            )}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Time Taken</p>
-                          <p className="text-sm font-semibold text-slate-800 mt-0.5">
-                            {exam.duration_taken_seconds != null
-                              ? formatDuration(exam.duration_taken_seconds)
-                              : '—'}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Violations</p>
-                          <p className={`text-sm font-semibold mt-0.5 flex items-center gap-1 ${exam.violation_count > 0 ? 'text-rose-600' : 'text-slate-800'}`}>
-                            {exam.violation_count > 0 && <AlertTriangle className="h-3.5 w-3.5" />}
-                            {exam.violation_count}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Risk Score</p>
-                          <p className={`text-sm font-semibold mt-0.5 ${exam.risk_score >= 70 ? 'text-rose-600' : exam.risk_score >= 40 ? 'text-amber-600' : 'text-slate-800'}`}>
-                            {exam.risk_score}
-                          </p>
-                        </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <span className={examBadge.className}>{examBadge.label}</span>
+                        {sessionBadge && (
+                          <span className={sessionBadge.className}>{sessionBadge.icon}{sessionBadge.label}</span>
+                        )}
+                        {!exam.session_status && (
+                          <span className="st-badge st-badge-muted">{exam.exam_status === 'CANCELLED' ? 'Not Attempted' : 'No Session'}</span>
+                        )}
                       </div>
+                    </div>
 
-                      {/* Submitted at */}
-                      {submittedAt && (
-                        <div className="mt-3 flex items-center gap-1.5 text-xs text-slate-400">
-                          <Clock className="h-3.5 w-3.5" />
-                          Submitted at {fmtDateTimeTZ(exam.session_end_time)}
-                        </div>
-                      )}
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <p style={{ fontSize: '10.5px', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '3px' }}>Exam Date</p>
+                      <p style={{ fontSize: '13.5px', fontWeight: 700, color: '#475569' }}>
+                        {parseUTC(exam.start_window).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </p>
+                      <p style={{ fontSize: '12px', color: '#94A3B8' }}>{fmtTimeTZ(exam.start_window)}</p>
+                    </div>
+                  </div>
 
-                      {/* Termination reason */}
-                      {exam.terminated_reason && (
-                        <div className="mt-3 p-3 bg-rose-50 border border-rose-100 rounded-lg flex items-start gap-2">
-                          <ShieldAlert className="h-4 w-4 text-rose-500 mt-0.5 shrink-0" />
-                          <p className="text-xs text-rose-700 leading-relaxed">{exam.terminated_reason}</p>
-                        </div>
-                      )}
+                  {/* Stats row */}
+                  <div style={{
+                    borderTop: '1px solid #F1F5F9', paddingTop: '14px',
+                    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px',
+                  }}>
+                    <StatCell
+                      label="Allotted Time"
+                      value={<>
+                        {exam.duration_minutes} min
+                        {exam.time_extension_seconds > 0 && (
+                          <span style={{ color: '#16A34A', fontWeight: 600, marginLeft: '4px' }}>
+                            (+{Math.round(exam.time_extension_seconds / 60)}m)
+                          </span>
+                        )}
+                      </>}
+                    />
+                    <StatCell
+                      label="Time Taken"
+                      value={exam.duration_taken_seconds != null ? formatDuration(exam.duration_taken_seconds) : '—'}
+                    />
+                    <StatCell
+                      label="Risk Score"
+                      value={exam.risk_score}
+                      color={exam.risk_score >= 70 ? '#DC2626' : exam.risk_score >= 40 ? '#D97706' : undefined}
+                    />
+                  </div>
 
-                      {/* Cancelled notice */}
-                      {exam.exam_status === 'CANCELLED' && (
-                        <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
-                          <p className="text-xs text-slate-500">This exam was cancelled by the administrator.</p>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          )}
-        </main>
-      </div>
+                  {/* Submitted at */}
+                  {submittedAt && (
+                    <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: '#94A3B8' }}>
+                      <Clock style={{ width: '12px', height: '12px' }} />
+                      Submitted at {fmtDateTimeTZ(exam.session_end_time!)}
+                    </div>
+                  )}
+
+                  {/* Termination reason */}
+                  {exam.terminated_reason && (
+                    <div style={{
+                      marginTop: '12px', padding: '10px 12px', borderRadius: '8px',
+                      background: 'rgba(239,68,68,0.04)', border: '1px solid rgba(239,68,68,0.15)',
+                      display: 'flex', alignItems: 'flex-start', gap: '8px',
+                    }}>
+                      <ShieldAlert style={{ width: '14px', height: '14px', color: '#EF4444', flexShrink: 0, marginTop: '1px' }} />
+                      <p style={{ fontSize: '12.5px', color: '#DC2626', lineHeight: 1.5 }}>{exam.terminated_reason}</p>
+                    </div>
+                  )}
+
+                  {/* Cancelled notice */}
+                  {exam.exam_status === 'CANCELLED' && (
+                    <div style={{
+                      marginTop: '12px', padding: '10px 12px', borderRadius: '8px',
+                      background: '#F8FAFC', border: '1px solid #E2E8F0',
+                    }}>
+                      <p style={{ fontSize: '12.5px', color: '#64748B' }}>This exam was cancelled by the administrator.</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </StudentPageShell>
     </RoleGuard>
   );
 }

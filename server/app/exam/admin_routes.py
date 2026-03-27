@@ -667,7 +667,7 @@ def list_exam_sessions(
     current_admin=Depends(require_role(UserRole.ADMIN, UserRole.SYSADMIN)),
 ):
     """
-    Return all sessions for an exam with student info, status, risk, and violation counts.
+    Return all sessions for an exam with student info, status, and risk.
     Used by the monitoring dashboard.
     """
     exam = (
@@ -691,10 +691,6 @@ def list_exam_sessions(
     result = []
     for sess in sessions:
         user = db.query(models.User).filter(models.User.id == sess.user_id).first()
-        violation_count = db.query(models.Violation).filter(
-            models.Violation.session_id == sess.id
-        ).count()
-
         pending_appeal = db.query(models.ResumeRequest).filter(
             models.ResumeRequest.session_id == sess.id,
             models.ResumeRequest.status == ResumeStatus.PENDING.value,
@@ -709,7 +705,6 @@ def list_exam_sessions(
             "start_time": sess.start_time,
             "end_time": sess.end_time,
             "risk_score": sess.risk_score or 0,
-            "violation_count": violation_count,
             "last_heartbeat": sess.last_heartbeat,
             "terminated_reason": sess.terminated_reason,
             "terminated_by": sess.terminated_by,
@@ -764,7 +759,7 @@ def list_resume_requests(
         elif terminated_by == "ADMIN":
             termination_type = "ADMIN"
         elif terminated_by and terminated_by.startswith("SYSTEM"):
-            termination_type = "VIOLATION"
+            termination_type = "SYSTEM"
         else:
             termination_type = "LATE_JOIN"   # no session or no terminated_by → late join appeal
 
@@ -872,7 +867,7 @@ def review_resume_request(
         }
     else:
         # DENIED — permanently close the session so no ghost sessions remain.
-        # Types 3/4/5 (violation/admin): session ends, no extra time.
+        # Types 3/4/5 (system/admin): session ends, no extra time.
         # Types 6/7 (disconnect): same, no extra time.
         sess.status = SessionStatus.ENDED.value
         sess.end_time = datetime.now(UTC)
@@ -1092,7 +1087,7 @@ async def admin_live_stream(
     current_admin=Depends(require_role("ADMIN")),
 ):
     """
-    SSE proxy from the engine — streams live violation alerts to the admin monitor panel.
+    SSE proxy from the engine — streams live risk alerts to the admin monitor panel.
     """
     from fastapi.responses import StreamingResponse as _SR
     from app.exam.proctor_proxy import stream_engine_events
@@ -1763,7 +1758,7 @@ def get_all_active_sessions(
 ):
     """
     All active/disconnected ProctorAI sessions across all exams — with full
-    student info, exam title, risk score, violation count, proctor status.
+    student info, exam title, risk score, and proctor status.
     """
     sessions = (
         db.query(models.ExamSession)
@@ -1777,11 +1772,6 @@ def get_all_active_sessions(
     for s in sessions:
         user = db.query(models.User).filter(models.User.id == s.user_id).first()
         exam = db.query(models.Exam).filter(models.Exam.id == s.exam_id).first()
-        violation_count = (
-            db.query(models.Violation)
-            .filter(models.Violation.session_id == s.id)
-            .count()
-        )
         result.append({
             "session_id": str(s.id),
             "exam_id": str(s.exam_id),
@@ -1791,7 +1781,6 @@ def get_all_active_sessions(
             "status": s.status,
             "start_time": s.start_time,
             "risk_score": s.risk_score or 0,
-            "violation_count": violation_count,
             "last_heartbeat": s.last_heartbeat,
             "proctor_connected": bool(s.proctor_pc_id),
             "proctor_engine_url": s.proctor_engine_url,

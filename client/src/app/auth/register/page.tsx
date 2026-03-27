@@ -1,107 +1,80 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { useRouter } from 'next/navigation';
 import Webcam from 'react-webcam';
-import { Camera, RefreshCw, Loader2, CheckCircle2 } from 'lucide-react';
+import { Camera, RefreshCw, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 import api from '@/lib/axios';
-
-import { Button } from '@/components/ui/button';
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-  FormDescription,
-} from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { AuthShell, AuthField, PasswordInput } from '@/components/auth/AuthShell';
 
 const formSchema = z.object({
-  full_name: z.string().min(2, {
-    message: 'Name must be at least 2 characters.',
-  }),
-  email: z.string().email({
-    message: 'Please enter a valid email address.',
-  }),
-  password: z.string().min(8, {
-    message: 'Password must be at least 8 characters.',
-  }),
+  full_name: z.string().min(2, { message: 'Name must be at least 2 characters.' }),
+  email: z.string().email({ message: 'Please enter a valid email address.' }),
+  password: z.string().min(8, { message: 'Password must be at least 8 characters.' }),
   confirmPassword: z.string(),
-  consent: z.boolean().refine((val) => val === true, {
-    message: 'You must agree to the privacy policy.',
-  }),
-}).refine((data) => data.password === data.confirmPassword, {
+  consent: z.boolean().refine(v => v === true, { message: 'You must agree to the privacy policy.' }),
+}).refine(d => d.password === d.confirmPassword, {
   message: "Passwords don't match",
-  path: ["confirmPassword"],
+  path: ['confirmPassword'],
 });
+
+type FormValues = z.infer<typeof formSchema>;
+
+// Step indicator
+function StepDots({ step }: { step: number }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
+      {[1, 2].map(n => (
+        <div key={n} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{
+            width: n === step ? '28px' : '8px', height: '8px', borderRadius: '4px',
+            background: n <= step ? '#22577A' : '#E2E8F0',
+            transition: 'all 300ms ease',
+          }} />
+        </div>
+      ))}
+      <span style={{ fontSize: '11px', fontWeight: 600, color: '#94A3B8', marginLeft: '4px' }}>
+        Step {step} of 2
+      </span>
+    </div>
+  );
+}
 
 export default function RegisterPage() {
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [camError, setCamError] = useState(false);
   const webcamRef = useRef<Webcam>(null);
 
-  const form = useForm<z.infer<typeof formSchema>>({
+  const { register, handleSubmit, control, trigger, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: {
-      full_name: '',
-      email: '',
-      password: '',
-      confirmPassword: '',
-      consent: false,
-    },
+    defaultValues: { full_name: '', email: '', password: '', confirmPassword: '', consent: false },
   });
 
   const capture = useCallback(() => {
-    const imageSrc = webcamRef.current?.getScreenshot();
-    if (imageSrc) {
-      setImgSrc(imageSrc);
-    }
-  }, [webcamRef]);
-
-  const retake = () => {
-    setImgSrc(null);
-  };
+    const src = webcamRef.current?.getScreenshot();
+    if (src) setImgSrc(src);
+  }, []);
 
   const handleNext = async () => {
-    const output = await form.trigger(['full_name', 'email', 'password', 'confirmPassword', 'consent']);
-    if (output) {
-      if (step === 1) {
-        setStep(2);
-      }
-    }
+    const ok = await trigger(['full_name', 'email', 'password', 'confirmPassword', 'consent']);
+    if (ok) setStep(2);
   };
 
-  async function onSubmit(values: z.infer<typeof formSchema>) {
-    if (!imgSrc) {
-      toast.error('Please capture a selfie to continue.');
-      return;
-    }
-
+  async function onSubmit(values: FormValues) {
+    if (!imgSrc) { toast.error('Please capture a selfie to continue.'); return; }
     setIsLoading(true);
-
     try {
-      // Convert base64 to blob
       const res = await fetch(imgSrc);
       const blob = await res.blob();
-      const file = new File([blob], "selfie.jpg", { type: "image/jpeg" });
+      const file = new File([blob], 'selfie.jpg', { type: 'image/jpeg' });
 
       const formData = new FormData();
       formData.append('email', values.email);
@@ -110,186 +83,233 @@ export default function RegisterPage() {
       formData.append('consent', 'true');
       formData.append('selfie', file);
 
-      await api.post('/auth/register/student', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-
-      toast.success('Registration successful! Please login.');
+      await api.post('/auth/register/student', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success('Registration successful! Please sign in.');
       router.push('/auth/login');
-
     } catch (error: any) {
-      console.error(error);
-      const msg = error.response?.data?.detail || 'Registration failed';
-      toast.error(msg);
+      toast.error(error.response?.data?.detail || 'Registration failed.');
     } finally {
       setIsLoading(false);
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-900 py-12 px-4 sm:px-6 lg:px-8">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-2xl font-bold text-center">
-            {step === 1 ? 'Create Account' : 'Identity Verification'}
-          </CardTitle>
-          <CardDescription className="text-center">
-            {step === 1 
-              ? 'Enter your details to get started' 
-              : 'we need a clear selfie for proctoring verification'}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-              
-              {step === 1 && (
-                <>
-                  <FormField
-                    control={form.control}
-                    name="full_name"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Full Name</FormLabel>
-                        <FormControl>
-                          <Input placeholder="John Doe" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name="email"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Email</FormLabel>
-                        <FormControl>
-                          <Input placeholder="student@example.com" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name="password"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Password</FormLabel>
-                        <FormControl>
-                          <Input type="password" placeholder="••••••••" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name="confirmPassword"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Confirm Password</FormLabel>
-                        <FormControl>
-                          <Input type="password" placeholder="••••••••" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  
-                  <FormField
-                    control={form.control}
-                    name="consent"
-                    render={({ field }) => (
-                      <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
-                        <FormControl>
-                          <Checkbox
-                            checked={field.value}
-                            onCheckedChange={field.onChange}
-                          />
-                        </FormControl>
-                        <div className="space-y-1 leading-none">
-                          <FormLabel>
-                            Privacy Policy Consent
-                          </FormLabel>
-                          <FormDescription>
-                            I authorize the collection of my face data for proctoring purposes.
-                          </FormDescription>
-                          <FormMessage />
-                        </div>
-                      </FormItem>
-                    )}
-                  />
+    <AuthShell
+      title={step === 1 ? 'Create your account' : 'Verify your identity'}
+      subtitle={
+        step === 1
+          ? 'Join ProctorAI as a student to participate in proctored exams.'
+          : 'We need a clear, well-lit selfie for biometric proctoring verification.'
+      }
+      leftHeading={'Join ProctorAI\nas a Student.'}
+      leftBody="Create your account to participate in AI-proctored exams — secure, fair, and stress-free."
+      features={[
+        'Secure biometric verification',
+        'Privacy-first data handling',
+        'Real-time AI monitoring',
+        'Full exam history access',
+      ]}
+      footer={
+        step === 1 ? (
+          <>
+            Already have an account?{' '}
+            <a href="/auth/login" className="auth-link">Sign in</a>
+          </>
+        ) : undefined
+      }
+    >
+      <StepDots step={step} />
 
-                  <Button type="button" onClick={handleNext} className="w-full">
-                    Next: Selfie Verification
-                  </Button>
-                </>
-              )}
+      <form onSubmit={handleSubmit(onSubmit)}>
+        {step === 1 && (
+          <>
+            <AuthField label="Full name" error={errors.full_name?.message} required>
+              <input
+                type="text"
+                placeholder="Your full legal name"
+                className={`auth-input${errors.full_name ? ' has-error' : ''}`}
+                {...register('full_name')}
+              />
+            </AuthField>
 
-              {step === 2 && (
-                <div className="space-y-4">
-                  <div className="relative aspect-video w-full overflow-hidden rounded-lg border bg-black">
-                    {!imgSrc ? (
-                      <Webcam
-                        audio={false}
-                        ref={webcamRef}
-                        screenshotFormat="image/jpeg"
-                        videoConstraints={{ facingMode: "user" }}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <img 
-                        src={imgSrc} 
-                        alt="Selfie" 
-                        className="h-full w-full object-cover" 
-                      />
+            <AuthField label="Email address" error={errors.email?.message} required>
+              <input
+                type="email"
+                placeholder="you@example.com"
+                className={`auth-input${errors.email ? ' has-error' : ''}`}
+                {...register('email')}
+              />
+            </AuthField>
+
+            <AuthField label="Password" error={errors.password?.message} required>
+              <PasswordInput
+                placeholder="At least 8 characters"
+                hasError={!!errors.password}
+                {...register('password')}
+              />
+            </AuthField>
+
+            <AuthField label="Confirm password" error={errors.confirmPassword?.message} required>
+              <PasswordInput
+                placeholder="Repeat your password"
+                hasError={!!errors.confirmPassword}
+                {...register('confirmPassword')}
+              />
+            </AuthField>
+
+            {/* Consent */}
+            <Controller
+              name="consent"
+              control={control}
+              render={({ field }) => (
+                <div style={{
+                  display: 'flex', alignItems: 'flex-start', gap: '10px',
+                  padding: '12px 14px', borderRadius: '8px', marginBottom: '16px',
+                  border: `1.5px solid ${errors.consent ? '#EF4444' : '#E2E8F0'}`,
+                  background: '#F8FAFC',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={field.value}
+                    onChange={field.onChange}
+                    id="consent"
+                    style={{
+                      width: '16px', height: '16px', marginTop: '2px', flexShrink: 0,
+                      accentColor: '#22577A', cursor: 'pointer',
+                    }}
+                  />
+                  <label htmlFor="consent" style={{ cursor: 'pointer' }}>
+                    <p style={{ fontSize: '13px', fontWeight: 600, color: '#475569', marginBottom: '2px' }}>
+                      Privacy Policy Consent
+                    </p>
+                    <p style={{ fontSize: '12px', color: '#94A3B8', lineHeight: 1.5 }}>
+                      I authorize the collection of my biometric face data for AI proctoring purposes.
+                    </p>
+                    {errors.consent && (
+                      <p style={{ fontSize: '12px', color: '#EF4444', marginTop: '4px' }}>{errors.consent.message}</p>
                     )}
-                  </div>
-
-                  <div className="flex justify-center gap-4">
-                    {!imgSrc ? (
-                      <Button type="button" onClick={capture} variant="secondary">
-                        <Camera className="mr-2 h-4 w-4" />
-                        Capture
-                      </Button>
-                    ) : (
-                      <Button type="button" onClick={retake} variant="outline">
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        Retake
-                      </Button>
-                    )}
-                  </div>
-
-                  <div className="flex gap-4 pt-4">
-                    <Button type="button" variant="ghost" onClick={() => setStep(1)}>
-                      Back
-                    </Button>
-                    <Button type="submit" className="flex-1" disabled={isLoading || !imgSrc}>
-                      {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Register
-                    </Button>
-                  </div>
+                  </label>
                 </div>
               )}
+            />
 
-            </form>
-          </Form>
-        </CardContent>
-        {step === 1 && (
-          <CardFooter className="flex justify-center">
-            <p className="text-sm text-gray-500">
-              Already have an account?{' '}
-              <a href="/auth/login" className="font-medium text-blue-600 hover:text-blue-500">
-                Login
-              </a>
-            </p>
-          </CardFooter>
+            <button type="button" className="auth-btn" onClick={handleNext}>
+              Continue to Selfie Verification
+            </button>
+          </>
         )}
-      </Card>
-    </div>
+
+        {step === 2 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Camera viewport */}
+            <div style={{
+              borderRadius: '12px', overflow: 'hidden',
+              border: '2px solid #E2E8F0', background: '#0F172A',
+              aspectRatio: '4/3', position: 'relative',
+            }}>
+              {!imgSrc ? (
+                <>
+                  {!camError ? (
+                    <Webcam
+                      audio={false}
+                      ref={webcamRef}
+                      screenshotFormat="image/jpeg"
+                      videoConstraints={{ facingMode: 'user' }}
+                      onUserMediaError={() => setCamError(true)}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                    />
+                  ) : (
+                    <div style={{
+                      width: '100%', height: '100%', display: 'flex',
+                      flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px',
+                    }}>
+                      <AlertCircle style={{ width: '32px', height: '32px', color: '#EF4444' }} />
+                      <p style={{ color: '#94A3B8', fontSize: '13px', textAlign: 'center', padding: '0 16px' }}>
+                        Camera access denied. Please allow camera access in your browser settings.
+                      </p>
+                    </div>
+                  )}
+                  {/* Corner guides */}
+                  {!camError && (
+                    <>
+                      {[{ top: '10px', left: '10px' }, { top: '10px', right: '10px' }, { bottom: '10px', left: '10px' }, { bottom: '10px', right: '10px' }].map((pos, i) => (
+                        <div key={i} style={{
+                          position: 'absolute', ...pos,
+                          width: '20px', height: '20px',
+                          borderTop: i < 2 ? '2px solid rgba(87,204,153,0.6)' : 'none',
+                          borderBottom: i >= 2 ? '2px solid rgba(87,204,153,0.6)' : 'none',
+                          borderLeft: i % 2 === 0 ? '2px solid rgba(87,204,153,0.6)' : 'none',
+                          borderRight: i % 2 === 1 ? '2px solid rgba(87,204,153,0.6)' : 'none',
+                        }} />
+                      ))}
+                    </>
+                  )}
+                </>
+              ) : (
+                <img src={imgSrc} alt="Captured selfie" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+              )}
+
+              {/* Captured overlay */}
+              {imgSrc && (
+                <div style={{
+                  position: 'absolute', top: '10px', right: '10px',
+                  padding: '4px 10px', borderRadius: '20px',
+                  background: 'rgba(87,204,153,0.9)', display: 'flex', alignItems: 'center', gap: '5px',
+                }}>
+                  <CheckCircle2 style={{ width: '12px', height: '12px', color: '#fff' }} />
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#fff' }}>Captured</span>
+                </div>
+              )}
+            </div>
+
+            {/* Camera controls */}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '10px' }}>
+              {!imgSrc ? (
+                <button
+                  type="button"
+                  onClick={capture}
+                  disabled={camError}
+                  className="auth-btn-accent"
+                  style={{ paddingLeft: '20px', paddingRight: '20px' }}
+                >
+                  <Camera style={{ width: '15px', height: '15px' }} />
+                  Take Selfie
+                </button>
+              ) : (
+                <button type="button" onClick={() => setImgSrc(null)} className="auth-btn-ghost">
+                  <RefreshCw style={{ width: '14px', height: '14px' }} />
+                  Retake
+                </button>
+              )}
+            </div>
+
+            <p style={{ fontSize: '12px', color: '#94A3B8', textAlign: 'center', lineHeight: 1.5 }}>
+              Ensure your face is clearly visible, well-lit, and centred in the frame.
+            </p>
+
+            {/* Action buttons */}
+            <div style={{ display: 'flex', gap: '10px', paddingTop: '4px' }}>
+              <button
+                type="button"
+                className="auth-btn-ghost"
+                onClick={() => setStep(1)}
+                style={{ flexShrink: 0 }}
+              >
+                Back
+              </button>
+              <button
+                type="submit"
+                className="auth-btn"
+                disabled={isLoading || !imgSrc}
+                style={{ flex: 1 }}
+              >
+                {isLoading && <Loader2 style={{ width: '15px', height: '15px', animation: 'spin 1s linear infinite' }} />}
+                Complete Registration
+              </button>
+            </div>
+          </div>
+        )}
+      </form>
+    </AuthShell>
   );
 }

@@ -1,0 +1,1315 @@
+So i need to prepare for my finaly sem project presentation :
+
+so we are not presenting to audiance but the faculty who is going to visit college to evaluate us
+i had planned a flow but it needs some work to be done on it :
+- Title Slide
+- contents (index type personally i dont agree with this page)
+- model iterations and challenges : initial idea to last iteration covering the dataset issues and how we overcome them (also cover the IOU and such small issues) : then the single user to multi user transition
+- security checks and safety provided auth layer of software 
+- Pre exam flow and how we achieve the software good for exam No cheating also no harsh panelties
+- scoring system
+- deployment architecture
+- Pricing how much it would cost per student and other money related key points and other performance related numbers
+- future upgrades
+- thank you
+
+ now discuss and suggest what slides to add and its flow
+
+ we should also gather info about existing proctoring systems and my be display what we do better than them also i have some flows prepared i will give you that in some type i need to type them then we discusss further
+
+ this is one thing then i will give you how we shifted from single user to multi user imple :
+
+Model Iterations : 
+Initially using yolov8-s directly detecting person, book, cell phone (but confidence was low for book and phone and use not tuned for our use case detecting them from the edge)
+
+Fine-Tune V-1
+Got dataset from multiple sources/datasets  & merged it (roboflow univers)
+Labels : 
+0 person : (our fine-tuned model wont be recognizing it but had just reserved for future use case No person labeling done as of now in dataset)
+1 book
+2 cell phone
+3 audio device (this was a mistake to merge the earbuds and headphone into one label as both has different structure so model used to get confused)
+Data set : 1.26GB : 27K images : train and val split
+ Model numbers : P:0.92, R:0.77, MAP50:0.83, MAP50-95: 0.62
+
+Fine-Tune V-2
+Related images & re designed the dataset 
+Still earbuds was weak
+Now the phone and book were getting detected on edges
+Dataset : 1.31 GB, 26K images (lot of bad images were removed and started focusing on quality of image) : train and val split
+Labels:
+0 book
+1 cell phone
+2 headphone
+3 earbuds 
+(made mistake and forgot to reserve the 0 for person)
+Model numbers : P:0.85, R: 0.8, MAP50:0.87. MAP50-95: 0.641
+Fine-Tune V-3
+Solved the label issue
+Dataset : 1.23 GB , train, test and val split , 25k images (removed bad images)
+0:person, 1:book, 2:cellPhone, 3:headphone, 4:earbud
+P:0.87, R:0.8, MAP50:0.88, MAP50-95:0.64
+Fine-Tune V-4
+Dataset : 1.4GB : 26K images : test, train and val split
+Recorded myself , colleagues and family to get some more data based on our requirement and labeled it 
+P: 0.9, R:0.82, MAP50:0.9, MAP50-95:0.70
+Till now was running 2 YOLO models each iteration/frame one to detect person and other to detect cheating objects so had to run only one model because was wasting computation so added person labeled images but made mistake that didnt labeld the person in already existing dataset so what happened the conf for person dropped so realised this half way at training and solved it by Labeled all images where person existed using YOLO is self but a larger model like yolov8-M looped through whole data set in order to add labels but now had huge person bias in dataset so only kept person labeled imageg which were accompanied with other labels images with only person label were removed (again mistake) and still person was not getting detected properly 
+Was providing normal person in front of webcam as hard -ve images in dataset but after this it was not -ve images but these were labeled images also had not addend any other -ve images so this was another mistake 
+Also false +ve for earbuds was increased 
+
+Fine-Tune V-5
+Big Big Update in this version
+Gone through whole data and found a lot of issues:
+Mislabeling :  people would label neckbands earbuds as headphone so improved the labeling
+Different datasets has repetitive same images for especially for earbuds
+Previous splits were too bad some labels had no representation in test or val hence the higher numbers
+Text file to image mismatch there were some images with no text file at all 
+Conclusion had worked on dataset a lot
+How improved dataset:
+Got 10k images from coco dataset on which YOLO is traine with labels cell_phone, person and book
+Solved the issues in current dataset by adding labels , relabeling 
+Web scraped images for hard -ve like calculators for phone , printed tshirt wall with quotes on it for book, people with empty ear, hand in ear for earbuds 
+Deleting the repeating ones
+Again got myself, colleagues and family recorded with different backgrounds
+Solve the split issue by splitting label wise 
+Dataset : 1.8gb : 23k imageg -> 55K instances split is train/test and val
+P: 0.9, R:0.78, MAP50: 0.86, MAP50-95: 0.65
+
+
+
+Simultaneous was working on media pipe too for head detection its movement left right up down then eye gaze eye blink in order to find image is static or not
+
+Then added audio analysis : 
+Not completely audio based it uses both the audio and video : core idea 
+We take audio and video in input and decide is the user itself is speaking or not 
+We detect lips and decided if its still (not speaking), talking OR Yawning
+In audio we perfor vad to detect speech parts
+Now we combine both and decide if someone else is speaking or the user itself 
+If speech is active and either no persone detected or face detected but not speaking the this is flagged
+
+wait will be getting more
+
+This is Single User -> multi User 
+
+also this is obviously raw but i am providing each and every detail so that you could work better on it and generate content without assumptions
+
+Iter1 VS Iter2
+
+The old repo was a single-candidate vision loop; the new repo turns that into a sessionized proctoring service. In the POC, one main.py owned the webcam, the model, the timers, the overlays, the proof writer, and the UI in one sequential loop (main.py (line 175)). In the new system, ingestion, inference orchestration, per-candidate state, transport, reporting, and admin UI are split across a FastAPI/WebRTC backend and a Next frontend (server.py (line 49), proctor_coordinator.py (line 45), proctor_session.py (line 72)).
+What changed to make single-user become multi-user on one server:
+The biggest shift was architectural: one local loop became a central coordinator plus many isolated sessions. The old design doc explicitly identified that almost every detector/state machine was per-user state and only YOLO was worth sharing (multi_user_scaling_design.md (line 64)). The new code implements that exactly: ProctorCoordinator owns one shared detector, while each ProctorSession owns its own trackers, liveness, audio state, alerts, logs, and report state (proctor_coordinator.py (line 74), proctor_session.py (line 128)).
+Input transport changed from local webcam/mic to WebRTC streams. The POC used cv2.VideoCapture(0) plus a local AudioMonitor.start() (main.py (line 176), main.py (line 271)). The new backend accepts /offer, creates an RTCPeerConnection, and receives separate video/audio tracks per candidate (server.py (line 607)). That change is what made “many candidates, one server” possible at all.
+Frame handling became pull-latest instead of process-every-frame. In the POC every captured frame immediately went through the whole pipeline (main.py (line 313)). In the new version, incoming video just updates session.latest_frame, and the coordinator samples the newest available frame at each tick (server.py (line 197), proctor_coordinator.py (line 189)). That avoids backlog growth when ingest FPS is higher than inference FPS.
+YOLO changed from one-frame-at-a-time to batched shared inference. The POC detector only had detect(frame) (object_detector.py (line 138)). The new detector adds detect_batch(frames) and the coordinator runs one YOLO forward pass for all active sessions in the same tick (object_detector.py (line 283), proctor_coordinator.py (line 205)). This is the core throughput win.
+MediaPipe became parallel and conditional. In the POC, head pose and lip detection were always run inline for the one user (main.py (line 341)). In the new system, each session owns its own FaceMesh-based detectors, but the coordinator dispatches those across a thread pool, and skips MediaPipe entirely when the enabled detections do not need it (proctor_coordinator.py (line 212), proctor_session.py (line 382)). That saves both CPU and thread-pool slots.
+The most important algorithmic fix for scaling was object tracking. The old ObjectTemporalTracker was frame-count based: “N votes in last 15 frames” (object_tracker.py (line 3)). That breaks badly when effective per-user FPS drops under multi-user load. The new tracker is time-window based and FPS-aware, with dynamic vote thresholds and a floor (object_tracker.py (line 25)). That is exactly the “frame-count voting to time-based behavior” change you called out.
+A subtle but smart compatibility detail: you did not throw away the old tuning numbers. ProctorSession converts the old OBJECT_WINDOW, PHONE_MIN_VOTES, BOOK_MIN_VOTES, and OBJECT_MIN_VOTES into ratios and a time window before constructing the new tracker (proctor_session.py (line 138)). So the behavior was migrated, not reset.
+Head/gaze logic was already mostly wall-clock based in the old repo, which helped scaling. HeadTracker was already thresholding by seconds, not by frames (head_tracker.py (line 24)). In the new repo it was tightened so it returns (triggered, duration) directly, and RiskEngine.process_event can accept a shared now, which cuts redundant timing work across many sessions (head_tracker.py (line 32), risk_engine.py (line 136)). So the main scaling rewrite was objects; head/gaze mostly needed orchestration and micro-optimizations.
+Audio was adapted rather than reinvented. The old audio monitor assumed a local mic stream (audio_monitor.py (line 39)). The new one adds start_webrtc_mode() and a VAD-only worker that consumes pushed PCM from WebRTC audio frames instead of opening a local input device (audio_monitor.py (line 55), server.py (line 237)). That preserved the audio model while making it server-friendly.
+Proof capture was aggressively simplified for scale. The POC kept a rolling frame buffer and could write MP4/MKV video plus audio around alerts, using threads and ffmpeg (proof_writer.py (line 17)). The new version writes only a JPEG per alert and a WAV clip for speaker-audio events, with no rolling frame buffer and no video encoding (proof_writer.py (line 15)). This is a major CPU, RAM, disk, and complexity reduction per session.
+Rendering moved out of the hot path. The POC used cv2.imshow() and drew overlays every loop iteration (main.py (line 321)). The new backend stores raw snapshots at about 2 Hz for admin view and only generates the heavy debug overlay when requested for one session (server.py (line 185), server.py (line 279)). That is exactly the kind of change that matters when one process is serving many candidates.
+The system became capacity-managed and observable. The POC had no notion of slots or multi-session health. The new config and server add TICK_RATE, MAX_SESSIONS, capacity checks, metrics, system reports, and per-session dashboards (config.py (line 7), server.py (line 347), admin/page.tsx (line 132)). That matters because multi-user is not just “process N streams”; it is “know when the server is safe to admit N streams.”
+The important summary is this: multi-user was not achieved by rewriting the scoring philosophy. RiskEngine and AlertEngine stayed largely intact. It was achieved by turning the app into a sessionized server, sharing only the YOLO model, batching that shared inference, parallelizing per-session MediaPipe, changing frame-based object voting into time/fps-aware voting, simplifying proof generation, and decoupling ingestion from analysis. That combination is what made one-server-many-candidates workable.
+If you want, next I can turn this into a clean comparison document with sections like “Before”, “After”, “Why it mattered”, and “Impact on scalability” that you can keep in the repo.
+
+
+
+Audio
+In the single-user POC, audio meant “read from this machine’s microphone.” AudioMonitor.start() opened a local pyaudio input stream, ran Silero VAD on each chunk, and updated a per-session speech flag plus an audio ring buffer for proof capture (audio_monitor.py (line 39)). That worked for one local webcam demo, but it does not fit a multi-user server because the server is no longer the physical microphone source.
+In the new system, audio became “push audio from each candidate’s WebRTC stream into that candidate’s own audio state.” The browser sends audio over WebRTC, server.py (line 209) resamples it to mono 16 kHz, and pushes PCM bytes into the candidate’s ProctorSession via push_audio_chunk() (server.py (line 237), proctor_session.py (line 359)). Then AudioMonitor.start_webrtc_mode() runs a VAD-only background thread that reads those pushed chunks from the ring buffer instead of opening a local device (audio_monitor.py (line 55), audio_monitor.py (line 123)).
+What stayed the same is the actual proctoring idea: detect speech activity, compare it with lip movement, and flag “audio without matching lips” through SpeakerAudioDetector (audio_monitor.py (line 185)). What changed is the transport and ownership model:
+Old: one local mic, one loop, one user.
+New: one audio pipeline per candidate session, fed by WebRTC audio packets.
+Old proof: audio could be merged into heavier AV artifacts.
+New proof: simpler and cheaper, just save a WAV clip for speaker_audio plus image proof (proof_writer.py (line 15)).
+That change is important because audio now scales naturally per user without fighting over a single OS microphone.
+TICK_RATE
+TICK_RATE is the coordinator’s target analysis frequency: how often the backend tries to run one analysis cycle over all active sessions. In your config it is 10, which means “aim for 10 ticks per second” (config.py (line 7)).
+A tick is not “one incoming camera frame.” It is “one coordinated round of server-side analysis across all active candidates.” The loop lives in proctor_coordinator.py (line 162). On each tick, the coordinator:
+Snapshots all sessions that currently have a latest frame and are not terminated (proctor_coordinator.py (line 189)).
+Collects the latest frame from each session.
+Runs one batched YOLO call on all those frames (proctor_coordinator.py (line 205)).
+Runs MediaPipe work per session in parallel, but only for sessions that still need it (proctor_coordinator.py (line 212)).
+Calls session.update(...) for each candidate to do liveness, audio-lip desync, object stability, risk scoring, alerts, proof capture, and SSE pushes (proctor_coordinator.py (line 229), proctor_session.py (line 407)).
+Records tick latency and sleeps just enough to try to maintain the target rate (proctor_coordinator.py (line 175)).
+So the mental model is:
+Candidate browsers keep sending media continuously
+                |
+                v
+WebRTC tracks update each session's latest frame/audio buffer
+                |
+                v
+Coordinator tick fires at ~TICK_RATE
+                |
+                +--> gather latest frames from all active sessions
+                +--> YOLO batch on all frames once
+                +--> MediaPipe per session in parallel if needed
+                +--> session.update() for each session
+                        |
+                        +--> object tracker
+                        +--> head/gaze duration gates
+                        +--> liveness
+                        +--> speaker-audio check
+                        +--> risk engine
+                        +--> alert engine
+                        +--> proof capture
+                        +--> SSE/admin/report updates
+
+
+A simpler visualization:
+continuous ingest              periodic analysis
+------------------            -------------------
+video/audio arrives  ---->    Tick 1
+latest_frame updated          Tick 2
+audio ring updated            Tick 3
+                              Tick 4
+                              ...
+
+
+Why TICK_RATE matters:
+Higher TICK_RATE: more responsive, but more CPU/GPU pressure.
+Lower TICK_RATE: less compute load, but slower reaction.
+Your code comments note that because gaze/head conditions are time-gated at around 1.5 to 2 seconds, you do not need ultra-high tick frequency to catch them reliably (config.py (line 8), proctor_coordinator.py (line 37)).
+The key idea is that TICK_RATE is the heartbeat of the shared inference engine. WebRTC ingest is continuous, but cheating analysis happens in coordinated ticks so one server can handle many users efficiently.
+If you want, I can next turn this into an even cleaner “single-user vs multi-user” note with diagrams for audio, video, and tick flow together.
+
+
+# Single-User to Multi-User Architecture Migration Report
+
+## Scope and intent
+
+This report explains the architectural move from the original single-user proof of concept in:
+
+- `single user`: `/home/krushang/Desktop/ai-proctor-vision-poc`
+- `multi user`: `/home/krushang/Desktop/exam-proctoring-ai/engine`
+
+It is intentionally focused on the **core structural architecture** of the engine. It does **not** treat EC2 deployment as the reason multi-user became possible. Hosting can change scale characteristics, but it is not what created multi-user capability. The real change was a redesign of how sessions, state, transport, inference, and timing were organized.
+
+The scoring model was **not fundamentally redesigned** as part of this migration. The same core risk/alert model still exists; the big change was how that logic is packaged and driven for many concurrent candidates. There is one additive scoring path for tab switching in the newer engine, but the multi-user transition itself is primarily an orchestration and state-isolation refactor.
+
+---
+
+## Executive summary
+
+The original POC was single-user because it was built as **one local webcam loop with one set of live state**. One process, one `cv2.VideoCapture(0)`, one `while True`, one frame at a time, one candidate. Every detector and every stateful component lived inside that one loop and assumed it owned the full frame stream.
+
+The multi-user engine became possible because the architecture was split into three clear layers:
+
+1. **Transport / ingestion layer**
+   Each candidate connects through WebRTC and gets an independent video/audio stream.
+
+2. **Per-candidate session layer**
+   Each candidate gets a `ProctorSession` object containing their own detection state, trackers, risk state, logs, proof output, and event subscribers.
+
+3. **Shared orchestration layer**
+   A central `ProctorCoordinator` owns the single shared YOLO model and runs a batched tick loop across all active sessions.
+
+That redesign solved the real blockers:
+
+- the old system had no notion of a session registry
+- the old system had no way to ingest many candidate streams at once
+- the old system coupled UI rendering, webcam capture, inference, and report writing into one loop
+- the old system used frame-rate-sensitive logic that would distort badly if one loop were naively shared among many users
+
+The new system fixes those issues by:
+
+- creating one `ProctorSession` per candidate
+- storing the latest frame/audio per candidate independently
+- batching YOLO across many candidates in one forward pass
+- scheduling MediaPipe separately from transport
+- converting critical temporal logic from frame-count semantics to time-based or tick-rate-aware semantics
+- exposing per-session outputs through APIs/SSE instead of a local OpenCV window
+
+---
+
+## 1. What the single-user architecture actually was
+
+### 1.1 Topology
+
+In the original POC, `main.py` is the application. It opens one local webcam and runs the entire proctoring pipeline inside one sequential loop:
+
+- webcam capture
+- YOLO object detection
+- MediaPipe head/gaze/blink
+- lip activity
+- liveness
+- risk scoring
+- alert routing
+- proof capture
+- local OpenCV rendering
+
+Code anchor:
+
+- `cv2.VideoCapture(0)` in `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:176`
+- component construction in `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:234`
+- single sequential loop in `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:313`
+
+### 1.2 Simplified flow
+
+```text
+Local webcam
+  -> main.py while True
+     -> YOLO on current frame
+     -> MediaPipe on same frame
+     -> lip/audio checks
+     -> object/head/liveness trackers
+     -> risk engine
+     -> alert engine
+     -> proof writer
+     -> cv2.imshow()
+```
+
+### 1.3 Why this is inherently single-user
+
+The old architecture was not just "currently used by one user." It was **designed around one continuously-owned frame source**:
+
+- one camera handle: `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:176`
+- one session clock: `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:180-181`
+- one alert log and one warning log: `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:183-184`
+- one `states` dict for all duration gates: `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:186-202`
+- one `session_dir` / `proof_dir`: `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:228-232`
+- one set of detector/tracker instances: `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:234-271`
+- one UI surface: `cv2.imshow(...)` in `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:324` and `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:463`
+
+There is no session abstraction. The whole process itself is the session.
+
+---
+
+## 2. Why multiple users were not possible earlier
+
+This is the core question. The answer is not "because it was not on EC2." The answer is that the old design had several structural single-user assumptions.
+
+### 2.1 One physical input source, not many logical streams
+
+The first hard limit is simple: the old engine reads from a single local webcam with:
+
+```python
+cap = cv2.VideoCapture(0)
+```
+
+Code anchor:
+
+- `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:176`
+
+That means the pipeline had exactly one producer of frames. There was no abstraction for:
+
+- session IDs
+- per-user transport
+- remote candidate streams
+- stream registration / deregistration
+
+Without a stream-ingestion layer, there was nowhere for "user 2" to even enter the system.
+
+### 2.2 Monolithic control flow: capture, inference, scoring, and UI were fused
+
+In the old design, the same function:
+
+- reads the frame
+- runs all detectors
+- updates state machines
+- captures proof
+- renders overlays
+- blocks on `cv2.waitKey`
+
+Code anchors:
+
+- loop body start: `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:313`
+- detection section: `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:336-372`
+- risk / alert updates: `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:387-452`
+- rendering: `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:454-463`
+
+This makes the pipeline **session-local and UI-bound**. It is not a reusable inference service. A multi-user server needs transport and presentation to be decoupled from scoring.
+
+### 2.3 All mutable state lived in one application scope
+
+The single-user version instantiates stateful components directly inside `main()`:
+
+- `ObjectTemporalTracker`
+- `HeadTracker`
+- `LivenessDetector`
+- `AudioMonitor`
+- `SpeakerAudioDetector`
+- `RiskEngine`
+- `ProofWriter`
+
+Code anchor:
+
+- `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:234-271`
+
+That means:
+
+- all timing state belongs to one candidate
+- all occurrence counters belong to one candidate
+- all proof buffers belong to one candidate
+- all logs belong to one candidate
+
+Those objects were not isolated behind a reusable per-session boundary. They were just local variables in one main loop.
+
+### 2.4 There was no session registry or lifecycle manager
+
+The old architecture had no equivalents of:
+
+- `add_session`
+- `remove_session`
+- `sessions[pc_id]`
+- per-session cleanup on disconnect
+- per-session event delivery
+
+So even if multiple streams existed, there was no architecture for:
+
+- creating candidate state at join time
+- routing frames to the right state container
+- cleaning up only the disconnected candidate
+- exposing candidate-specific logs, risk, and proof
+
+### 2.5 Naive round-robin would have broken temporal semantics
+
+Even if we imagined hacking many users into the old loop like this:
+
+```text
+for each user:
+  grab latest frame
+  run full pipeline
+```
+
+that would reduce the effective per-user processing cadence. Several old components were frame-count based and would no longer mean the same thing.
+
+#### 2.5.1 Old object stability logic assumed frame-count windows
+
+Old `ObjectTemporalTracker`:
+
+- stores a `deque(maxlen=self.window)`
+- appends one observation per processed frame
+- declares stable when vote count exceeds a fixed threshold
+
+Code anchor:
+
+- `/home/krushang/Desktop/ai-proctor-vision-poc/core/object_tracker.py:3-20`
+
+This means `window=15` did **not** mean "last 1.5 seconds." It meant "last 15 processed frames."
+
+If one user receives 15 updates quickly, the tracker behaves one way.
+If five users share one loop, each user's 15 updates take much longer in wall-clock time.
+
+So the same thresholds would silently change meaning:
+
+- object evidence would linger longer
+- false positives would decay slower
+- short object appearances could affect the system for too long
+- detection stability would become dependent on concurrent user count
+
+That is an architectural problem, not just a performance problem.
+
+#### 2.5.2 Old blink detection assumed enough frame density
+
+Old head-pose logic counted blinks using `BLINK_FRAMES`:
+
+- config uses `BLINK_FRAMES = 2`
+- detector increments `blink_counter` while EAR is below threshold
+- a blink fires when the counter reaches that frame count
+
+Code anchors:
+
+- config: `/home/krushang/Desktop/ai-proctor-vision-poc/config.py:65-67`
+- detector constructor: `/home/krushang/Desktop/ai-proctor-vision-poc/detectors/head_pose_detector.py:51-55`
+- detection logic: `/home/krushang/Desktop/ai-proctor-vision-poc/detectors/head_pose_detector.py:171-180`
+
+This is reasonable when one user gets a dense, consistent frame stream. It becomes unreliable when per-user processing becomes sparse or staggered, because "2 frames" stops representing a stable real-world duration.
+
+#### 2.5.3 Some modules were already time-based, but the whole system was not
+
+Not everything was broken by lower cadence. For example:
+
+- `HeadTracker` duration logic was based on elapsed time
+- risk timers were wall-clock based
+- audio had its own monitoring thread
+
+But the system as a whole was still not multi-user safe, because the control plane around those modules remained single-user and some crucial gates still depended on frame cadence.
+
+### 2.6 Rendering assumptions were local-desktop assumptions
+
+The old system used:
+
+- `cv2.imshow`
+- `cv2.waitKey`
+- inline overlay drawing into the same frame used for inference
+
+Code anchors:
+
+- `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:322-326`
+- `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:454-463`
+
+A multi-user backend cannot depend on a single machine-local OpenCV window. It needs network-readable outputs per session.
+
+### 2.7 Reports/proof were bound to a single exam run
+
+The old system creates one `session_dir` and one `proof_dir` in the process:
+
+- `/home/krushang/Desktop/ai-proctor-vision-poc/main.py:228-232`
+
+That is fine for one run, but multi-user requires:
+
+- one report directory per candidate session
+- parallel proof generation without cross-user mixing
+- clean separation of evidence artifacts by candidate
+
+Again, not an EC2 issue. A file-layout and session-ownership issue.
+
+---
+
+## 3. What changed in the multi-user architecture
+
+The multi-user system is not the old loop wrapped in an API. It is a proper split into transport, session state, and orchestration.
+
+### 3.1 New top-level architecture
+
+```text
+Candidate browser (WebRTC video/audio)
+  -> FastAPI/aiortc transport layer
+     -> per-candidate ProctorSession
+        -> shared ProctorCoordinator tick loop
+           -> batched YOLO across sessions
+           -> per-session MediaPipe / lip / liveness
+           -> per-session risk + alert + proof
+     -> APIs / SSE / snapshots / reports
+```
+
+### 3.2 Transport was separated from inference
+
+The new `server.py` accepts WebRTC offers and creates a distinct connection and session per candidate:
+
+- `RTCPeerConnection`
+- generated `pc_id`
+- `stream_stats[pc_id]`
+- `ProctorSession(...)`
+- `coordinator.add_session(pc_id, session)`
+
+Code anchor:
+
+- `/home/krushang/Desktop/exam-proctoring-ai/engine/server.py:985-1029`
+
+This is the moment the system stops being "one process = one candidate" and becomes "one process = many candidate sessions."
+
+### 3.3 Video/audio ingestion became per-session producers
+
+`VideoAnalyzerTrack` receives video from a candidate and writes the latest frame into that candidate's session:
+
+- decode frame
+- optionally resize to 480p
+- keep an admin snapshot
+- write `session.latest_frame`
+- update `session.observed_fps`
+
+Code anchor:
+
+- `/home/krushang/Desktop/exam-proctoring-ai/engine/server.py:166-244`
+
+`AudioAnalyzerTrack` does the same for audio and pushes PCM into that candidate's session ring buffer:
+
+- `/home/krushang/Desktop/exam-proctoring-ai/engine/server.py:247-280`
+
+This is a major structural change:
+
+- transport receives data continuously
+- inference no longer happens inline with frame reception
+- each session has its own latest input state
+
+That decoupling is what lets many streams coexist.
+
+### 3.4 A dedicated per-candidate state container was introduced
+
+The new `ProctorSession` is the most important architecture change.
+
+It encapsulates, per candidate:
+
+- session ID / session directory
+- latest frame / observed fps
+- alert and warning logs
+- SSE subscribers
+- detection state dict
+- FaceMesh / head detector / lip detector
+- object tracker / head tracker / liveness / risk engine
+- audio monitor / speaker-audio detector
+- proof writer
+
+Code anchors:
+
+- class purpose: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_session.py:1-8`
+- constructor and session identity: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_session.py:71-100`
+- per-candidate state dict and logs: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_session.py:102-127`
+- per-candidate detectors/state machines: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_session.py:133-189`
+
+This is the answer to "how did we stop shared-state collisions?" We stopped treating the process as the session and started treating `ProctorSession` as the session.
+
+### 3.5 A central multi-user orchestrator was introduced
+
+The new `ProctorCoordinator` owns the shared, expensive inference resources and the global scheduling policy.
+
+Its responsibilities:
+
+- hold the single shared YOLO model
+- hold the `sessions` registry
+- drive a fixed-rate tick loop
+- snapshot active sessions
+- batch frames for one YOLO forward pass
+- schedule MediaPipe work
+- call `session.update(...)` for each candidate
+
+Code anchors:
+
+- coordinator overview: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:1-15`
+- shared detector and session registry: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:59-100`
+- session lifecycle: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:146-170`
+- tick loop: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:174-199`
+- tick execution: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:201-260`
+
+This is the other half of the multi-user answer: expensive inference is centralized, candidate state is decentralized.
+
+### 3.6 YOLO became a shared batched resource instead of per-session local work
+
+The new `ObjectDetector` explicitly supports `detect_batch(frames)`, performing one forward pass across many candidate frames:
+
+- detector design note: batch inference is a first-class feature
+- `detect_batch` returns a result list aligned to the input frame list
+
+Code anchors:
+
+- detector design comment: `/home/krushang/Desktop/exam-proctoring-ai/engine/detectors/object_detector.py:99-107`
+- batch method: `/home/krushang/Desktop/exam-proctoring-ai/engine/detectors/object_detector.py:241-270`
+
+This is critical because it avoids the worst old scaling path:
+
+- old world: YOLO called inside each user's loop
+- new world: one coordinator tick batches all candidate frames together
+
+So the expensive detector is shared structurally, not duplicated per session.
+
+### 3.7 MediaPipe was decoupled from the transport path and made schedulable
+
+`ProctorCoordinator._tick()` decides which sessions need MediaPipe work that tick:
+
+- only active non-terminated sessions are considered
+- only some sessions may run MediaPipe each tick when stride is enabled
+- skipped sessions reuse last known MediaPipe output
+
+Code anchors:
+
+- session snapshot: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:201-215`
+- MediaPipe scheduling and reuse: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:217-251`
+
+And `ProctorSession.run_mediapipe()` provides a session-local MediaPipe execution unit:
+
+- `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_session.py:398-419`
+
+This matters because multi-user systems need **scheduling policy**. The old design had none; it simply processed whatever the one loop was currently on.
+
+### 3.8 Session updates became pure per-candidate state transitions
+
+Once batched YOLO and scheduled MediaPipe finish, the coordinator calls:
+
+```python
+session.update(detections, mp_result, frame, now, fps)
+```
+
+Code anchors:
+
+- coordinator call site: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:261-269`
+- session update body: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_session.py:423-566`
+
+This is architecturally clean:
+
+- transport writes inputs into session slots
+- coordinator decides when to compute
+- session update applies candidate-local rules and state machines
+
+That separation did not exist before.
+
+---
+
+## 4. Timing and temporal logic changes required for multi-user correctness
+
+This is one of the most important technical details. Multi-user is not only about feeding many streams. It is also about preserving the meaning of temporal rules under reduced or staggered per-user cadence.
+
+### 4.1 Object tracking was changed from frame-count-based to time-based
+
+#### Old version
+
+The old tracker used a deque of fixed frame count:
+
+- `/home/krushang/Desktop/ai-proctor-vision-poc/core/object_tracker.py:3-20`
+
+Meaning:
+
+- semantics depended on how often the user got processed
+- concurrent load could change behavior without changing thresholds
+
+#### New version
+
+The new tracker uses:
+
+- wall-clock timestamps per observation
+- a time window `window_s`
+- dynamic `min_votes` scaled by observed fps
+- a floor to avoid requiring too few samples
+
+Code anchor:
+
+- `/home/krushang/Desktop/exam-proctoring-ai/engine/core/object_tracker.py:25-119`
+
+This was one of the most important correctness changes for multi-user. It means:
+
+- "stable detection" keeps approximately the same real-world meaning
+- object logic no longer silently changes just because more candidates are active
+
+### 4.2 Blink detection was changed from frame-count to duration-based
+
+#### Old version
+
+- config: `BLINK_FRAMES = 2`
+- detection: increment a counter for closed-eye frames
+
+Code anchors:
+
+- `/home/krushang/Desktop/ai-proctor-vision-poc/config.py:65-67`
+- `/home/krushang/Desktop/ai-proctor-vision-poc/detectors/head_pose_detector.py:171-180`
+
+#### New version
+
+The newer engine uses:
+
+- `BLINK_MIN_DURATION_S`
+- `BLINK_MAX_DURATION_S`
+- monotonic-time blink start tracking
+
+Code anchors:
+
+- config rationale: `/home/krushang/Desktop/exam-proctoring-ai/engine/config.py:61-69`
+- detector config: `/home/krushang/Desktop/exam-proctoring-ai/engine/detectors/head_pose_detector.py:71-78`
+- detection logic: `/home/krushang/Desktop/exam-proctoring-ai/engine/detectors/head_pose_detector.py:297-321`
+
+This change directly acknowledges multi-user cadence changes. A blink should mean a real-world short eye closure, not "N processed frames."
+
+### 4.3 The coordinator introduced a controlled engine tick rate
+
+The old pipeline was basically camera-driven. The new one is coordinator-driven:
+
+- target `TICK_RATE = 10`
+- every tick, snapshot active sessions and process them
+
+Code anchor:
+
+- `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:37-42`
+- `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:174-199`
+
+This gives the engine a stable processing rhythm independent of raw inbound frame cadence.
+
+### 4.4 Session update tracks effective tick FPS explicitly
+
+`ProctorSession.update()` estimates actual tick frequency and uses it for object tracker vote scaling:
+
+- `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_session.py:440-448`
+- object tracker call uses `_tick_fps`: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_session.py:553`
+
+This is subtle but important. In the multi-user engine, the per-candidate effective cadence is not simply the camera FPS. It is the coordinator tick cadence after scheduling. The new design measures and uses the correct one.
+
+---
+
+## 5. What did not fundamentally change
+
+The move to multi-user was **not** a rewrite of the core proctoring rules.
+
+### 5.1 The same core pipeline stages still exist
+
+The newer engine still performs the same logical steps per candidate:
+
+- object detection
+- head/gaze detection
+- lip/audio correlation
+- liveness checks
+- temporal gating
+- risk scoring
+- alert generation
+- proof/report generation
+
+Those stages were moved into `ProctorSession.update(...)`, but they remain the same conceptual pipeline.
+
+Code anchor:
+
+- `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_session.py:459-566`
+
+### 5.2 Risk and alerting remain core per-candidate state machines
+
+`RiskEngine`, `AlertEngine`, `HeadTracker`, `LivenessDetector`, `SpeakerAudioDetector` still exist and still operate per candidate. The migration did not replace the risk model with a different architecture; it wrapped those engines in proper session isolation.
+
+### 5.3 Scoring was not redesigned to enable multi-user
+
+The main multi-user unlock was not score math. It was:
+
+- sessionization
+- transport separation
+- orchestration
+- timing fixes
+
+There is an added tab-switch event path in the newer codebase, but that is an additive feature, not the reason multi-user became possible.
+
+---
+
+## 6. New capabilities created by the architecture change
+
+Once the architecture was sessionized and centralized, several capabilities became natural.
+
+### 6.1 Per-session APIs and observability
+
+The server now exposes candidate-specific endpoints:
+
+- `/sessions`
+- `/snapshot/{pc_id}`
+- `/risk/{pc_id}`
+- `/session/{pc_id}/log`
+- `/alerts/{pc_id}`
+- `/stream/{pc_id}`
+
+Code anchors:
+
+- `/home/krushang/Desktop/exam-proctoring-ai/engine/server.py:292-383`
+- SSE stream: `/home/krushang/Desktop/exam-proctoring-ai/engine/server.py:515-549`
+
+These are possible because session identity now exists as a first-class concept.
+
+### 6.2 Clean session lifecycle
+
+When a connection is created:
+
+- build `ProctorSession`
+- register it with the coordinator
+
+When it disconnects:
+
+- remove it from the coordinator
+- stop audio
+- flush proof writer
+- save report
+- notify SSE subscribers
+
+Code anchors:
+
+- creation: `/home/krushang/Desktop/exam-proctoring-ai/engine/server.py:1018-1029`
+- disconnect cleanup: `/home/krushang/Desktop/exam-proctoring-ai/engine/server.py:1120-1135`
+- session shutdown: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_session.py:568-596`
+
+The old design only had whole-process shutdown.
+
+### 6.3 Runtime exam-level controls
+
+The coordinator now maintains shared exam config and runtime settings:
+
+- `exam_config` for live detection toggles across active sessions
+- `runtime_settings` for config values applied at session creation
+
+Code anchors:
+
+- config ownership: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:94-100`
+- live override logic: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_coordinator.py:161-170`
+- session reads shared config: `/home/krushang/Desktop/exam-proctoring-ai/engine/core/proctor_session.py:218-225`
+
+Again, this depends on the existence of session boundaries and a central coordinator.
+
+---
+
+## 7. Before vs after
+
+### 7.1 Before
+
+```text
+One machine webcam
+  -> one Python loop
+     -> one candidate state
+     -> one report
+     -> one UI window
+```
+
+### 7.2 After
+
+```text
+Many candidate browsers
+  -> many WebRTC connections
+     -> many ProctorSession objects
+        -> one ProctorCoordinator
+           -> one shared YOLO batch pass
+           -> scheduled per-session MediaPipe
+           -> independent per-session scoring/output
+```
+
+### 7.3 Most important conceptual shift
+
+The old design answered:
+
+- "How do we proctor one live frame stream?"
+
+The new design answers:
+
+- "How do we maintain many isolated candidate states while sharing only the expensive compute?"
+
+That is the real migration.
+
+---
+
+## 8. Direct answer to the question "why were multiple users not possible earlier?"
+
+Multiple users were not possible earlier because the original system lacked all of the following:
+
+1. **A multi-stream ingress layer**
+   The old engine only knew how to read one local webcam.
+
+2. **A session abstraction**
+   All mutable state lived inside one `main()` function.
+
+3. **A session registry**
+   There was no data structure mapping candidate identities to state containers.
+
+4. **A shared inference orchestrator**
+   YOLO ran inline for one frame in one loop rather than as a batched shared service.
+
+5. **Timing-safe temporal logic for variable cadence**
+   Some key rules depended on processed frame count and would distort under round-robin multi-user processing.
+
+6. **A network-facing output model**
+   The old system rendered to one local OpenCV window instead of exposing per-session state/events.
+
+So the real reason was not infrastructure. The reason was that the original code embodied a **single-session program model**.
+
+---
+
+## 9. Direct answer to the question "what changes made it multi-user?"
+
+These are the changes that actually unlocked multi-user operation:
+
+1. **WebRTC/FastAPI transport replaced local-only webcam capture**
+   Candidate media became network streams, not one local device.
+
+2. **`ProctorSession` introduced per-candidate state isolation**
+   Every candidate got independent trackers, logs, proof, risk, and transport buffers.
+
+3. **`ProctorCoordinator` introduced centralized orchestration**
+   One engine loop can now manage many sessions safely.
+
+4. **YOLO was centralized and batched**
+   Expensive object detection became a shared service instead of duplicated inline work.
+
+5. **MediaPipe execution became schedulable**
+   It is now run per session under coordinator control, with reuse/stride support.
+
+6. **Temporal logic was adapted for multi-user cadence**
+   Object stability became time-based and blink detection became duration-based.
+
+7. **Outputs were externalized**
+   SSE, APIs, snapshots, and per-session reports replaced a single local display loop.
+
+That combination, not cloud hosting, is what transformed the system from single-user to multi-user.
+
+---
+
+## Final conclusion
+
+The migration from single-user to multi-user was fundamentally an **architecture refactor from a monolithic local loop into a sessionized distributed inference service**.
+
+The old system was single-user because:
+
+- input was singular
+- state was singular
+- scheduling was singular
+- presentation was singular
+
+The new system is multi-user because:
+
+- input is per candidate
+- state is per candidate
+- orchestration is centralized
+- heavy inference is shared
+- temporal logic is corrected for variable cadence
+- outputs are exposed per candidate instead of rendered locally
+
+In short:
+
+**We did not make the old single-user loop "faster." We changed the system model from one loop owning one candidate to one coordinator owning many isolated sessions.**
+
+
+now i will give you single loop flow for singl user architecture : (in next msg will give multi user per tick flow): Single-User Loop Flow In Text In the old single-user implementation, everything happened inside one continuous while True loop, and that loop processed one webcam frame at a time from start to finish. For each frame, the flow was: Read a frame from the local webcam. Check if the frame is valid and skip very dark / low-information frames. If the exam is already terminated: show the termination/risk overlay, display the frame, and wait for quit. Record current timestamps: wall-clock time and session-relative monotonic time. Push the frame into the proof buffer if proof capture is enabled. Run YOLO object detection on that frame. Merge overlapping detections for classes like person and earbud. Run head pose / gaze / face analysis using HeadPoseDetector. Update liveness using yaw, pitch, gaze, and blink output. Run lip movement detection. Read microphone/audio speech activity from AudioMonitor. Combine lip + audio using SpeakerAudioDetector. Convert detections into flags: phone, book, headphone, earbud, people_count. Build head-related conditions: looking_away, looking_down, looking_up, looking_side, face_hidden, partial_face, fake_presence. For each head-related condition: pass it through HeadTracker for duration gating, then RiskEngine, then AlertEngine, then optionally proof capture. For each object-related condition: pass it through ObjectTemporalTracker, then RiskEngine, then AlertEngine, then optionally proof capture. Process special independent events: multiple_people, no_person, and speaker_audio. Draw overlays: bounding boxes, alerts, audio status, risk overlay, partial-face banner. Display the final frame using cv2.imshow. Wait for q to quit; otherwise continue to the next frame. The key point is: capture, inference, temporal logic, scoring, alerting, proof writing, and rendering all happened inside the same per-frame loop. Mermaid Flow
+mermaid
+flowchart TD
+    A[Start session] --> B[Open local webcam]
+    B --> C[Enter while True loop]
+    C --> D[Read frame]
+    D --> E{Frame valid?}
+    E -- No --> C
+    E -- Yes --> F{Exam already terminated?}
+
+    F -- Yes --> G[Draw termination / risk overlay]
+    G --> H[Display frame]
+    H --> I{Pressed q?}
+    I -- No --> C
+    I -- Yes --> Z[Shutdown]
+
+    F -- No --> J[Capture timestamps]
+    J --> K[Push frame to proof buffer]
+    K --> L[Run YOLO object detection]
+    L --> M[Merge overlapping detections]
+    M --> N[Run HeadPoseDetector]
+    N --> O[Update LivenessDetector]
+    O --> P[Run LipDetector]
+    P --> Q[Read AudioMonitor speech state]
+    Q --> R[Update SpeakerAudioDetector]
+    R --> S[Build object flags and people count]
+    S --> T[Build head and face conditions]
+
+    T --> U[Head conditions -> HeadTracker -> RiskEngine -> AlertEngine]
+    U --> V[Object conditions -> ObjectTemporalTracker -> RiskEngine -> AlertEngine]
+    V --> W[Process multiple_people / no_person / speaker_audio]
+    W --> X[Save proof if needed]
+    X --> Y[Draw overlays]
+    Y --> H
+
+
+
+Multi-User Per-Tick Flow In Text
+
+In the multi-user architecture, the system no longer runs one full pipeline per webcam frame. Instead, it runs a central coordinator loop at a fixed target tick rate, and in each tick it processes all active candidate sessions together.
+
+Tick rate
+The coordinator runs at:
+
+TICK_RATE = 10 Hz
+meaning one tick roughly every 100 ms
+This comes from:
+
+config.py (line 13)
+proctor_coordinator.py (line 37)
+Important detail:
+
+10 Hz is the target engine processing rate
+it is not the raw camera FPS
+incoming WebRTC video may be 15–30 FPS, but the coordinator samples the latest available frame per session every tick
+What happens before each tick
+Separately from the tick loop:
+
+each candidate sends video/audio over WebRTC
+VideoAnalyzerTrack.recv() keeps updating session.latest_frame
+AudioAnalyzerTrack.recv() keeps pushing PCM chunks into that session’s audio buffer
+So by the time a tick starts, each session already contains:
+
+latest video frame
+observed FPS
+accumulated audio ring buffer
+all its own detection/risk state
+Per-tick flow
+For every coordinator tick:
+
+Start the tick timer.
+Build a snapshot of active sessions:
+include only sessions that:
+have a latest_frame
+are not terminated
+Extract from those sessions:
+frames
+observed_fps
+session references
+Submit two major compute paths concurrently:
+YOLO batch inference on all frames together
+MediaPipe work for selected sessions
+For MediaPipe:
+not every session must run fresh MediaPipe every tick
+if MEDIAPIPE_STRIDE = 3, only about one-third of sessions run fresh MediaPipe on a given tick
+skipped sessions reuse their last MediaPipe result
+YOLO returns one detection list per candidate frame.
+MediaPipe returns one (head_result, lip_result) tuple per session.
+For each session:
+merge overlapping detections if needed
+call session.update(detections, mp_result, frame, now, fps)
+Inside session.update(...), for that candidate only:
+update effective tick FPS estimate
+reject bad frames
+unpack MediaPipe result
+update liveness
+evaluate speaker-audio mismatch
+derive object flags and people_count
+derive head/face conditions
+run head conditions through HeadTracker -> RiskEngine -> AlertEngine
+run object conditions through ObjectTemporalTracker -> RiskEngine -> AlertEngine
+process multiple_people, no_person, and speaker_audio
+save proof / push SSE events if needed
+End tick.
+Measure tick duration.
+Sleep for the remaining time if the tick finished faster than the 100 ms budget.
+Why this is different from the single-user loop
+Old model:
+
+one frame came in
+entire pipeline ran immediately for that one candidate
+New model:
+
+many sessions continuously receive frames
+coordinator wakes up every 100 ms
+grabs the latest frame from each session
+runs shared compute in batch
+updates each session’s private state
+So the new system is tick-driven and session-batched, not frame-driven and single-stream.
+
+Mermaid Flow
+
+
+flowchart TD
+    A[Coordinator started] --> B[Run tick loop at 10 Hz]
+    B --> C[Start tick]
+    C --> D[Snapshot active non-terminated sessions with latest_frame]
+    D --> E{Any active sessions?}
+    E -- No --> F[Sleep until next tick]
+    F --> B
+
+    E -- Yes --> G[Collect frames, fps values, session refs]
+    G --> H[Submit YOLO batch inference on all frames]
+    G --> I[Schedule MediaPipe for selected sessions]
+    I --> J{Fresh MP this tick?}
+
+    J -- Yes --> K[Run session.run_mediapipe(frame)]
+    J -- No --> L[Reuse last MediaPipe result]
+
+    H --> M[YOLO returns detections per session]
+    K --> N[MediaPipe results ready]
+    L --> N
+    M --> O[Per-session update loop]
+    N --> O
+
+    O --> P[Merge overlapping detections]
+    P --> Q[session.update(detections, mp_result, frame, now, fps)]
+
+    Q --> R[Update tick FPS estimate]
+    R --> S[Frame quality guard]
+    S --> T[Update liveness]
+    T --> U[Update lip/audio speaker mismatch]
+    U --> V[Build object flags and people_count]
+    V --> W[Build head/face conditions]
+    W --> X[Head path: HeadTracker -> RiskEngine -> AlertEngine]
+    X --> Y[Object path: ObjectTemporalTracker -> RiskEngine -> AlertEngine]
+    Y --> Z[Process multiple_people / no_person / speaker_audio]
+    Z --> AA[Save proof and push SSE if needed]
+
+    AA --> AB[Measure tick duration]
+    AB --> AC{Tick finished within 100 ms budget?}
+    AC -- Yes --> AD[Sleep remaining time]
+    AC -- No --> AE[Start next tick immediately]
+    AD --> B
+    AE --> B
+
+
+
+
+
+Now we have all the content we needed to discuss now the structure flow and how much slides to allocate to each topics where to go in depth and where to avoid 
+
+
+
+
+
+
+
+
+
+
+
+
+clean Pre-Exam Flow you can present properly.
+
+Pre-Exam Flow
+
+The purpose of the pre-exam flow is to make sure the candidate starts the exam only after the system confirms three things:
+
+the user is authenticated and belongs to the right exam
+the device/environment is ready for fair monitoring
+the candidate understands the rules before monitoring begins
+This slide should show that your system is strict where needed, but not unfair. The idea is not to punish before the exam starts, but to prevent invalid exam attempts from starting in the first place.
+
+1. Pre-Exam Flow In Text
+Step 1. Candidate enters exam link / portal
+The student opens the exam platform and reaches the exam entry page.
+
+At this stage the system identifies:
+
+exam ID
+user ID
+session context
+whether the user is allowed to access that exam
+This is the first gate so unauthorized users do not even reach the monitoring stage.
+
+Step 2. Authentication and authorization
+The candidate signs in and the system verifies:
+
+valid user identity
+valid exam assignment
+valid access window
+one active exam session policy if enforced
+This is your software security layer before proctoring even begins.
+
+Step 3. Device permission collection
+The platform asks for required permissions:
+
+camera access
+microphone access
+browser media permissions
+If camera/mic access is denied, the candidate cannot proceed because the proctoring engine will not have valid input.
+
+Step 4. System compatibility check
+Before the exam starts, the frontend/backend checks whether the environment is usable for proctoring.
+
+Typical checks:
+
+browser supports required APIs / WebRTC
+webcam stream is opening correctly
+microphone stream is opening correctly
+network is stable enough to send media
+required page/tab state is active
+This reduces failures during the actual exam.
+
+Step 5. Candidate environment readiness check
+Now the system validates whether the candidate is in an acceptable exam environment.
+
+Typical readiness expectations:
+
+one person visible
+face clearly visible
+enough lighting
+face not too far from the camera
+camera angle is usable
+audio input is active
+This is important because many issues like no_person, partial_face, or bad visibility should ideally be corrected before the exam starts, not after scoring begins.
+
+Step 6. Rule briefing / exam instructions
+Before entering the exam, the student sees a short rules page.
+
+This should communicate:
+
+no phone / books / ear devices
+stay in front of camera
+avoid tab switching
+microphone and camera remain active
+suspicious events may raise risk score
+repeated severe violations may terminate the session
+This is important for fairness because students are informed before monitoring begins.
+
+Step 7. Candidate acknowledgement
+The candidate confirms:
+
+rules understood
+permissions granted
+ready to begin
+consent/acknowledgement if applicable in your flow
+This makes the pre-exam stage not just technical, but procedural.
+
+Step 8. Proctoring session initialization
+Once readiness is confirmed, the system creates the live exam session.
+
+At this point:
+
+WebRTC connection is established
+session ID / candidate session is created
+media streams start reaching the backend
+backend starts storing latest frame/audio
+monitoring session state is initialized
+In single-user this would have meant starting the loop.
+In multi-user this means creating a ProctorSession and registering it with the ProctorCoordinator.
+
+Step 9. Warm-up / stream stabilization
+Before the exam officially starts, the system allows a short stabilization period.
+
+Purpose:
+
+camera feed becomes stable
+audio stream settles
+backend starts receiving valid media
+first snapshots / baseline state become available
+This avoids false issues right at the first second.
+
+Step 10. Exam start
+Only after all previous checks pass:
+
+the exam UI unlocks
+timer starts
+scoring/risk monitoring starts
+alerts become meaningful
+This is the key fairness point:
+we do not start penalizing the student before the system confirms the environment is ready.
+
+2. Simple Presentation Version
+If you want a short version for the slide, use this:
+
+Candidate opens exam portal
+Authentication and exam authorization
+Camera and microphone permission request
+Browser / device / network compatibility check
+Face, lighting, and environment readiness validation
+Exam rules and anti-cheating instructions shown
+Candidate acknowledgement and consent
+Session initialization and stream connection
+Short stabilization/warm-up phase
+Exam begins and monitoring/scoring starts
+3. What To Emphasize While Presenting
+These are the main talking points to say verbally:
+
+The pre-exam flow prevents invalid sessions from starting.
+We do not immediately punish the candidate; we first ensure readiness.
+This improves both fairness and technical reliability.
+Authentication secures access, while readiness checks secure exam integrity.
+Monitoring begins only after permissions, environment, and stream setup are successful.
+
+```mermaid
+flowchart TD
+    A[Candidate opens exam portal] --> B[Authentication and exam authorization]
+    B --> C{Authorized for this exam?}
+    C -- No --> Z1[Block access]
+    C -- Yes --> D[Request camera and microphone permissions]
+
+    D --> E{Permissions granted?}
+    E -- No --> Z2[Cannot proceed to exam]
+    E -- Yes --> F[Run browser / device / network compatibility checks]
+
+    F --> G{System compatible?}
+    G -- No --> Z3[Ask candidate to fix setup]
+    G -- Yes --> H[Run environment readiness checks]
+
+    H --> I[Check face visibility lighting camera position audio readiness]
+    I --> J{Environment acceptable?}
+    J -- No --> Z4[Show corrective guidance before exam]
+    J -- Yes --> K[Show exam rules and anti-cheating instructions]
+
+    K --> L[Candidate acknowledgement]
+    L --> M[Initialize proctoring session]
+    M --> N[Establish media streams and backend session]
+    N --> O[Warm-up / stabilization phase]
+    O --> P{Streams stable and session ready?}
+    P -- No --> Z5[Retry / hold exam start]
+    P -- Yes --> Q[Start exam timer]
+    Q --> R[Begin live monitoring and scoring]
+
+```
+
+5. Best Slide Structure For This Topic
+I’d recommend 2 slides for pre-exam flow.
+
+Slide 1: Pre-Exam Flow
+
+show the flow in 6–10 short boxes
+focus on candidate journey
+Slide 2: Why This Matters
+
+prevents unauthorized attempts
+ensures valid camera/mic setup
+improves fairness before scoring
+reduces false penalties at exam start
+6. One Strong Line You Can Say
+“Before the exam starts, our system verifies identity, permissions, technical readiness, and environment readiness, so monitoring begins only when the session is valid and fair.”
+
+If you want, I can next give you:
+
+a post-exam flow
+a during-exam flow
+or a full slide-by-slide presentation structure with exact slide count and depth.
+

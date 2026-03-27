@@ -569,6 +569,8 @@ def get_me(current_user=Depends(get_current_user)):
         "email": current_user.email,
         "full_name": current_user.full_name,
         "role": current_user.role,
+        "last_login": current_user.last_login.isoformat() if current_user.last_login else None,
+        "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
         "must_change_password": current_user.must_change_password,
         "profile_image_path": current_user.profile_image_path,
         "last_profile_image_update": current_user.last_profile_image_update.isoformat() if current_user.last_profile_image_update else None

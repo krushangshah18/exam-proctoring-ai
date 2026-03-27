@@ -53,7 +53,7 @@ const RISK_COLORS: Record<string, string> = {
 };
 
 function RiskBadge({ state }: { state: string | null }) {
-  if (!state) return <span className="text-xs" style={{ color: '#94A3B8' }}>—</span>;
+  if (!state) return <span className="text-xs font-medium" style={{ color: '#64748B' }}>—</span>;
   const color = RISK_COLORS[state] ?? '#64748b';
   const labels: Record<string, string> = {
     NORMAL: 'Normal', WARNING: 'Warning', HIGH_RISK: 'High Risk',
@@ -150,13 +150,13 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
           <div>
             <p className="font-bold text-sm" style={{ color: '#0F172A' }}>{report.student_name ?? 'Unknown Student'}</p>
-            <p className="text-xs mt-0.5 font-mono" style={{ color: '#94A3B8' }}>{report.report_id}</p>
+            <p className="text-xs mt-0.5 font-mono" style={{ color: '#64748B' }}>{report.report_id}</p>
           </div>
           <button onClick={onClose}
             className="p-1.5 rounded-lg transition-colors"
-            style={{ color: '#94A3B8' }}
+            style={{ color: '#64748B' }}
             onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#475569'}
-            onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#94A3B8'}>
+            onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#64748B'}>
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -165,7 +165,7 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {loading && (
             <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
+              <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#94A3B8' }} />
             </div>
           )}
           {error && (
@@ -190,7 +190,7 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
                 ].map(({ label, value }) => (
                   <div key={label} className="rounded-lg p-3 border"
                     style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#94A3B8' }}>{label}</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#64748B' }}>{label}</p>
                     <div className="text-sm">{value}</div>
                   </div>
                 ))}
@@ -205,7 +205,7 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
                 if (!all.length) return null;
                 return (
                   <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: '#94A3B8' }}>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: '#64748B' }}>
                       Events ({all.length})
                     </p>
                     <div className="space-y-1.5 max-h-64 overflow-y-auto">
@@ -259,9 +259,9 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
 
               {/* Raw JSON toggle */}
               <details>
-                <summary className="text-xs cursor-pointer transition-colors" style={{ color: '#94A3B8' }}
+                <summary className="text-xs cursor-pointer transition-colors font-medium" style={{ color: '#64748B' }}
                   onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#475569'}
-                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#94A3B8'}>
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#64748B'}>
                   View raw JSON
                 </summary>
                 <pre className="mt-2 text-xs rounded-lg p-3 overflow-auto max-h-48"
@@ -309,7 +309,7 @@ function ExamGroupCard({
           </div>
           <div className="text-left min-w-0">
             <p className="font-semibold text-sm truncate" style={{ color: '#0F172A' }}>{group.exam_title}</p>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
+            <p className="text-xs mt-0.5 font-medium" style={{ color: '#64748B' }}>
               {group.reports.length} report{group.reports.length !== 1 ? 's' : ''}
               {' · '}
               <span style={{ color: '#BE123C' }}>{group.totalAlerts} alerts</span>
@@ -319,8 +319,8 @@ function ExamGroupCard({
           </div>
         </div>
         {open
-          ? <ChevronDown className="h-4 w-4 shrink-0" style={{ color: '#94A3B8' }} />
-          : <ChevronRight className="h-4 w-4 shrink-0" style={{ color: '#94A3B8' }} />
+          ? <ChevronDown className="h-4 w-4 shrink-0" style={{ color: '#64748B' }} />
+          : <ChevronRight className="h-4 w-4 shrink-0" style={{ color: '#64748B' }} />
         }
       </button>
 
@@ -335,7 +335,7 @@ function ExamGroupCard({
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap mb-1">
                   <p className="font-medium text-sm" style={{ color: '#0F172A' }}>
-                    {r.student_name ?? <span className="italic text-xs" style={{ color: '#94A3B8' }}>Unknown student</span>}
+                    {r.student_name ?? <span className="italic text-xs font-medium" style={{ color: '#64748B' }}>Unknown student</span>}
                   </p>
                   <SessionStatusBadge status={r.session_status} />
                   {r.terminated && (
@@ -345,8 +345,8 @@ function ExamGroupCard({
                     </span>
                   )}
                 </div>
-                {r.student_email && <p className="text-xs" style={{ color: '#94A3B8' }}>{r.student_email}</p>}
-                <div className="flex items-center gap-3 text-xs mt-1 flex-wrap" style={{ color: '#94A3B8' }}>
+                {r.student_email && <p className="text-xs font-medium" style={{ color: '#64748B' }}>{r.student_email}</p>}
+                <div className="flex items-center gap-3 text-xs mt-1 flex-wrap font-medium" style={{ color: '#64748B' }}>
                   <span className="flex items-center gap-1">
                     <Clock className="h-3 w-3" />
                     {fmtDateTime(r.session_end)}
@@ -356,7 +356,7 @@ function ExamGroupCard({
                     <Server className="h-3 w-3" />
                     {shortenUrl(r.engine_url)}
                   </span>
-                  <span className="font-mono" style={{ color: '#CBD5E1' }}>{r.report_id.slice(0, 12)}…</span>
+                  <span className="font-mono" style={{ color: '#94A3B8' }}>{r.report_id.slice(0, 12)}…</span>
                 </div>
               </div>
 
@@ -364,21 +364,21 @@ function ExamGroupCard({
               <div className="flex items-center gap-4 shrink-0 flex-wrap">
                 <div className="text-center">
                   <RiskBadge state={r.risk_state} />
-                  <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Risk</p>
+                  <p className="text-xs mt-1 font-medium" style={{ color: '#64748B' }}>Risk</p>
                 </div>
                 <div className="text-center">
                   <p className="text-lg font-bold" style={{ color: '#BE123C' }}>{r.alert_count ?? 0}</p>
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>Alerts</p>
+                  <p className="text-xs font-medium" style={{ color: '#64748B' }}>Alerts</p>
                 </div>
                 <div className="text-center">
                   <p className="text-lg font-bold" style={{ color: '#B45309' }}>{r.warning_count ?? 0}</p>
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>Warns</p>
+                  <p className="text-xs font-medium" style={{ color: '#64748B' }}>Warns</p>
                 </div>
                 <div className="text-center">
                   <p className="text-sm font-semibold" style={{ color: '#475569' }}>
                     {r.size_kb ? `${r.size_kb.toFixed(0)} KB` : '—'}
                   </p>
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>Size</p>
+                  <p className="text-xs font-medium" style={{ color: '#64748B' }}>Size</p>
                 </div>
 
                 {/* Actions */}
@@ -476,7 +476,7 @@ export default function SysAdminReportsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center p-24">
-        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
+        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#94A3B8' }} />
       </div>
     );
   }
@@ -488,7 +488,7 @@ export default function SysAdminReportsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Engine Reports</h1>
-            <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>All proctoring session reports, grouped by exam</p>
+            <p className="text-sm mt-1 font-medium" style={{ color: '#64748B' }}>All proctoring session reports, grouped by exam</p>
           </div>
           <div className="flex gap-2">
             <button
@@ -528,7 +528,7 @@ export default function SysAdminReportsPage() {
                 </div>
                 <div>
                   <p className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.02em' }}>{value}</p>
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>{label}</p>
+                  <p className="text-xs font-medium" style={{ color: '#64748B' }}>{label}</p>
                 </div>
               </div>
             </div>
@@ -540,7 +540,7 @@ export default function SysAdminReportsPage() {
           <div className="bg-white rounded-xl border py-16 text-center"
             style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
             <FileText className="h-12 w-12 mx-auto mb-3" style={{ color: '#E2E8F0' }} />
-            <p className="text-sm" style={{ color: '#94A3B8' }}>No reports found across any engine.</p>
+            <p className="text-sm font-medium" style={{ color: '#64748B' }}>No reports found across any engine.</p>
           </div>
         ) : (
           <div className="space-y-3">

@@ -2,9 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { CheckCircle2, Home, Clock, AlertTriangle, ShieldAlert, Loader2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import { CheckCircle2, Home, Clock, ShieldAlert, Loader2, GraduationCap } from 'lucide-react';
 import api from '@/lib/axios';
 
 function formatDuration(seconds: number): string {
@@ -16,6 +14,16 @@ function formatDuration(seconds: number): string {
   return `${s}s`;
 }
 
+function StatBox({ icon, value, label, color }: { icon: React.ReactNode; value: React.ReactNode; label: string; color?: string }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+      <div style={{ color: color || '#94A3B8' }}>{icon}</div>
+      <p style={{ fontSize: '20px', fontWeight: 800, color: color || '#0F172A', letterSpacing: '-0.02em' }}>{value}</p>
+      <p style={{ fontSize: '11.5px', fontWeight: 600, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</p>
+    </div>
+  );
+}
+
 export default function ExamCompletionPage() {
   const router = useRouter();
   const params = useParams();
@@ -25,86 +33,91 @@ export default function ExamCompletionPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Cleanup storage
     localStorage.removeItem(`exam_cam_${examId}`);
     localStorage.removeItem(`exam_mic_${examId}`);
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
 
-    // Exit fullscreen if stuck
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    }
-
-    // Fetch session summary
     const fetchSummary = async () => {
       try {
         const res = await api.get(`/exam/${examId}/session-summary`);
         setSummary(res.data);
-      } catch {
-        // Non-critical — show page without summary
-      } finally {
-        setLoading(false);
-      }
+      } catch {}
+      finally { setLoading(false); }
     };
-
     fetchSummary();
   }, [examId]);
 
   return (
-    <div className="flex-1 flex overflow-hidden bg-slate-50">
-      <div className="flex-1 overflow-y-auto p-6 md:p-12 flex items-center justify-center">
+    <div style={{
+      minHeight: '100vh', background: '#F8FAFC', fontFamily: "'Plus Jakarta Sans', sans-serif",
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px',
+    }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes fadeup{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes pop{0%{transform:scale(0.5);opacity:0}80%{transform:scale(1.1)}100%{transform:scale(1);opacity:1}}
+      `}</style>
 
-        <div className="max-w-xl w-full mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-8 duration-700">
+      <div style={{ maxWidth: '500px', width: '100%', animation: 'fadeup 0.5s ease both' }}>
 
-          {/* Success card */}
-          <Card className="p-12 text-center bg-white shadow-xl shadow-slate-200/50 border-emerald-100">
-            <div className="mx-auto w-24 h-24 bg-emerald-100 rounded-full flex items-center justify-center mb-8 shadow-inner shadow-emerald-200">
-              <CheckCircle2 className="h-12 w-12 text-emerald-600 animate-in zoom-in duration-500 delay-300" />
+        {/* Main card */}
+        <div style={{
+          background: '#fff', border: '1.5px solid #E2E8F0', borderRadius: '20px', overflow: 'hidden',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.08)',
+        }}>
+          {/* Green top bar */}
+          <div style={{ height: '5px', background: 'linear-gradient(90deg, #22C55E 0%, #57CC99 100%)' }} />
+
+          <div style={{ padding: '40px 36px', textAlign: 'center' }}>
+            {/* Success icon */}
+            <div style={{
+              width: '88px', height: '88px', borderRadius: '50%', margin: '0 auto 20px',
+              background: 'rgba(34,197,94,0.08)', border: '2px solid rgba(34,197,94,0.15)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              animation: 'pop 0.5s ease 0.2s both',
+            }}>
+              <CheckCircle2 style={{ width: '42px', height: '42px', color: '#22C55E' }} />
             </div>
 
-            <h1 className="text-3xl font-extrabold text-slate-900 mb-3 tracking-tight">
+            <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.025em', marginBottom: '10px' }}>
               Exam Submitted Successfully
             </h1>
-
-            <p className="text-lg text-slate-500 mb-6 max-w-sm mx-auto leading-relaxed">
+            <p style={{ fontSize: '14px', color: '#64748B', lineHeight: 1.65, maxWidth: '340px', margin: '0 auto' }}>
               Your answers, session telemetry, and proctoring feed have been securely uploaded for review.
             </p>
 
-            {/* Session Summary */}
+            {/* Session stats */}
             {loading ? (
-              <div className="flex justify-center my-6">
-                <Loader2 className="h-6 w-6 animate-spin text-slate-300" />
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
+                <Loader2 style={{ width: '22px', height: '22px', color: '#94A3B8', animation: 'spin 1s linear infinite' }} />
               </div>
             ) : summary ? (
-              <div className="mt-6 pt-6 border-t border-slate-100 grid grid-cols-3 gap-4 text-center">
+              <div style={{
+                marginTop: '24px', paddingTop: '20px', borderTop: '1.5px solid #F1F5F9',
+                display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px',
+              }}>
                 {summary.duration_taken_seconds != null && (
-                  <div>
-                    <div className="flex justify-center mb-1">
-                      <Clock className="h-5 w-5 text-slate-400" />
-                    </div>
-                    <p className="text-lg font-bold text-slate-900">
-                      {formatDuration(summary.duration_taken_seconds)}
-                    </p>
-                    <p className="text-xs text-slate-400 mt-0.5">Time Taken</p>
-                  </div>
+                  <StatBox
+                    icon={<Clock style={{ width: '18px', height: '18px' }} />}
+                    value={formatDuration(summary.duration_taken_seconds)}
+                    label="Time Taken"
+                  />
                 )}
-                <div>
-                  <div className="flex justify-center mb-1">
-                    <AlertTriangle className="h-5 w-5 text-amber-400" />
-                  </div>
-                  <p className="text-lg font-bold text-slate-900">{summary.violation_count ?? 0}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Violations Flagged</p>
-                </div>
-                <div>
-                  <div className="flex justify-center mb-1">
-                    <ShieldAlert className="h-5 w-5 text-indigo-400" />
-                  </div>
-                  <p className="text-lg font-bold text-slate-900">{summary.risk_score ?? 0}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Risk Score</p>
-                </div>
+                <StatBox
+                  icon={<ShieldAlert style={{ width: '18px', height: '18px' }} />}
+                  value={summary.risk_score ?? 0}
+                  label="Risk Score"
+                  color={(summary.risk_score ?? 0) >= 70 ? '#EF4444' : (summary.risk_score ?? 0) >= 40 ? '#F59E0B' : undefined}
+                />
 
                 {summary.time_extension_seconds > 0 && (
-                  <div className="col-span-3 mt-2 p-3 bg-emerald-50 rounded-lg">
-                    <p className="text-sm text-emerald-700 font-medium">
+                  <div style={{
+                    gridColumn: '1 / -1', marginTop: '6px',
+                    padding: '10px 14px', borderRadius: '8px',
+                    background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)',
+                  }}>
+                    <p style={{ fontSize: '13px', color: '#16A34A', fontWeight: 600 }}>
                       +{Math.round(summary.time_extension_seconds / 60)} min extension was applied to your session
                     </p>
                   </div>
@@ -112,18 +125,30 @@ export default function ExamCompletionPage() {
               </div>
             ) : null}
 
-            <Button
+            <button
               onClick={() => router.push('/student/dashboard')}
-              size="lg"
-              className="mt-8 w-full sm:w-auto h-14 px-8 bg-slate-900 hover:bg-slate-800 text-base font-semibold transition-all hover:scale-[1.02]"
+              style={{
+                marginTop: '28px', width: '100%', padding: '13px',
+                background: '#22577A', color: '#fff', border: 'none', borderRadius: '10px',
+                fontSize: '14.5px', fontWeight: 700, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                fontFamily: "'Plus Jakarta Sans', sans-serif",
+                transition: 'background 150ms, transform 80ms',
+              }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#2C6A91'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = '#22577A'}
             >
-              <Home className="mr-2 h-5 w-5" />
+              <Home style={{ width: '16px', height: '16px' }} />
               Return to Dashboard
-            </Button>
-          </Card>
+            </button>
+          </div>
+        </div>
 
-          <p className="text-center text-xs text-slate-400">
-            Results and feedback will be communicated by your instructor. You may safely close this window.
+        {/* Footer note */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '16px' }}>
+          <GraduationCap style={{ width: '14px', height: '14px', color: '#CBD5E1' }} />
+          <p style={{ fontSize: '12px', color: '#94A3B8', textAlign: 'center' }}>
+            Results and feedback will be communicated by your instructor.
           </p>
         </div>
       </div>

@@ -155,9 +155,7 @@ class ExamSession(UUIDMixin, TimestampMixin, Base):
     user = relationship("User", back_populates="sessions")
     exam = relationship("Exam", back_populates="sessions")
 
-    violations = relationship("Violation", back_populates="session", cascade="all, delete-orphan")
     devices = relationship("SessionDevice", back_populates="session", cascade="all, delete-orphan")
-    risk_snapshots = relationship("RiskSnapshot", back_populates="session", cascade="all, delete-orphan")
     resume_requests = relationship("ResumeRequest", back_populates="session", cascade="all, delete-orphan")
 
 
@@ -171,69 +169,6 @@ class SessionDevice(UUIDMixin, TimestampMixin, Base):
     user_agent = Column(Text)
 
     session = relationship("ExamSession", back_populates="devices")
-
-
-class ViolationType(UUIDMixin, TimestampMixin, Base):
-    __tablename__ = "violation_types"
-
-    code = Column(String, unique=True, nullable=False)
-    name = Column(String, nullable=False)
-
-    severity = Column(String)
-    default_score = Column(Integer)
-
-    default_message = Column(Text)
-
-    is_active = Column(Boolean, default=True)
-
-    violations = relationship("Violation", back_populates="type")
-
-
-class Violation(UUIDMixin, TimestampMixin, Base):
-    __tablename__ = "violations"
-
-    session_id = Column(UUID(as_uuid=True), ForeignKey("exam_sessions.id"))
-
-    violation_type_id = Column(UUID(as_uuid=True), ForeignKey("violation_types.id"))
-
-    client_confidence = Column(Float)
-    server_confidence = Column(Float)
-
-    final_verdict = Column(String)
-
-    occurred_at = Column(DateTime)
-
-    session = relationship("ExamSession", back_populates="violations")
-    type = relationship("ViolationType", back_populates="violations")
-
-    evidences = relationship("Evidence", back_populates="violation", cascade="all, delete-orphan")
-    model_verifications = relationship("ModelVerification", back_populates="violation", cascade="all, delete-orphan")
-
-
-class Evidence(UUIDMixin, TimestampMixin, Base):
-    __tablename__ = "evidences"
-
-    violation_id = Column(UUID(as_uuid=True), ForeignKey("violations.id"))
-
-    file_path = Column(Text, nullable=False)
-    file_hash = Column(Text, nullable=False)
-
-    mime_type = Column(String)
-
-    violation = relationship("Violation", back_populates="evidences")
-
-
-class RiskSnapshot(UUIDMixin, TimestampMixin, Base):
-    __tablename__ = "risk_snapshots"
-
-    session_id = Column(UUID(as_uuid=True), ForeignKey("exam_sessions.id"))
-
-    trigger_violation_id = Column(UUID(as_uuid=True), ForeignKey("violations.id"), nullable=True)
-
-    risk_score = Column(Integer)
-    reason = Column(Text)
-
-    session = relationship("ExamSession", back_populates="risk_snapshots")
 
 
 class ResumeRequest(UUIDMixin, TimestampMixin, Base):
@@ -275,21 +210,6 @@ class AuditLog(UUIDMixin, TimestampMixin, Base):
     target = Column(Text)
 
     ip_address = Column(INET)
-
-
-class ModelVerification(UUIDMixin, TimestampMixin, Base):
-    __tablename__ = "model_verifications"
-
-    violation_id = Column(UUID(as_uuid=True), ForeignKey("violations.id"), nullable=False)
-
-    model_name = Column(String, nullable=False)
-    model_version = Column(String, nullable=False)
-
-    confidence = Column(Float, nullable=False)
-
-    verdict = Column(String, default=ModelVerdict.PASS.value, nullable=False)
-
-    violation = relationship("Violation", back_populates="model_verifications")
 
 
 class AdminApplication(UUIDMixin, TimestampMixin, Base):

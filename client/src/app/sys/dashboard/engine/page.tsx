@@ -26,9 +26,9 @@ function GaugeBar({ value, max, color }: { value: number; max: number; color: st
 function MetricCell({ label, value, sub, color }: { label: string; value: React.ReactNode; sub?: string; color?: string }) {
   return (
     <div className="rounded-lg p-3 border" style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
-      <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#94A3B8' }}>{label}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#64748B' }}>{label}</p>
       <p className="text-lg font-bold tabular-nums" style={{ color: color || '#0F172A' }}>{value}</p>
-      {sub && <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{sub}</p>}
+      {sub && <p className="text-xs mt-0.5 font-medium" style={{ color: '#64748B' }}>{sub}</p>}
     </div>
   );
 }
@@ -66,12 +66,12 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
             <span className="px-2 py-0.5 rounded-md text-xs font-semibold border"
               style={container.is_active
                 ? { background: '#ECFDF5', color: '#15803D', borderColor: '#BBF7D0' }
-                : { background: '#F8FAFC', color: '#94A3B8', borderColor: '#E2E8F0' }}>
+                : { background: '#F8FAFC', color: '#64748B', borderColor: '#E2E8F0' }}>
               {container.is_active ? 'Active' : 'Inactive'}
             </span>
             {!metricsResult ? (
               <span className="px-2 py-0.5 rounded-md text-xs font-semibold border"
-                style={{ background: '#F8FAFC', color: '#94A3B8', borderColor: '#E2E8F0' }}>
+                style={{ background: '#F8FAFC', color: '#64748B', borderColor: '#E2E8F0' }}>
                 Fetching…
               </span>
             ) : metricsResult.ok ? (
@@ -87,7 +87,7 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
             )}
             <button onClick={() => setExpanded(e => !e)}
               className="p-1 rounded-lg transition-colors"
-              style={{ color: '#94A3B8' }}>
+              style={{ color: '#64748B' }}>
               {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
             </button>
           </div>
@@ -96,7 +96,7 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
         {/* Slot bar */}
         <div className="space-y-1.5">
           <div className="flex justify-between text-xs">
-            <span style={{ color: '#94A3B8' }}>Session Slots</span>
+            <span className="font-medium" style={{ color: '#64748B' }}>Session Slots</span>
             <span className="font-semibold tabular-nums" style={{ color: slotColor }}>
               {container.active_sessions} / {container.max_sessions}
             </span>
@@ -109,7 +109,7 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
       {expanded && (
         <div className="p-5 space-y-5">
           {!metricsResult && (
-            <div className="flex items-center justify-center py-8 gap-2" style={{ color: '#94A3B8' }}>
+            <div className="flex items-center justify-center py-8 gap-2 font-medium" style={{ color: '#64748B' }}>
               <Loader2 className="h-5 w-5 animate-spin" /> Fetching metrics…
             </div>
           )}
@@ -125,7 +125,7 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
             <>
               {/* System resources */}
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>System Resources</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#64748B' }}>System Resources</p>
                 <div className="grid grid-cols-2 gap-4">
                   {[
                     { icon: Cpu, label: 'CPU', value: `${fmt(sys.cpu_percent)}%`, pct: sys.cpu_percent, max: 100, color: sys.cpu_percent > 80 ? '#EF4444' : '#22577A' },
@@ -133,7 +133,7 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
                   ].map(({ icon: Icon, label, value, pct, max, color }) => (
                     <div key={label} className="space-y-1.5">
                       <div className="flex justify-between text-xs">
-                        <span className="flex items-center gap-1" style={{ color: '#94A3B8' }}>
+                        <span className="flex items-center gap-1 font-medium" style={{ color: '#64748B' }}>
                           <Icon className="h-3.5 w-3.5" /> {label}
                         </span>
                         <span className="font-semibold tabular-nums" style={{ color }}>{value}</span>
@@ -145,14 +145,14 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
                     <>
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-xs">
-                          <span className="flex items-center gap-1" style={{ color: '#94A3B8' }}><Zap className="h-3.5 w-3.5" /> GPU Util</span>
+                          <span className="flex items-center gap-1 font-medium" style={{ color: '#64748B' }}><Zap className="h-3.5 w-3.5" /> GPU Util</span>
                           <span className="font-semibold tabular-nums" style={{ color: '#7C3AED' }}>{fmt(sys.gpu_util_pct)}%</span>
                         </div>
                         <GaugeBar value={sys.gpu_util_pct} max={100} color="#7C3AED" />
                       </div>
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-xs">
-                          <span style={{ color: '#94A3B8' }}>GPU VRAM</span>
+                          <span className="font-medium" style={{ color: '#64748B' }}>GPU VRAM</span>
                           <span className="font-semibold tabular-nums" style={{ color: '#DB2777' }}>{fmt(sys.gpu_mem_used_mb, 0)} / {fmt(sys.gpu_mem_total_mb, 0)} MB</span>
                         </div>
                         <GaugeBar value={sys.gpu_mem_used_mb} max={sys.gpu_mem_total_mb} color="#DB2777" />
@@ -164,7 +164,7 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
 
               {/* Inference */}
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>Inference Performance</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#64748B' }}>Inference Performance</p>
                 <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                   <MetricCell label="YOLO avg" value={`${fmt(m.yolo?.lat_avg_ms)} ms`} />
                   <MetricCell label="YOLO p95" value={`${fmt(m.yolo?.lat_p95_ms)} ms`} color={(m.yolo?.lat_p95_ms ?? 0) > 200 ? '#F59E0B' : undefined} />
@@ -177,7 +177,7 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
 
               {/* Overview */}
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>Session Stats</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#64748B' }}>Session Stats</p>
                 <div className="grid grid-cols-4 gap-2">
                   <MetricCell label="Uptime" value={m.uptime ?? '—'} />
                   <MetricCell label="Requests" value={(m.requests?.total ?? 0).toLocaleString()} />
@@ -189,14 +189,14 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
               {/* Active session details */}
               {Array.isArray(m.coordinator?.active_session_details) && m.coordinator.active_session_details.length > 0 && (
                 <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>Active Engine Sessions</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: '#64748B' }}>Active Engine Sessions</p>
                   <div className="rounded-lg overflow-hidden border" style={{ borderColor: '#E2E8F0' }}>
                     <table className="w-full text-xs">
                       <thead>
                         <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #F1F5F9' }}>
                           {['Label', 'State', 'FPS', 'Risk', 'Risk State', 'Alerts', 'Warnings'].map(h => (
                             <th key={h} className="px-3 py-2.5 text-left font-semibold uppercase tracking-wider"
-                              style={{ color: '#94A3B8' }}>{h}</th>
+                              style={{ color: '#64748B' }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -211,8 +211,8 @@ function ContainerCard({ container, metricsResult }: { container: ContainerInfo;
                               {Math.round(s.risk_score ?? 0)}
                             </td>
                             <td className="px-3 py-2.5" style={{ color: '#475569' }}>{s.risk_state}</td>
-                            <td className="px-3 py-2.5 tabular-nums font-semibold" style={{ color: s.alerts > 0 ? '#EF4444' : '#94A3B8' }}>{s.alerts ?? 0}</td>
-                            <td className="px-3 py-2.5 tabular-nums font-semibold" style={{ color: s.warnings > 0 ? '#F59E0B' : '#94A3B8' }}>{s.warnings ?? 0}</td>
+                            <td className="px-3 py-2.5 tabular-nums font-semibold" style={{ color: s.alerts > 0 ? '#EF4444' : '#64748B' }}>{s.alerts ?? 0}</td>
+                            <td className="px-3 py-2.5 tabular-nums font-semibold" style={{ color: s.warnings > 0 ? '#F59E0B' : '#64748B' }}>{s.warnings ?? 0}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -263,7 +263,7 @@ export default function EngineMonitorPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
+        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#94A3B8' }} />
       </div>
     );
   }
@@ -274,7 +274,7 @@ export default function EngineMonitorPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Engine Monitor</h1>
-          <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>Real-time proctoring engine health and resource usage</p>
+          <p className="text-sm mt-1 font-medium" style={{ color: '#64748B' }}>Real-time proctoring engine health and resource usage</p>
         </div>
         <button
           onClick={() => fetchAll()} disabled={refreshing}
@@ -296,7 +296,7 @@ export default function EngineMonitorPage() {
           <div key={label} className="bg-white rounded-xl border p-5"
             style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
             <p className="text-2xl font-bold tabular-nums" style={{ color }}>{value}</p>
-            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{label}</p>
+            <p className="text-xs mt-0.5 font-medium" style={{ color: '#64748B' }}>{label}</p>
           </div>
         ))}
       </div>
@@ -306,7 +306,7 @@ export default function EngineMonitorPage() {
         <div className="bg-white rounded-xl border p-16 text-center"
           style={{ borderColor: '#E2E8F0' }}>
           <Server className="h-10 w-10 mx-auto mb-3" style={{ color: '#E2E8F0' }} />
-          <p style={{ color: '#94A3B8' }}>No engine containers configured.</p>
+          <p className="font-medium" style={{ color: '#64748B' }}>No engine containers configured.</p>
         </div>
       ) : (
         <div className="space-y-4">

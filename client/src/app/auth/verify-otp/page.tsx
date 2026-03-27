@@ -1,122 +1,153 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
+import { Loader2, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 
 import api from '@/lib/axios';
-
-import { Button } from '@/components/ui/button';
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { AuthShell } from '@/components/auth/AuthShell';
 
 const formSchema = z.object({
-  otp: z.string().length(6, {
-    message: 'OTP must be exactly 6 digits.',
-  }),
+  otp: z.string().length(6, { message: 'OTP must be exactly 6 digits.' }),
 });
+
+type FormValues = z.infer<typeof formSchema>;
 
 export default function VerifyOTPPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const email = searchParams.get('email');
+  const type = searchParams.get('type') || 'device';
   const [isLoading, setIsLoading] = useState(false);
+  const [digits, setDigits] = useState<string[]>(Array(6).fill(''));
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Default to device verification if not specified
-  const type = searchParams.get('type') || 'device'; 
-
-  const form = useForm<z.infer<typeof formSchema>>({
+  const { handleSubmit, setValue, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: {
-      otp: '',
-    },
+    defaultValues: { otp: '' },
   });
 
-  async function onSubmit(values: z.infer<typeof formSchema>) {
-    if (!email) {
-      toast.error("Email missing. Please login again.");
-      router.push('/auth/login');
-      return;
-    }
+  function handleDigitChange(index: number, value: string) {
+    const digit = value.replace(/\D/g, '').slice(-1);
+    const newDigits = [...digits];
+    newDigits[index] = digit;
+    setDigits(newDigits);
+    setValue('otp', newDigits.join(''));
+    if (digit && index < 5) inputRefs.current[index + 1]?.focus();
+  }
 
+  function handleKeyDown(index: number, e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Backspace' && !digits[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus();
+    }
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    const newDigits = [...digits];
+    for (let i = 0; i < 6; i++) newDigits[i] = pasted[i] || '';
+    setDigits(newDigits);
+    setValue('otp', newDigits.join(''));
+    const nextEmpty = pasted.length < 6 ? pasted.length : 5;
+    inputRefs.current[nextEmpty]?.focus();
+  }
+
+  async function onSubmit(values: FormValues) {
+    if (!email) { toast.error('Email missing. Please sign in again.'); router.push('/auth/login'); return; }
     setIsLoading(true);
     try {
-      let endpoint = '';
-      if (type === 'device') {
-        endpoint = '/auth/device/verify';
-      } else if (type === 'unlock') {
-         endpoint = '/auth/unlock/verify';
-      }
-
-      await api.post(endpoint, {
-        email: email,
-        otp: values.otp
-      });
-
-      toast.success('Verification successful! You can now login.');
+      const endpoint = type === 'device' ? '/auth/device/verify' : '/auth/unlock/verify';
+      await api.post(endpoint, { email, otp: values.otp });
+      toast.success('Verification successful! You can now sign in.');
       router.push('/auth/login');
-
     } catch (error: any) {
-      console.error(error);
-      const msg = error.response?.data?.detail || 'Verification failed';
-      toast.error(msg);
+      toast.error(error.response?.data?.detail || 'Verification failed.');
     } finally {
       setIsLoading(false);
     }
   }
 
+  const isDeviceVerify = type === 'device';
+  const otpFilled = digits.every(d => d !== '');
+
   return (
-    <div className="flex h-screen items-center justify-center bg-gray-50 dark:bg-gray-900">
-      <Card className="w-[400px]">
-        <CardHeader>
-          <CardTitle className="text-2xl font-bold text-center">Verify Identity</CardTitle>
-          <CardDescription className="text-center">
-            Enter the 6-digit OTP sent to {email}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-              <FormField
-                control={form.control}
-                name="otp"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>One-Time Password</FormLabel>
-                    <FormControl>
-                      <Input placeholder="123456" maxLength={6} {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Verify
-              </Button>
-            </form>
-          </Form>
-        </CardContent>
-      </Card>
-    </div>
+    <AuthShell
+      title="Verify your identity"
+      subtitle={
+        email
+          ? `We sent a 6-digit code to ${email}. Enter it below to continue.`
+          : `Enter the 6-digit verification code sent to your email.`
+      }
+      backHref="/auth/login"
+      backLabel="Back to sign in"
+      leftHeading={isDeviceVerify ? 'New device\ndetected.' : 'Let\'s get\nyou unlocked.'}
+      leftBody={
+        isDeviceVerify
+          ? "We noticed a sign-in from a new device. Verify your identity with the OTP sent to your email."
+          : "Enter the OTP we sent to your email to unlock your account and regain access."
+      }
+      eyebrow={isDeviceVerify ? 'Device Verification' : 'Account Unlock'}
+    >
+      <form onSubmit={handleSubmit(onSubmit)}>
+        {/* OTP icon header */}
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '28px' }}>
+          <div style={{
+            width: '56px', height: '56px', borderRadius: '50%',
+            background: 'rgba(34,87,122,0.08)', display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+          }}>
+            <ShieldCheck style={{ width: '26px', height: '26px', color: '#22577A' }} />
+          </div>
+        </div>
+
+        {/* 6-digit OTP boxes */}
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginBottom: '8px' }}>
+          {digits.map((digit, i) => (
+            <input
+              key={i}
+              ref={el => { inputRefs.current[i] = el; }}
+              type="text"
+              inputMode="numeric"
+              maxLength={1}
+              value={digit}
+              className={`auth-otp-box${digit ? ' filled' : ''}`}
+              onChange={e => handleDigitChange(i, e.target.value)}
+              onKeyDown={e => handleKeyDown(i, e)}
+              onPaste={handlePaste}
+            />
+          ))}
+        </div>
+
+        {errors.otp && (
+          <p style={{ textAlign: 'center', fontSize: '12px', color: '#EF4444', marginBottom: '12px' }}>
+            {errors.otp.message}
+          </p>
+        )}
+
+        <div style={{ marginTop: '20px' }}>
+          <button type="submit" className="auth-btn" disabled={isLoading || !otpFilled}>
+            {isLoading && <Loader2 style={{ width: '15px', height: '15px', animation: 'spin 1s linear infinite' }} />}
+            Verify Code
+          </button>
+        </div>
+
+        <p style={{ textAlign: 'center', fontSize: '13px', color: '#94A3B8', marginTop: '16px' }}>
+          Didn&apos;t receive the code?{' '}
+          <button
+            type="button"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+            className="auth-link"
+            onClick={() => toast.info('Please request a new code from the previous step.')}
+          >
+            Resend
+          </button>
+        </p>
+      </form>
+    </AuthShell>
   );
 }

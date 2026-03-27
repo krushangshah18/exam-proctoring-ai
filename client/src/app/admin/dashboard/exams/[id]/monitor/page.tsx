@@ -46,7 +46,6 @@ interface SessionCard {
   start_time: string | null;
   end_time: string | null;
   risk_score: number;
-  violation_count: number;
   last_heartbeat: string | null;
   terminated_reason: string | null;
   terminated_by: string | null;
@@ -66,7 +65,7 @@ interface ResumeRequest {
   time_extension_minutes: number | null;
   reviewed_at: string | null;
   created_at: string;
-  termination_type: "DISCONNECT" | "VIOLATION" | "ADMIN" | "LATE_JOIN";
+  termination_type: "DISCONNECT" | "SYSTEM" | "ADMIN" | "LATE_JOIN";
   suggested_extension_minutes: number | null;
   time_since_disconnect_seconds: number | null;
 }
@@ -689,7 +688,7 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
           ? { bg: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE', label: 'Disconnect' }
           : rr.termination_type === "ADMIN"
           ? { bg: '#FFF1F2', color: '#BE123C', border: '#FECDD3', label: 'Admin Terminated' }
-          : { bg: '#F5F3FF', color: '#7C3AED', border: '#DDD6FE', label: 'Violation' };
+          : { bg: '#F5F3FF', color: '#7C3AED', border: '#DDD6FE', label: 'System Flag' };
 
         return (
           <div key={rr.id} className="rounded-xl border overflow-hidden"
@@ -733,7 +732,7 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
                   style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
                   <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" style={{ color: '#94A3B8' }} />
                   <p className="text-xs" style={{ color: '#94A3B8' }}>
-                    Timer continued running during this appeal. No extra time is typically granted for {rr.termination_type === "ADMIN" ? "admin-terminated" : "violation"} sessions, but you may still add minutes if appropriate.
+                    Timer continued running during this appeal. No extra time is typically granted for {rr.termination_type === "ADMIN" ? "admin-terminated" : "system-flagged"} sessions, but you may still add minutes if appropriate.
                   </p>
                 </div>
               )}
@@ -1085,10 +1084,6 @@ export default function MonitoringDashboard() {
                       <RiskBar score={sess.risk_score} />
 
                       <div className="flex items-center gap-4 text-xs flex-wrap" style={{ color: '#94A3B8' }}>
-                        <span className="flex items-center gap-1">
-                          <ShieldAlert className="h-3 w-3" style={{ color: '#FDA4AF' }} />
-                          {sess.violation_count} violations
-                        </span>
                         {sess.last_heartbeat && (
                           <span className="flex items-center gap-1">
                             <Activity className="h-3 w-3" style={{ color: '#86EFAC' }} />

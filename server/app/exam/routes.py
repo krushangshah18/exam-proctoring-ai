@@ -1,7 +1,9 @@
 # app/exam/routes.py
 
 import asyncio
+import io
 import json
+import os
 from datetime import datetime, UTC, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
@@ -16,6 +18,21 @@ from app.core import log, validate_single_face, generate_embedding, verify_same_
 from app.auth.dependencies import get_current_user
 from app.exam.exam_guard import exam_guard
 from app.exam.events import get_queue, remove_queue
+
+# ── Object detection model (lazy-loaded singleton) ────────────────────────────
+_object_model = None
+
+def _get_object_model():
+    global _object_model
+    if _object_model is None:
+        from ultralytics import YOLO
+        model_path = os.path.join(os.path.dirname(__file__), "..", "..", "finalBestV5.pt")
+        model_path = os.path.abspath(model_path)
+        _object_model = YOLO(model_path)
+    return _object_model
+
+_OBJ_LABELS = {0: "person", 1: "book", 2: "cell phone", 3: "headphone", 4: "earbud"}
+_PROHIBITED  = {1, 2, 3, 4}   # everything except person
 
 
 router = APIRouter(prefix="/exam", tags=["Exam"])
@@ -168,12 +185,6 @@ def get_exam_history(
             end = session.end_time.replace(tzinfo=UTC) if session.end_time.tzinfo is None else session.end_time
             duration_taken_seconds = int((end - start).total_seconds())
 
-        violation_count = 0
-        if session:
-            violation_count = db.query(models.Violation).filter(
-                models.Violation.session_id == session.id
-            ).count()
-
         result.append({
             "id": str(exam.id),
             "title": exam.title,
@@ -188,7 +199,6 @@ def get_exam_history(
             "session_end_time": session.end_time if session else None,
             "duration_taken_seconds": duration_taken_seconds,
             "risk_score": session.risk_score if session else 0,
-            "violation_count": violation_count,
             "time_extension_seconds": session.time_extension_seconds if session else 0,
             "terminated_reason": session.terminated_reason if session else None,
         })
@@ -354,11 +364,6 @@ def get_session_summary(
         end = session.end_time.replace(tzinfo=UTC) if session.end_time.tzinfo is None else session.end_time
         duration_taken_seconds = int((end - start).total_seconds())
 
-    # Violation count
-    violation_count = db.query(models.Violation).filter(
-        models.Violation.session_id == session.id
-    ).count()
-
     return {
         "session_id": str(session.id),
         "status": session.status,
@@ -368,7 +373,6 @@ def get_session_summary(
         "duration_minutes": exam.duration_minutes if exam else None,
         "time_extension_seconds": session.time_extension_seconds or 0,
         "risk_score": session.risk_score or 0,
-        "violation_count": violation_count,
         "terminated_reason": session.terminated_reason,
     }
 
@@ -522,6 +526,73 @@ async def verify_exam_face(
     except Exception as e:
         log.exception("Face verification error for user %s: %s", current_user.id, e)
         raise HTTPException(status_code=500, detail="Internal server error during face verification.")
+
+
+# =====================================================
+# ENVIRONMENT CHECKS: OBJECT DETECTION
+# =====================================================
+
+@router.post("/{exam_id}/check-objects")
+async def check_objects(
+    exam_id: str,
+    image: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+):
+    """
+    Run a single YOLO inference pass on the submitted frame.
+    Rules:
+      - Exactly 1 person must be visible.
+      - No prohibited objects (book, cell_phone, headphone, earbud).
+    Returns { passed, person_count, detected_objects, issues }
+    """
+    try:
+        data = await image.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="Empty image received.")
+
+        import numpy as np
+        import cv2
+        nparr = np.frombuffer(data, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise HTTPException(status_code=400, detail="Could not decode image.")
+
+        model = _get_object_model()
+        results = model(frame, verbose=False)[0]
+
+        person_count = 0
+        detected_prohibited: list[str] = []
+
+        for box in results.boxes:
+            cls_id = int(box.cls[0].item())
+            conf   = float(box.conf[0].item())
+            if cls_id == 0 and conf >= 0.30:
+                person_count += 1
+            elif cls_id in _PROHIBITED and conf >= 0.40:
+                label = _OBJ_LABELS.get(cls_id, f"object_{cls_id}")
+                if label not in detected_prohibited:
+                    detected_prohibited.append(label)
+
+        issues: list[str] = []
+        if person_count == 0:
+            issues.append("No person detected. Please sit in front of the camera.")
+        elif person_count > 1:
+            issues.append(f"{person_count} people detected. Only 1 person is allowed in the frame.")
+        for obj in detected_prohibited:
+            issues.append(f"Prohibited item detected: {obj}. Please remove it from view.")
+
+        return {
+            "passed": len(issues) == 0,
+            "person_count": person_count,
+            "detected_objects": detected_prohibited,
+            "issues": issues,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Object check failed for user %s: %s", current_user.id, e)
+        raise HTTPException(status_code=500, detail="Object detection failed.")
 
 
 # =====================================================
@@ -867,7 +938,7 @@ def end_exam(
 
     log.info("Exam ended session=%s user=%s", session.id, session.user_id)
 
-    # Pull final violation data from engine (best-effort — don't fail the submit)
+    # Pull final risk data from engine (best-effort — don't fail the submit)
     if session.proctor_pc_id and session.proctor_engine_url:
         import asyncio as _asyncio
         from app.exam.proctor_proxy import fetch_session_log as _fetch_log
@@ -1086,7 +1157,7 @@ async def proctor_violation(
     current_user=Depends(get_current_user),
 ):
     """
-    Report a focus violation (tab switch / window blur) to the engine.
+    Report a focus event (tab switch / window blur) to the engine.
     If the engine auto-terminates (3 switches), marks the ExamSession TERMINATED.
     """
     from app.exam.proctor_proxy import proxy_tab_switch
@@ -1111,14 +1182,14 @@ async def proctor_violation(
     if risk.get("terminated"):
         session.status = SessionStatus.TERMINATED.value
         session.terminated_reason = risk.get("reason", "Exam policy violated")
-        session.terminated_by = "SYSTEM_VIOLATION"
+        session.terminated_by = "SYSTEM_RISK"
         session.terminated_at = datetime.now(UTC)
         db.commit()
 
         # Push termination event through ProctorAI's own SSE so the active page
         # gets notified via its existing SSE connection
         push_event_sync(str(session.id), "TERMINATED", {
-            "cause":  "violation",
+            "cause":  "system",
             "reason": session.terminated_reason,
         })
         log.info("Session terminated by engine (tab switch): session=%s", session.id)
@@ -1133,7 +1204,7 @@ async def proctor_events(
     current_user=Depends(get_current_user),
 ):
     """
-    SSE proxy — streams engine violation events to the student's active page.
+    SSE proxy — streams engine risk events to the student's active page.
     Events are forwarded as-is from the engine's /stream/{pc_id}.
     On session_end from engine, also terminates the ProctorAI session.
     """
@@ -1202,11 +1273,11 @@ async def proctor_events(
                     if _sess and _sess.status == SessionStatus.ACTIVE.value:
                         _sess.status = SessionStatus.TERMINATED.value
                         _sess.terminated_reason = event_data.get("message", "Terminated by proctoring engine")
-                        _sess.terminated_by = "SYSTEM_VIOLATION"
+                        _sess.terminated_by = "SYSTEM_RISK"
                         _sess.terminated_at = datetime.now(UTC)
                         _db.commit()
                         push_event_sync(session_id_str, "TERMINATED", {
-                            "cause": "violation",
+                            "cause": "system",
                             "reason": _sess.terminated_reason,
                         })
                         log.info("Session %s terminated by engine via SSE", session_id_str)

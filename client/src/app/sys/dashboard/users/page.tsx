@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Search, Users, Lock, Unlock, RefreshCw, Loader2,
-  ShieldCheck, GraduationCap, ChevronLeft, ChevronRight,
+  ShieldCheck, GraduationCap,
 } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
+import { TablePagination } from '@/components/common/TablePagination';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface UserRow {
@@ -52,6 +53,14 @@ function fmtDate(iso: string | null) {
 function fmtDateTime(iso: string | null) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+}
+function fmtShortDate(iso: string | null) {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = String(date.getFullYear()).slice(-2);
+  return `${day}/${month}/${year}`;
 }
 
 const PAGE_SIZE = 25;
@@ -117,7 +126,7 @@ export default function UsersPage() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Users</h1>
-            <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>
+            <p className="text-sm mt-1 font-medium" style={{ color: '#64748B' }}>
               {total} user{total !== 1 ? 's' : ''} registered
               {lockedCount > 0 && <span className="ml-2 font-semibold" style={{ color: '#E11D48' }}>· {lockedCount} locked on this page</span>}
             </p>
@@ -167,21 +176,21 @@ export default function UsersPage() {
           style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
           {loading ? (
             <div className="py-20 flex justify-center">
-              <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
+              <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#94A3B8' }} />
             </div>
           ) : users.length === 0 ? (
             <div className="py-20 text-center">
               <Users className="h-10 w-10 mx-auto mb-3" style={{ color: '#E2E8F0' }} />
-              <p className="text-sm" style={{ color: '#94A3B8' }}>No users found</p>
+              <p className="text-sm font-medium" style={{ color: '#64748B' }}>No users found</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ borderBottom: '1px solid #F1F5F9', background: '#F8FAFC' }}>
-                    {['Name / Email', 'Role', 'Status', 'Login Attempts', 'Last Login', 'Joined', ''].map(h => (
-                      <th key={h} className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider"
-                        style={{ color: '#94A3B8' }}>{h}</th>
+                    {['Name / Email', 'Role', 'Status', 'Failed Login Attempts', 'Last Login', 'Joined', ''].map(h => (
+                      <th key={h} className={`px-4 py-3 text-[11px] font-semibold uppercase tracking-wider ${h === 'Failed Login Attempts' ? 'text-center' : 'text-left'}`}
+                        style={{ color: '#64748B' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -197,7 +206,7 @@ export default function UsersPage() {
                     >
                       <td className="px-4 py-3">
                         <p className="font-semibold" style={{ color: '#0F172A' }}>{u.full_name}</p>
-                        <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{u.email}</p>
+                        <p className="text-xs mt-0.5 font-medium" style={{ color: '#64748B' }}>{u.email}</p>
                       </td>
                       <td className="px-4 py-3"><RoleBadge role={u.role} /></td>
                       <td className="px-4 py-3">
@@ -208,7 +217,7 @@ export default function UsersPage() {
                               <Lock className="h-3 w-3" /> Locked
                             </span>
                             {u.locked_until && (
-                              <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Until {fmtDateTime(u.locked_until)}</p>
+                              <p className="text-xs mt-0.5 font-medium" style={{ color: '#64748B' }}>Until {fmtDateTime(u.locked_until)}</p>
                             )}
                           </div>
                         ) : (
@@ -218,12 +227,12 @@ export default function UsersPage() {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 tabular-nums font-semibold"
-                        style={{ color: u.failed_login_attempts > 0 ? '#DC2626' : '#94A3B8' }}>
+                      <td className="px-4 py-3 text-center tabular-nums font-semibold"
+                        style={{ color: u.failed_login_attempts > 0 ? '#DC2626' : '#64748B' }}>
                         {u.failed_login_attempts}
                       </td>
-                      <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{fmtDateTime(u.last_login)}</td>
-                      <td className="px-4 py-3 text-xs" style={{ color: '#94A3B8' }}>{fmtDate(u.created_at)}</td>
+                      <td className="px-4 py-3 text-xs" style={{ color: '#475569' }}>{fmtShortDate(u.last_login)}</td>
+                      <td className="px-4 py-3 text-xs font-medium" style={{ color: '#64748B' }}>{fmtDate(u.created_at)}</td>
                       <td className="px-4 py-3 text-right">
                         {u.is_locked && (
                           <button
@@ -248,24 +257,14 @@ export default function UsersPage() {
         </div>
 
         {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between text-sm" style={{ color: '#94A3B8' }}>
-            <span>Page {page} of {totalPages} · {total} users</span>
-            <div className="flex gap-2">
-              {[
-                { icon: ChevronLeft, label: 'Prev', action: () => setPage(p => p - 1), disabled: page <= 1 },
-                { icon: ChevronRight, label: 'Next', action: () => setPage(p => p + 1), disabled: page >= totalPages },
-              ].map(({ icon: Icon, label, action, disabled }) => (
-                <button key={label} onClick={action} disabled={disabled}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border transition-all duration-150"
-                  style={{ borderColor: '#E2E8F0', color: disabled ? '#CBD5E1' : '#475569', background: '#fff', cursor: disabled ? 'not-allowed' : 'pointer' }}>
-                  {label === 'Prev' && <Icon className="h-4 w-4" />}
-                  {label}
-                  {label === 'Next' && <Icon className="h-4 w-4" />}
-                </button>
-              ))}
-            </div>
-          </div>
+        {total > 10 && (
+          <TablePagination
+            page={page}
+            pageCount={totalPages}
+            pageSize={PAGE_SIZE}
+            totalItems={total}
+            onPageChange={setPage}
+          />
         )}
       </div>
 

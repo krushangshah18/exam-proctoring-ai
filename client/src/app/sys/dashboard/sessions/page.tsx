@@ -19,7 +19,6 @@ interface LiveSession {
   status: string;
   start_time: string | null;
   risk_score: number;
-  violation_count: number;
   last_heartbeat: string | null;
   proctor_connected: boolean;
   proctor_engine_url: string | null;
@@ -284,7 +283,7 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
       <div className="rounded-xl overflow-hidden border" style={{ background: '#0F172A', borderColor: '#1E293B' }}>
         <div className="flex items-center gap-2 px-4 py-3" style={{ borderBottom: '1px solid #1E293B' }}>
           <Bot className="h-4 w-4" style={{ color: '#38A3A5' }} />
-          <p className="text-sm font-semibold" style={{ color: '#CBD5E1' }}>
+          <p className="text-sm font-semibold" style={{ color: '#94A3B8' }}>
             AI Feed — {session.student_name}
           </p>
           <span className="ml-auto flex items-center gap-1.5">
@@ -328,30 +327,26 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
             <p className="text-5xl font-bold tabular-nums transition-all" style={{ color: scoreColor, letterSpacing: '-0.03em' }}>
               {Math.round(liveRisk.score)}
             </p>
-            <span className="text-xs mb-1.5 font-medium" style={{ color: '#94A3B8' }}>/ 100</span>
+            <span className="text-xs mb-1.5 font-medium" style={{ color: '#64748B' }}>/ 100</span>
           </div>
           <div className="h-2 rounded-full overflow-hidden" style={{ background: '#F1F5F9' }}>
             <div className="h-2 rounded-full transition-all duration-700"
               style={{ width: `${Math.min(liveRisk.score, 100)}%`, background: scoreColor }} />
           </div>
-          <div className="flex gap-4 text-xs" style={{ color: '#94A3B8' }}>
+          <div className="flex gap-4 text-xs font-medium" style={{ color: '#64748B' }}>
             <span>Fixed <span className="font-semibold" style={{ color: '#0F172A' }}>{Math.round(liveRisk.fixed)}</span></span>
             {liveRisk.decaying !== undefined && (
               <span>Decaying <span className="font-semibold" style={{ color: '#0F172A' }}>{Math.round(liveRisk.decaying)}</span></span>
             )}
           </div>
-          <div className="grid grid-cols-3 gap-2 pt-3 text-center" style={{ borderTop: '1px solid #F1F5F9' }}>
+          <div className="grid grid-cols-2 gap-2 pt-3 text-center" style={{ borderTop: '1px solid #F1F5F9' }}>
             <div className="rounded-lg py-2" style={{ background: '#FFF1F2' }}>
               <p className="text-lg font-bold" style={{ color: '#BE123C' }}>{alerts.length}</p>
-              <p className="text-xs" style={{ color: '#94A3B8' }}>Alerts</p>
+              <p className="text-xs font-medium" style={{ color: '#64748B' }}>Alerts</p>
             </div>
             <div className="rounded-lg py-2" style={{ background: '#FFFBEB' }}>
               <p className="text-lg font-bold" style={{ color: '#B45309' }}>{warnings.length}</p>
-              <p className="text-xs" style={{ color: '#94A3B8' }}>Warnings</p>
-            </div>
-            <div className="rounded-lg py-2" style={{ background: '#F8FAFC' }}>
-              <p className="text-lg font-bold" style={{ color: '#0F172A' }}>{session.violation_count}</p>
-              <p className="text-xs" style={{ color: '#94A3B8' }}>Violations</p>
+              <p className="text-xs font-medium" style={{ color: '#64748B' }}>Warnings</p>
             </div>
           </div>
         </div>
@@ -367,7 +362,7 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
               style={{
                 color: alertTab === tab
                   ? (tab === 'alerts' ? '#BE123C' : '#B45309')
-                  : '#94A3B8',
+                  : '#64748B',
                 borderBottom: alertTab === tab
                   ? `2px solid ${tab === 'alerts' ? '#BE123C' : '#B45309'}`
                   : '2px solid transparent',
@@ -388,11 +383,11 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
         <div className="p-4">
           <div className="space-y-2 max-h-56 overflow-y-auto">
             {!historyLoaded ? (
-              <div className="flex items-center justify-center gap-2 py-6 text-sm" style={{ color: '#94A3B8' }}>
+              <div className="flex items-center justify-center gap-2 py-6 text-sm font-medium" style={{ color: '#64748B' }}>
                 <Loader2 className="h-4 w-4 animate-spin" /> Loading history…
               </div>
             ) : alertTab === 'alerts' ? (alerts.length === 0
-              ? <p className="text-sm text-center py-6" style={{ color: '#94A3B8' }}>No alerts yet</p>
+              ? <p className="text-sm text-center py-6 font-medium" style={{ color: '#64748B' }}>No alerts yet</p>
               : alerts.map((a, i) => (
                 <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-lg border text-xs"
                   style={{ background: '#FFF1F2', borderColor: '#FECDD3' }}>
@@ -426,7 +421,7 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
                 </div>
               ))
             ) : (warnings.length === 0
-              ? <p className="text-sm text-center py-6" style={{ color: '#94A3B8' }}>No warnings yet</p>
+              ? <p className="text-sm text-center py-6 font-medium" style={{ color: '#64748B' }}>No warnings yet</p>
               : warnings.map((w, i) => (
                 <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-lg border text-xs"
                   style={{ background: '#FFFBEB', borderColor: '#FDE68A' }}>
@@ -496,7 +491,7 @@ export default function SessionsMonitorPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
+        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#94A3B8' }} />
       </div>
     );
   }
@@ -507,7 +502,7 @@ export default function SessionsMonitorPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Live Sessions</h1>
-          <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>All active exam sessions across every exam</p>
+          <p className="text-sm mt-1 font-medium" style={{ color: '#64748B' }}>All active exam sessions across every exam</p>
         </div>
         <button
           onClick={() => fetchSessions()}
@@ -532,7 +527,7 @@ export default function SessionsMonitorPage() {
             </div>
             <div>
               <p className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.02em' }}>{value}</p>
-              <p className="text-xs" style={{ color: '#94A3B8' }}>{label}</p>
+              <p className="text-xs font-medium" style={{ color: '#64748B' }}>{label}</p>
             </div>
           </div>
         ))}
@@ -561,14 +556,14 @@ export default function SessionsMonitorPage() {
           style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
           <Users className="h-12 w-12 mx-auto mb-3" style={{ color: '#E2E8F0' }} />
           <p className="text-sm font-medium" style={{ color: '#475569' }}>No active sessions</p>
-          <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Sessions appear here when students are taking exams</p>
+          <p className="text-xs mt-1 font-medium" style={{ color: '#64748B' }}>Sessions appear here when students are taking exams</p>
         </div>
       ) : (
         <div className="grid lg:grid-cols-2 gap-6">
           {/* Session cards */}
           <div className="space-y-2">
             {filtered.length === 0 ? (
-              <p className="text-sm text-center py-6" style={{ color: '#94A3B8' }}>No sessions match your search</p>
+              <p className="text-sm text-center py-6 font-medium" style={{ color: '#64748B' }}>No sessions match your search</p>
             ) : (
               filtered.map(sess => {
                 const isSelected = selected?.session_id === sess.session_id;
@@ -589,7 +584,7 @@ export default function SessionsMonitorPage() {
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <p className="font-semibold text-sm truncate" style={{ color: '#0F172A' }}>{sess.student_name}</p>
-                          <p className="text-xs truncate mt-0.5" style={{ color: '#94A3B8' }}>{sess.student_email}</p>
+                          <p className="text-xs truncate mt-0.5 font-medium" style={{ color: '#64748B' }}>{sess.student_email}</p>
                           <p className="text-xs font-medium mt-0.5 truncate" style={{ color: '#22577A' }}>{sess.exam_title}</p>
                         </div>
                         <div className="flex flex-col items-end gap-1.5 shrink-0">
@@ -599,10 +594,10 @@ export default function SessionsMonitorPage() {
                               : { background: '#FFFBEB', color: '#B45309', borderColor: '#FDE68A' }}>
                             {sess.status}
                           </span>
-                          <div className="flex items-center gap-1 text-xs" style={{ color: '#94A3B8' }}>
+                          <div className="flex items-center gap-1 text-xs font-medium" style={{ color: '#64748B' }}>
                             {sess.proctor_connected
                               ? <CheckCircle2 className="h-3 w-3" style={{ color: '#22c55e' }} />
-                              : <XCircle className="h-3 w-3" style={{ color: '#CBD5E1' }} />}
+                              : <XCircle className="h-3 w-3" style={{ color: '#94A3B8' }} />}
                             <Server className="h-3 w-3" />
                             <span className="font-mono">{sess.proctor_engine_url?.replace(/https?:\/\//, '').split(':')[1] ?? '—'}</span>
                           </div>
@@ -611,11 +606,7 @@ export default function SessionsMonitorPage() {
 
                       <RiskBar score={sess.risk_score} />
 
-                      <div className="flex items-center gap-4 text-xs" style={{ color: '#94A3B8' }}>
-                        <span className="flex items-center gap-1">
-                          <ShieldAlert className="h-3 w-3" style={{ color: '#FDA4AF' }} />
-                          {sess.violation_count} violations
-                        </span>
+                      <div className="flex items-center gap-4 text-xs font-medium" style={{ color: '#64748B' }}>
                         {sess.last_heartbeat && (
                           <span className="flex items-center gap-1">
                             <Activity className="h-3 w-3" style={{ color: '#86EFAC' }} />
@@ -642,7 +633,7 @@ export default function SessionsMonitorPage() {
                   <button
                     onClick={() => setSelected(null)}
                     className="text-xs px-2 py-1 rounded-md border transition-colors"
-                    style={{ color: '#94A3B8', borderColor: '#E2E8F0' }}
+                    style={{ color: '#64748B', borderColor: '#E2E8F0' }}
                   >
                     Close
                   </button>
@@ -657,7 +648,7 @@ export default function SessionsMonitorPage() {
               <div className="flex flex-col items-center justify-center h-64 rounded-xl border-2 border-dashed"
                 style={{ borderColor: '#E2E8F0' }}>
                 <Eye className="h-10 w-10 mb-3" style={{ color: '#E2E8F0' }} />
-                <p className="text-sm" style={{ color: '#94A3B8' }}>Select a session to monitor</p>
+                <p className="text-sm font-medium" style={{ color: '#64748B' }}>Select a session to monitor</p>
               </div>
             )}
           </div>

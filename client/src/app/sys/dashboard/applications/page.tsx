@@ -19,7 +19,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { DataTable } from '@/components/common/DataTable';
 import { SearchInput } from '@/components/common/SearchInput';
 import { StatusBadge } from '@/components/common/StatusBadge';
-import { Breadcrumbs } from '@/components/common/Breadcrumbs';
 import { useTableURLState } from '@/hooks/useTableURLState';
 import { ColumnDef, PaginationState, SortingState } from '@tanstack/react-table';
 
@@ -120,7 +119,7 @@ export default function ApplicationsPage() {
       cell: ({ row }) => (
         <div>
           <p className="font-semibold text-sm" style={{ color: '#0F172A' }}>{row.original.full_name}</p>
-          <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{row.original.email}</p>
+          <p className="text-xs font-medium mt-0.5" style={{ color: '#475569' }}>{row.original.email}</p>
         </div>
       ),
     },
@@ -132,7 +131,7 @@ export default function ApplicationsPage() {
           <Building className="h-3.5 w-3.5" style={{ color: '#94A3B8' }} />
           {row.original.organization}
         </span>
-      ) : <span style={{ color: '#CBD5E1' }}>—</span>,
+      ) : <span style={{ color: '#94A3B8' }}>—</span>,
     },
     {
       accessorKey: 'created_at',
@@ -194,15 +193,13 @@ export default function ApplicationsPage() {
 
   return (
     <div className="space-y-6 max-w-6xl pb-12">
-      <Breadcrumbs />
-
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>
             Admin Applications
           </h1>
-          <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>
+          <p className="text-sm font-medium mt-1" style={{ color: '#64748B' }}>
             Review and manage incoming teacher and admin account requests.
           </p>
         </div>
@@ -253,21 +250,21 @@ export default function ApplicationsPage() {
                 <div className="grid grid-cols-2 gap-4">
                   {[
                     { label: 'Full Name',     value: <span className="flex items-center gap-1.5 font-medium" style={{ color: '#0F172A' }}><User className="h-3.5 w-3.5" style={{ color: '#94A3B8' }} />{selectedApp.full_name}</span> },
-                    { label: 'Organization',  value: <span style={{ color: '#475569' }}>{selectedApp.organization || '—'}</span> },
-                    { label: 'Contact',       value: <span style={{ color: '#475569' }}>{selectedApp.contact_number || '—'}</span> },
+                    { label: 'Organization',  value: <span className="font-medium" style={{ color: '#0F172A' }}>{selectedApp.organization || '—'}</span> },
+                    { label: 'Contact',       value: <span className="font-medium" style={{ color: '#0F172A' }}>{selectedApp.contact_number || '—'}</span> },
                     { label: 'Applying For',  value: <span className="px-2 py-0.5 rounded-md text-xs font-semibold border" style={{ background: '#F5F3FF', color: '#7C3AED', borderColor: '#DDD6FE' }}>Admin Account</span> },
                   ].map(({ label, value }) => (
                     <div key={label}>
-                      <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#94A3B8' }}>{label}</p>
+                      <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: '#64748B' }}>{label}</p>
                       <div className="text-sm">{value}</div>
                     </div>
                   ))}
                 </div>
 
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: '#94A3B8' }}>Reason</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: '#64748B' }}>Reason</p>
                   <div className="p-3 rounded-lg text-sm leading-relaxed"
-                    style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', color: '#475569' }}>
+                    style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', color: '#0F172A' }}>
                     {selectedApp.reason}
                   </div>
                 </div>
@@ -302,7 +299,7 @@ export default function ApplicationsPage() {
 
                 {!reviewAction && selectedApp.review_note && (
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: '#94A3B8' }}>Review Note</p>
+                    <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: '#64748B' }}>Review Note</p>
                     <div className="p-3 rounded-lg text-sm italic" style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderLeft: '3px solid #22577A', color: '#475569' }}>
                       "{selectedApp.review_note}"
                     </div>
@@ -316,7 +313,7 @@ export default function ApplicationsPage() {
                 onClick={() => setIsReviewOpen(false)}
                 disabled={processing}
                 className="px-4 py-2 rounded-lg text-sm font-medium border transition-all duration-150"
-                style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+                style={{ borderColor: '#94A3B8', color: '#334155', background: '#fff' }}
               >
                 {reviewAction ? 'Cancel' : 'Close'}
               </button>

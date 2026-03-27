@@ -32,7 +32,7 @@ interface FieldMeta {
 const SECTIONS: { title: string; desc?: string; fields: FieldMeta[] }[] = [
   {
     title: 'Head Pose Thresholds',
-    desc: 'Angular thresholds for detecting head movement violations.',
+    desc: 'Angular thresholds for detecting head movement events.',
     fields: [
       { key: 'look_away_yaw',   label: 'Yaw — Look Away',   min: 0.05, max: 0.50, step: 0.01, desc: 'Horizontal head turn angle' },
       { key: 'look_down_pitch', label: 'Pitch — Look Down',  min: 0.05, max: 0.40, step: 0.01, desc: 'Downward pitch threshold' },
@@ -52,7 +52,7 @@ const SECTIONS: { title: string; desc?: string; fields: FieldMeta[] }[] = [
   },
   {
     title: 'Risk Scores',
-    desc: 'Points added to risk score when each violation is detected.',
+    desc: 'Points added to risk score when each event is detected.',
     fields: [
       { key: 'gaze_score',             label: 'Gaze Event',           min: 1,  max: 30,  step: 1,  unit: 'pts' },
       { key: 'phone_score_2nd',        label: 'Phone — 2nd Offence',  min: 5,  max: 100, step: 5,  unit: 'pts' },
@@ -76,7 +76,7 @@ const SECTIONS: { title: string; desc?: string; fields: FieldMeta[] }[] = [
       { key: 'state_warning',      label: 'Warning Threshold',      min: 10, max: 80,  step: 5,  unit: 'pts', desc: 'Enters WARNING state' },
       { key: 'state_high_risk',    label: 'High Risk Threshold',    min: 30, max: 120, step: 5,  unit: 'pts', desc: 'Enters HIGH_RISK state' },
       { key: 'state_admin_review', label: 'Admin Review Threshold', min: 60, max: 200, step: 5,  unit: 'pts', desc: 'Enters ADMIN_REVIEW state' },
-      { key: 'decay_amount',       label: 'Decay per Cycle',        min: 1,  max: 30,  step: 1,  unit: 'pts', desc: 'Score reduced each cycle without violations' },
+      { key: 'decay_amount',       label: 'Decay per Cycle',        min: 1,  max: 30,  step: 1,  unit: 'pts', desc: 'Score reduced each cycle without new events' },
     ],
   },
   {
@@ -131,10 +131,10 @@ function SettingSlider({ field, value, savedValue, onChange }: {
           )}
         </div>
         {field.unit && (
-          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>{field.unit}</span>
+          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#64748B' }}>{field.unit}</span>
         )}
       </div>
-      {field.desc && <p className="text-xs" style={{ color: '#94A3B8' }}>{field.desc}</p>}
+      {field.desc && <p className="text-xs font-medium" style={{ color: '#64748B' }}>{field.desc}</p>}
       <div className="flex items-center gap-3">
         <div className="flex-1 relative">
           <input
@@ -154,12 +154,15 @@ function SettingSlider({ field, value, savedValue, onChange }: {
           min={field.min} max={field.max} step={field.step}
           value={localStr}
           onChange={e => setLocalStr(e.target.value)}
-          onBlur={e => commit(e.target.value)}
+          onBlur={e => {
+            commit(e.target.value);
+            (e.target as HTMLElement).style.borderColor = '#E2E8F0';
+            (e.target as HTMLElement).style.background = '#F8FAFC';
+          }}
           onKeyDown={e => e.key === 'Enter' && commit(localStr)}
           className="w-[4.5rem] px-2 py-1.5 text-xs text-right rounded-lg font-mono outline-none transition-all"
           style={{ border: '1px solid #E2E8F0', color: '#0F172A', background: '#F8FAFC' }}
           onFocus={e => { (e.target as HTMLElement).style.borderColor = '#38A3A5'; (e.target as HTMLElement).style.background = '#fff'; }}
-          onBlur={e => { (e.target as HTMLElement).style.borderColor = '#E2E8F0'; (e.target as HTMLElement).style.background = '#F8FAFC'; }}
         />
       </div>
     </div>
@@ -206,7 +209,7 @@ export default function SystemSettingsPage() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center p-24">
-        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#CBD5E1' }} />
+        <Loader2 className="h-7 w-7 animate-spin" style={{ color: '#94A3B8' }} />
       </div>
     );
   }
@@ -220,7 +223,7 @@ export default function SystemSettingsPage() {
             <SlidersHorizontal className="h-6 w-6" style={{ color: '#22577A' }} />
             Engine Settings
           </h1>
-          <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>
+          <p className="text-sm mt-1 font-medium" style={{ color: '#64748B' }}>
             Global AI proctoring thresholds and scoring rules.
             {lastUpdated && (
               <span className="ml-1.5">Last saved: {new Date(lastUpdated).toLocaleString()}</span>
@@ -257,7 +260,7 @@ export default function SystemSettingsPage() {
           style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
           <div className="px-6 py-4" style={{ borderBottom: '1px solid #F1F5F9' }}>
             <p className="text-sm font-semibold" style={{ color: '#0F172A' }}>{section.title}</p>
-            {section.desc && <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{section.desc}</p>}
+            {section.desc && <p className="text-xs mt-0.5 font-medium" style={{ color: '#64748B' }}>{section.desc}</p>}
           </div>
           <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-x-10 gap-y-6">
             {section.fields.map(f => (
@@ -283,7 +286,7 @@ export default function SystemSettingsPage() {
                 {changedCount} unsaved change{changedCount !== 1 ? 's' : ''}
               </span>
             ) : (
-              <span style={{ color: '#94A3B8' }}>All settings saved</span>
+              <span className="font-medium" style={{ color: '#64748B' }}>All settings saved</span>
             )}
           </p>
           <div className="flex gap-2">

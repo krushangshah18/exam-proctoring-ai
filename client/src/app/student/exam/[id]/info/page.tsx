@@ -7,47 +7,53 @@ import {
   CheckCircle2, XCircle, AlertTriangle, Info, BookOpen, MessageSquare,
   History, RefreshCw, Ban, RotateCcw
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { toast } from "sonner";
+import { toast } from 'sonner';
 import api from '@/lib/axios';
 import { parseUTC, fmtDateTimeTZ, fmtDateTimeTZFromDate } from '@/lib/fmt-date';
 
 function NetworkBadge() {
   const [online, setOnline] = useState(true);
-
   useEffect(() => {
     const check = async () => {
       if (!navigator.onLine) { setOnline(false); return; }
-      try {
-        await fetch('/favicon.ico', { method: 'HEAD', cache: 'no-store' });
-        setOnline(true);
-      } catch {
-        setOnline(false);
-      }
+      try { await fetch('/favicon.ico', { method: 'HEAD', cache: 'no-store' }); setOnline(true); }
+      catch { setOnline(false); }
     };
     check();
     const id = setInterval(check, 10000);
     window.addEventListener('online', () => setOnline(true));
     window.addEventListener('offline', () => setOnline(false));
-    return () => {
-      clearInterval(id);
-      window.removeEventListener('online', () => setOnline(true));
-      window.removeEventListener('offline', () => setOnline(false));
-    };
+    return () => { clearInterval(id); };
   }, []);
 
   return (
-    <Badge
-      variant="outline"
-      className={`gap-1.5 text-xs font-semibold ${online ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}
-    >
-      {online ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '5px',
+      padding: '4px 10px', borderRadius: '20px', fontSize: '12px', fontWeight: 700,
+      background: online ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+      color: online ? '#16A34A' : '#DC2626',
+      border: `1px solid ${online ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}`,
+    }}>
+      {online ? <Wifi style={{ width: '11px', height: '11px' }} /> : <WifiOff style={{ width: '11px', height: '11px' }} />}
       {online ? 'Connected' : 'No Network'}
-    </Badge>
+    </span>
+  );
+}
+
+function InfoCard({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ background: '#fff', border: '1.5px solid #E2E8F0', borderRadius: '12px', padding: '22px 24px' }}>
+      {children}
+    </div>
+  );
+}
+
+function SectionTitle({ icon, text }: { icon: React.ReactNode; text: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '18px' }}>
+      {icon}
+      <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#0F172A' }}>{text}</h3>
+    </div>
   );
 }
 
@@ -62,7 +68,6 @@ export default function ExamInfoPage() {
   const [appealReason, setAppealReason] = useState('');
   const [submittingAppeal, setSubmittingAppeal] = useState(false);
 
-  // Ref to schedule the exact moment the gateway opens
   const gatewayTidRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const appealPending = exam?.active_resume_request?.status === 'PENDING';
@@ -73,11 +78,8 @@ export default function ExamInfoPage() {
       const res = await api.get(`/exam/${examId}/status`);
       const data = res.data;
       setExam(data);
-
-      // Auto-refresh exactly when the gateway opens — no manual refresh needed
       if (!data.allowed_to_enter && data.time_until_open_ms > 0) {
         if (gatewayTidRef.current) clearTimeout(gatewayTidRef.current);
-        // +1s buffer to avoid race with server clock skew
         gatewayTidRef.current = setTimeout(fetchStatus, data.time_until_open_ms + 1000);
       }
     } catch (err: any) {
@@ -87,224 +89,186 @@ export default function ExamInfoPage() {
     }
   }, [examId]);
 
-  // Dynamic poll interval: fast for appeal/disconnected, slow otherwise
   const pollInterval = appealPending ? 5000 : sessionStatus === 'DISCONNECTED' ? 10000 : 60000;
 
   useEffect(() => {
     if (!examId) return;
     fetchStatus();
     const id = setInterval(fetchStatus, pollInterval);
-    return () => {
-      clearInterval(id);
-      if (gatewayTidRef.current) clearTimeout(gatewayTidRef.current);
-    };
+    return () => { clearInterval(id); if (gatewayTidRef.current) clearTimeout(gatewayTidRef.current); };
   }, [examId, fetchStatus, pollInterval]);
 
   const handleAppealSubmit = async () => {
-  const reason = `Late joining: ${appealReason}`;
-  if (!reason.trim()) return toast.error('Please enter a reason.');
-  setSubmittingAppeal(true);
-  try {
-    await api.post(`/exam/${examId}/appeal`, { reason });
-    toast.success('Appeal submitted successfully.');
-    await fetchStatus();
-  } catch (err: any) {
-    toast.error(err.response?.data?.detail || 'Failed to submit appeal');
-  } finally {
-    setSubmittingAppeal(false);
-  }
-};
+    const reason = `Late joining: ${appealReason}`;
+    if (!reason.trim()) return toast.error('Please enter a reason.');
+    setSubmittingAppeal(true);
+    try {
+      await api.post(`/exam/${examId}/appeal`, { reason });
+      toast.success('Appeal submitted successfully.');
+      await fetchStatus();
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Failed to submit appeal');
+    } finally {
+      setSubmittingAppeal(false);
+    }
+  };
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Loader2 style={{ width: '28px', height: '28px', color: '#22577A', animation: 'spin 1s linear infinite' }} />
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="text-center max-w-md">
-          <ShieldAlert className="h-12 w-12 text-rose-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Access Denied</h2>
-          <p className="text-slate-500 mb-6">{error}</p>
-          <Button onClick={() => router.push('/student/dashboard')} variant="outline">
-            Return to Dashboard
-          </Button>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+        <div style={{ textAlign: 'center', maxWidth: '380px' }}>
+          <ShieldAlert style={{ width: '48px', height: '48px', color: '#EF4444', margin: '0 auto 16px' }} />
+          <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>Access Denied</h2>
+          <p style={{ fontSize: '14px', color: '#64748B', marginBottom: '20px' }}>{error}</p>
+          <button onClick={() => router.push('/student/dashboard')} className="st-btn-ghost">Return to Dashboard</button>
         </div>
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       </div>
     );
   }
 
   const startTime = parseUTC(exam.start_window);
-  const endTime = parseUTC(exam.end_window);
   const deadlineTime = exam.hard_join_deadline ? parseUTC(exam.hard_join_deadline) : null;
   const gatewayTime = new Date(startTime.getTime() - 15 * 60000);
 
-  // ── Determine the bottom CTA to render ──────────────────────────────────
   const renderCTA = () => {
-
-    // 1. Session already active on this or another device → send back to exam
     if (sessionStatus === 'ACTIVE') {
       return (
-        <div className="flex items-center justify-between p-6 bg-indigo-50 border border-indigo-200 rounded-xl">
-          <div className="flex items-center gap-3">
-            <RefreshCw className="h-8 w-8 text-indigo-600 shrink-0" />
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px',
+          padding: '20px 24px', background: 'rgba(34,87,122,0.06)', borderRadius: '12px',
+          border: '1.5px solid rgba(34,87,122,0.2)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(34,87,122,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <RefreshCw style={{ width: '18px', height: '18px', color: '#22577A' }} />
+            </div>
             <div>
-              <h4 className="font-semibold text-indigo-900">Exam Session Active</h4>
-              <p className="text-sm text-indigo-700 mt-0.5">
-                You have an ongoing exam session. Return to it now.
-              </p>
+              <h4 style={{ fontSize: '14.5px', fontWeight: 700, color: '#22577A' }}>Exam Session Active</h4>
+              <p style={{ fontSize: '13px', color: '#38A3A5', marginTop: '2px' }}>You have an ongoing exam session. Return to it now.</p>
             </div>
           </div>
-          <Button
-            onClick={() => router.push(`/student/exam/${examId}/active`)}
-            className="shrink-0 bg-indigo-600 hover:bg-indigo-700 gap-2"
-          >
-            Return to Exam <ArrowRight className="h-4 w-4" />
-          </Button>
+          <button onClick={() => router.push(`/student/exam/${examId}/active`)} className="st-btn" style={{ flexShrink: 0 }}>
+            Return to Exam <ArrowRight style={{ width: '14px', height: '14px' }} />
+          </button>
         </div>
       );
     }
 
-    // 2. Session disconnected — full preExam flow to reconnect
     if (sessionStatus === 'DISCONNECTED') {
       return (
-        <div className="p-6 bg-amber-50 border-2 border-amber-300 rounded-xl space-y-4 animate-in fade-in duration-300">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="h-8 w-8 text-amber-600 shrink-0 mt-0.5" />
+        <div style={{ padding: '20px 24px', background: 'rgba(245,158,11,0.06)', borderRadius: '12px', border: '2px solid rgba(245,158,11,0.35)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px', marginBottom: '16px' }}>
+            <AlertTriangle style={{ width: '22px', height: '22px', color: '#D97706', flexShrink: 0, marginTop: '1px' }} />
             <div>
-              <h4 className="font-bold text-amber-900 text-lg">Your Exam Is Still In Progress!</h4>
-              <p className="text-amber-800 mt-1 text-sm leading-relaxed">
-                Don't worry — your session and all your work are saved. Your connection dropped, but
-                the exam is still running. Complete the setup checks quickly to rejoin before the
-                system auto-terminates your attempt.
+              <h4 style={{ fontSize: '15px', fontWeight: 700, color: '#92400E' }}>Your Exam Is Still In Progress!</h4>
+              <p style={{ fontSize: '13px', color: '#B45309', lineHeight: 1.55, marginTop: '4px' }}>
+                Don't worry — your session and all your work are saved. Your connection dropped, but the exam is still running. Complete the setup checks quickly to rejoin.
               </p>
             </div>
           </div>
-          <Button
-            onClick={() => router.push(`/student/exam/${examId}/device`)}
-            className="w-full h-12 text-base bg-amber-600 hover:bg-amber-700 text-white font-bold gap-2 shadow-lg"
-          >
-            <RotateCcw className="h-5 w-5" />
-            Start Reconnect Setup
-          </Button>
-          <p className="text-xs text-amber-700 text-center">
-            Checking for status updates every 10 seconds…
-          </p>
+          <button onClick={() => router.push(`/student/exam/${examId}/device`)} className="st-btn st-btn-warning" style={{ width: '100%', padding: '12px' }}>
+            <RotateCcw style={{ width: '16px', height: '16px' }} /> Start Reconnect Setup
+          </button>
+          <p style={{ fontSize: '11.5px', color: '#D97706', textAlign: 'center', marginTop: '10px' }}>Checking for status updates every 10 seconds…</p>
         </div>
       );
     }
 
-    // 3. Session terminated — redirect to /terminated page for appeal flow
     if (sessionStatus === 'TERMINATED') {
       return (
-        <div className="p-6 bg-rose-50 border border-rose-200 rounded-xl space-y-4">
-          <div className="flex items-start gap-3">
-            <Ban className="h-6 w-6 text-rose-600 shrink-0 mt-0.5" />
+        <div style={{ padding: '20px 24px', background: 'rgba(239,68,68,0.05)', borderRadius: '12px', border: '1.5px solid rgba(239,68,68,0.2)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '16px' }}>
+            <Ban style={{ width: '20px', height: '20px', color: '#EF4444', flexShrink: 0, marginTop: '1px' }} />
             <div>
-              <h4 className="font-semibold text-rose-900 text-lg">Session Terminated</h4>
-              <p className="text-rose-700 text-sm mt-1 leading-relaxed">
-                Your exam session has been terminated. If you believe this was an error, you can
-                request access from the terminated session page.
+              <h4 style={{ fontSize: '15px', fontWeight: 700, color: '#991B1B' }}>Session Terminated</h4>
+              <p style={{ fontSize: '13px', color: '#DC2626', lineHeight: 1.55, marginTop: '3px' }}>
+                Your exam session has been terminated. If you believe this was an error, you can request access from the terminated session page.
               </p>
             </div>
           </div>
-          <div className="flex gap-3">
-            <Button
-              onClick={() => router.push(`/student/exam/${examId}/terminated`)}
-              className="flex-1 bg-rose-600 hover:bg-rose-700 text-white gap-2"
-            >
-              <MessageSquare className="h-4 w-4" />
-              Want to Request Access?
-            </Button>
-            <Button
-              onClick={() => router.push('/student/dashboard')}
-              variant="outline"
-              className="flex-1 border-slate-300 text-slate-700"
-            >
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button onClick={() => router.push(`/student/exam/${examId}/terminated`)} className="st-btn st-btn-danger" style={{ flex: 1 }}>
+              <MessageSquare style={{ width: '14px', height: '14px' }} /> Request Access
+            </button>
+            <button onClick={() => router.push('/student/dashboard')} className="st-btn-ghost" style={{ flex: 1 }}>
               Back to Dashboard
-            </Button>
+            </button>
           </div>
         </div>
       );
     }
 
-    // 4. Exam already submitted / ended
     if (sessionStatus === 'ENDED') {
       return (
-        <div className="flex items-center justify-between p-6 bg-emerald-50 border border-emerald-200 rounded-xl">
-          <div className="flex items-center gap-3">
-            <CheckCircle2 className="h-8 w-8 text-emerald-600 shrink-0" />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', padding: '20px 24px', background: 'rgba(34,197,94,0.05)', borderRadius: '12px', border: '1.5px solid rgba(34,197,94,0.2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <CheckCircle2 style={{ width: '22px', height: '22px', color: '#22C55E', flexShrink: 0 }} />
             <div>
-              <h4 className="font-semibold text-emerald-900">Exam Already Submitted</h4>
-              <p className="text-sm text-emerald-700 mt-0.5">
-                You have already completed and submitted this exam. Your attempt has been recorded.
-              </p>
+              <h4 style={{ fontSize: '14.5px', fontWeight: 700, color: '#15803D' }}>Exam Already Submitted</h4>
+              <p style={{ fontSize: '13px', color: '#16A34A', marginTop: '2px' }}>You have already completed and submitted this exam.</p>
             </div>
           </div>
-          <Button
-            variant="outline"
-            onClick={() => router.push('/student/history')}
-            className="shrink-0 gap-2 border-emerald-300 text-emerald-800 hover:bg-emerald-100"
-          >
-            <History className="h-4 w-4" /> View History
-          </Button>
+          <button onClick={() => router.push('/student/history')} className="st-btn-ghost" style={{ flexShrink: 0 }}>
+            <History style={{ width: '14px', height: '14px' }} /> View History
+          </button>
         </div>
       );
     }
 
-    // 5. Hard deadline passed (late join flow)
     if (exam.is_late && exam.active_resume_request?.status !== 'APPROVED') {
       return (
-        <div className="p-6 bg-rose-50 border border-rose-200 rounded-xl space-y-4">
-          <div className="flex items-center gap-3 mb-2">
-            <ShieldAlert className="h-6 w-6 text-rose-600" />
-            <h4 className="font-semibold text-rose-900 text-lg">Hard Deadline Passed</h4>
+        <div style={{ padding: '20px 24px', background: 'rgba(239,68,68,0.05)', borderRadius: '12px', border: '1.5px solid rgba(239,68,68,0.2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+            <ShieldAlert style={{ width: '18px', height: '18px', color: '#EF4444' }} />
+            <h4 style={{ fontSize: '15px', fontWeight: 700, color: '#991B1B' }}>Hard Deadline Passed</h4>
           </div>
 
           {exam.late_join_policy === 'DENY' && (
-            <p className="text-rose-700">This exam strictly denies late joins. You may no longer enter.</p>
+            <p style={{ fontSize: '13.5px', color: '#DC2626' }}>This exam strictly denies late joins. You may no longer enter.</p>
           )}
 
           {exam.late_join_policy === 'REVIEW' && !exam.active_resume_request && (
-            <div className="space-y-4">
-              <p className="text-rose-700">You missed the join window. Submit an appeal to request late entry.</p>
-              <Textarea
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <p style={{ fontSize: '13.5px', color: '#DC2626' }}>You missed the join window. Submit an appeal to request late entry.</p>
+              <textarea
                 placeholder="Explain clearly why you are late..."
                 value={appealReason}
-                onChange={(e) => setAppealReason(e.target.value)}
-                className="bg-white"
+                onChange={e => setAppealReason(e.target.value)}
+                className="st-textarea"
               />
-              <Button
-                onClick={handleAppealSubmit}
-                disabled={submittingAppeal}
-                className="bg-rose-600 hover:bg-rose-700 text-white"
-              >
-                {submittingAppeal && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              <button onClick={handleAppealSubmit} disabled={submittingAppeal} className="st-btn st-btn-danger">
+                {submittingAppeal && <Loader2 style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />}
                 Submit Appeal
-              </Button>
+              </button>
             </div>
           )}
 
           {exam.late_join_policy === 'REVIEW' && exam.active_resume_request?.status === 'PENDING' && (
-            <div className="p-4 bg-white/50 rounded-lg space-y-2">
-              <p className="text-rose-800 font-medium flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
+            <div style={{ padding: '14px 16px', background: 'rgba(255,255,255,0.5)', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.15)' }}>
+              <p style={{ fontSize: '13.5px', color: '#991B1B', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Loader2 style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />
                 Your appeal is under review — checking every 5 seconds
               </p>
-              <p className="text-sm text-rose-600 italic">"{exam.active_resume_request.reason}"</p>
-              <p className="text-xs text-slate-500">Please keep this page open. Do not close the browser.</p>
+              <p style={{ fontSize: '13px', color: '#DC2626', fontStyle: 'italic', marginTop: '6px' }}>"{exam.active_resume_request.reason}"</p>
+              <p style={{ fontSize: '11.5px', color: '#94A3B8', marginTop: '6px' }}>Please keep this page open. Do not close the browser.</p>
             </div>
           )}
 
           {exam.late_join_policy === 'REVIEW' && exam.active_resume_request?.status === 'DENIED' && (
-            <div className="p-4 bg-white/50 rounded-lg">
-              <p className="text-rose-800 font-bold">Your appeal was denied.</p>
+            <div style={{ padding: '14px 16px', background: 'rgba(255,255,255,0.5)', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.15)' }}>
+              <p style={{ fontSize: '13.5px', fontWeight: 700, color: '#991B1B' }}>Your appeal was denied.</p>
               {exam.active_resume_request.review_note && (
-                <p className="text-sm text-rose-700 mt-1">Note: {exam.active_resume_request.review_note}</p>
+                <p style={{ fontSize: '13px', color: '#DC2626', marginTop: '4px' }}>Note: {exam.active_resume_request.review_note}</p>
               )}
             </div>
           )}
@@ -312,199 +276,188 @@ export default function ExamInfoPage() {
       );
     }
 
-    // 6. Gateway locked — auto-timer is running in background; shows countdown
     if (!exam.allowed_to_enter) {
       const msLeft = exam.time_until_open_ms ?? 0;
       const minsLeft = Math.ceil(msLeft / 60000);
       return (
-        <Alert className="bg-amber-50 border-amber-200">
-          <Clock className="h-5 w-5 text-amber-600" />
-          <AlertTitle className="text-amber-800 font-semibold">Gateway Locked</AlertTitle>
-          <AlertDescription className="text-amber-700 mt-2">
-            The setup gateway opens 15 minutes before the exam starts.
-            You can proceed from <strong>{fmtDateTimeTZFromDate(gatewayTime)}</strong>
-            {minsLeft > 1 && ` (in about ${minsLeft} minute${minsLeft !== 1 ? 's' : ''})`}.
-            This page will automatically unlock — no refresh needed.
-          </AlertDescription>
-        </Alert>
+        <div style={{ padding: '18px 20px', background: 'rgba(245,158,11,0.06)', borderRadius: '12px', border: '1.5px solid rgba(245,158,11,0.25)', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+          <Clock style={{ width: '18px', height: '18px', color: '#D97706', flexShrink: 0, marginTop: '2px' }} />
+          <div>
+            <p style={{ fontSize: '14px', fontWeight: 700, color: '#92400E', marginBottom: '4px' }}>Gateway Locked</p>
+            <p style={{ fontSize: '13px', color: '#B45309', lineHeight: 1.55 }}>
+              The setup gateway opens 15 minutes before the exam starts.
+              You can proceed from <strong>{fmtDateTimeTZFromDate(gatewayTime)}</strong>
+              {minsLeft > 1 && ` (in about ${minsLeft} minute${minsLeft !== 1 ? 's' : ''})`}.
+              This page will automatically unlock — no refresh needed.
+            </p>
+          </div>
+        </div>
       );
     }
 
-    // 7. Gateway open — proceed through setup checks
     return (
-      <div className="flex items-center justify-between p-6 bg-indigo-50 border border-indigo-100 rounded-xl">
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px',
+        padding: '20px 24px', background: 'rgba(34,87,122,0.05)', borderRadius: '12px',
+        border: '1.5px solid rgba(34,87,122,0.2)',
+      }}>
         <div>
-          <h4 className="font-semibold text-indigo-900">Setup Gateway Open</h4>
-          <p className="text-sm text-indigo-700">Proceed with camera, microphone, and environment checks.</p>
+          <h4 style={{ fontSize: '14.5px', fontWeight: 700, color: '#22577A' }}>Setup Gateway Open</h4>
+          <p style={{ fontSize: '13px', color: '#38A3A5', marginTop: '2px' }}>Proceed with camera, microphone, and environment checks.</p>
         </div>
-        <Button
-          onClick={() => router.push(`/student/exam/${examId}/device`)}
-          className="bg-indigo-600 hover:bg-indigo-700 shadow-md gap-2"
-        >
-          Start Setup <ArrowRight className="h-4 w-4" />
-        </Button>
+        <button onClick={() => router.push(`/student/exam/${examId}/device`)} className="st-btn" style={{ flexShrink: 0 }}>
+          Start Setup <ArrowRight style={{ width: '14px', height: '14px' }} />
+        </button>
       </div>
     );
   };
 
   return (
-    <div className="flex-1 flex overflow-hidden">
-      <div className="flex-1 overflow-y-auto p-6 md:p-12">
-        <div className="max-w-3xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '24px', background: '#F8FAFC' }}>
+        <div style={{ maxWidth: '720px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '18px' }} className="st-fadein">
 
           {/* Header */}
-          <div className="flex items-start justify-between gap-4">
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px' }}>
             <div>
-              <h1 className="text-3xl font-bold text-slate-900 mb-1">{exam.title}</h1>
-              <p className="text-slate-500">Review all information carefully before proceeding.</p>
+              <h1 style={{ fontSize: '22px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.02em', marginBottom: '4px' }}>{exam.title}</h1>
+              <p style={{ fontSize: '13.5px', color: '#94A3B8' }}>Review all information carefully before proceeding.</p>
             </div>
             <NetworkBadge />
           </div>
 
           {/* Exam Details */}
-          <Card className="p-6 bg-white shadow-sm border-slate-200">
-            <h3 className="font-semibold text-slate-900 mb-4 text-lg flex items-center gap-2">
-              <Info className="h-5 w-5 text-indigo-500" /> Exam Details
-            </h3>
-            <div className="grid grid-cols-2 gap-x-8 gap-y-5">
-              <div>
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Duration</span>
-                <p className="font-semibold text-slate-900 mt-1">{exam.duration_minutes} minutes</p>
-              </div>
-              <div>
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Mode</span>
-                <p className="font-semibold text-slate-900 mt-1">{exam.exam_mode}</p>
-              </div>
-              <div>
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Starts At</span>
-                <p className="font-semibold text-slate-900 mt-1">{fmtDateTimeTZ(exam.start_window)}</p>
-              </div>
-              <div>
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Ends At</span>
-                <p className="font-semibold text-slate-900 mt-1">{fmtDateTimeTZ(exam.end_window)}</p>
-              </div>
-              {deadlineTime && (
-                <div>
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Join Deadline</span>
-                  <p className="font-semibold text-rose-600 mt-1">{fmtDateTimeTZ(exam.hard_join_deadline)}</p>
+          <InfoCard>
+            <SectionTitle icon={<Info style={{ width: '16px', height: '16px', color: '#22577A' }} />} text="Exam Details" />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '18px 32px' }}>
+              {[
+                { label: 'Duration', value: `${exam.duration_minutes} minutes` },
+                { label: 'Mode', value: exam.exam_mode },
+                { label: 'Starts At', value: fmtDateTimeTZ(exam.start_window) },
+                { label: 'Ends At', value: fmtDateTimeTZ(exam.end_window) },
+                ...(deadlineTime ? [{ label: 'Join Deadline', value: fmtDateTimeTZ(exam.hard_join_deadline), color: '#DC2626' }] : []),
+                ...(exam.late_join_policy ? [{ label: 'Late Policy', value: exam.late_join_policy }] : []),
+              ].map(({ label, value, color }: any) => (
+                <div key={label}>
+                  <p style={{ fontSize: '10.5px', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '4px' }}>{label}</p>
+                  <p style={{ fontSize: '14px', fontWeight: 700, color: color || '#0F172A' }}>{value}</p>
                 </div>
-              )}
-              {exam.late_join_policy && (
-                <div>
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Late Policy</span>
-                  <p className="font-semibold text-slate-900 mt-1">{exam.late_join_policy}</p>
-                </div>
-              )}
+              ))}
             </div>
-          </Card>
+          </InfoCard>
 
           {/* Proctoring Rules */}
           {exam.config && Object.values(exam.config).some(Boolean) && (
-            <div className="space-y-3">
-              <h3 className="font-semibold text-slate-900 text-lg flex items-center gap-2">
-                <ShieldAlert className="h-5 w-5 text-amber-500" /> Proctoring Active
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <InfoCard>
+              <SectionTitle icon={<ShieldAlert style={{ width: '16px', height: '16px', color: '#F59E0B' }} />} text="Proctoring Active" />
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '10px' }}>
                 {exam.config.audio_analysis && (
-                  <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                    <span className="text-sm font-medium text-slate-700">Microphone monitoring active</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#F8FAFC', padding: '11px 14px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+                    <CheckCircle2 style={{ width: '15px', height: '15px', color: '#22C55E', flexShrink: 0 }} />
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>Microphone monitoring active</span>
                   </div>
                 )}
                 {exam.config.eye_gaze && (
-                  <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                    <span className="text-sm font-medium text-slate-700">Webcam feed monitored</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#F8FAFC', padding: '11px 14px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+                    <CheckCircle2 style={{ width: '15px', height: '15px', color: '#22C55E', flexShrink: 0 }} />
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>Webcam feed monitored</span>
                   </div>
                 )}
                 {exam.config.tab_switching && (
-                  <div className="flex items-center gap-3 bg-amber-50 p-3 rounded-lg border border-amber-200">
-                    <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-                    <span className="text-sm font-medium text-amber-800">Tab switching is monitored</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(245,158,11,0.06)', padding: '11px 14px', borderRadius: '8px', border: '1px solid rgba(245,158,11,0.2)' }}>
+                    <AlertTriangle style={{ width: '15px', height: '15px', color: '#F59E0B', flexShrink: 0 }} />
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#B45309' }}>Tab switching is monitored</span>
                   </div>
                 )}
                 {exam.config.multiple_person && (
-                  <div className="flex items-center gap-3 bg-amber-50 p-3 rounded-lg border border-amber-200">
-                    <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-                    <span className="text-sm font-medium text-amber-800">Multiple persons not allowed</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(245,158,11,0.06)', padding: '11px 14px', borderRadius: '8px', border: '1px solid rgba(245,158,11,0.2)' }}>
+                    <AlertTriangle style={{ width: '15px', height: '15px', color: '#F59E0B', flexShrink: 0 }} />
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#B45309' }}>Multiple persons not allowed</span>
                   </div>
                 )}
               </div>
-            </div>
+            </InfoCard>
           )}
 
-          {/* DOS and DON'TS */}
-          <Card className="p-6 bg-white border-slate-200">
-            <h3 className="font-semibold text-slate-900 text-lg flex items-center gap-2 mb-4">
-              <BookOpen className="h-5 w-5 text-indigo-500" /> Rules & Guidelines
-            </h3>
-            <div className="grid sm:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <p className="text-sm font-bold text-emerald-700 uppercase tracking-wider">DO</p>
-                {[
-                  "Ensure your face is clearly visible throughout the exam",
-                  "Sit in a well-lit, quiet room with a plain background",
-                  "Keep your ID document nearby if required",
-                  "Stay within the exam window — do not minimize or switch tabs",
-                  "Use a stable internet connection",
-                  "Test your camera and microphone beforehand",
-                ].map((item) => (
-                  <div key={item} className="flex items-start gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
-                    <p className="text-sm text-slate-700">{item}</p>
-                  </div>
-                ))}
+          {/* Rules */}
+          <InfoCard>
+            <SectionTitle icon={<BookOpen style={{ width: '16px', height: '16px', color: '#22577A' }} />} text="Rules & Guidelines" />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <div>
+                <p style={{ fontSize: '11px', fontWeight: 700, color: '#16A34A', textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: '10px' }}>DO</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {[
+                    "Ensure your face is clearly visible throughout",
+                    "Sit in a well-lit, quiet room with a plain background",
+                    "Keep your ID document nearby if required",
+                    "Stay within the exam window — do not minimize or switch tabs",
+                    "Use a stable internet connection",
+                    "Test your camera and microphone beforehand",
+                  ].map(item => (
+                    <div key={item} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                      <CheckCircle2 style={{ width: '13px', height: '13px', color: '#22C55E', flexShrink: 0, marginTop: '2px' }} />
+                      <p style={{ fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>{item}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="space-y-2">
-                <p className="text-sm font-bold text-rose-700 uppercase tracking-wider">DON'T</p>
-                {[
-                  "Do not use a second monitor or device",
-                  "Do not allow other people in the room",
-                  "Do not cover your face with hands, headwear, or objects",
-                  "Do not use headphones or earphones",
-                  "Do not open other applications or browser tabs",
-                  "Do not speak aloud or read questions out loud",
-                ].map((item) => (
-                  <div key={item} className="flex items-start gap-2">
-                    <XCircle className="h-4 w-4 text-rose-500 mt-0.5 shrink-0" />
-                    <p className="text-sm text-slate-700">{item}</p>
-                  </div>
-                ))}
+              <div>
+                <p style={{ fontSize: '11px', fontWeight: 700, color: '#DC2626', textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: '10px' }}>DON'T</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {[
+                    "Do not use a second monitor or device",
+                    "Do not allow other people in the room",
+                    "Do not cover your face with hands or headwear",
+                    "Do not use headphones or earphones",
+                    "Do not open other applications or browser tabs",
+                    "Do not speak aloud or read questions out loud",
+                  ].map(item => (
+                    <div key={item} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                      <XCircle style={{ width: '13px', height: '13px', color: '#EF4444', flexShrink: 0, marginTop: '2px' }} />
+                      <p style={{ fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>{item}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
-          </Card>
+          </InfoCard>
 
-          {/* Room Setup Reminder */}
-          <Card className="p-5 bg-indigo-50 border-indigo-100">
-            <h4 className="font-semibold text-indigo-900 mb-3 flex items-center gap-2">
-              <Info className="h-4 w-4" /> Room & Environment Checklist
+          {/* Room Checklist */}
+          <div style={{ padding: '18px 20px', background: 'rgba(34,87,122,0.04)', borderRadius: '12px', border: '1.5px solid rgba(34,87,122,0.12)' }}>
+            <h4 style={{ fontSize: '13.5px', fontWeight: 700, color: '#22577A', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '7px' }}>
+              <Info style={{ width: '14px', height: '14px' }} /> Room & Environment Checklist
             </h4>
-            <ul className="space-y-1.5 text-sm text-indigo-800">
-              <li>• Position yourself facing the light source (window/lamp in front, not behind)</li>
-              <li>• Ensure the background is a plain wall or uncluttered surface</li>
-              <li>• Minimize background noise — close doors, silence phones</li>
-              <li>• Do not have books, notes, or papers visible on your desk</li>
+            <ul style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+              {[
+                "Position yourself facing the light source (window/lamp in front, not behind)",
+                "Ensure the background is a plain wall or uncluttered surface",
+                "Minimize background noise — close doors, silence phones",
+                "Do not have books, notes, or papers visible on your desk",
+              ].map(item => (
+                <li key={item} style={{ fontSize: '13px', color: '#22577A', display: 'flex', gap: '7px' }}>
+                  <span style={{ color: '#38A3A5' }}>•</span> {item}
+                </li>
+              ))}
             </ul>
-          </Card>
+          </div>
 
-          {/* Appeals Info */}
-          <Card className="p-5 bg-slate-50 border-slate-200">
-            <h4 className="font-semibold text-slate-800 mb-2 flex items-center gap-2">
-              <MessageSquare className="h-4 w-4 text-slate-600" /> About Appeals
+          {/* Appeals info */}
+          <div style={{ padding: '16px 20px', background: '#F8FAFC', borderRadius: '12px', border: '1.5px solid #E2E8F0' }}>
+            <h4 style={{ fontSize: '13.5px', fontWeight: 700, color: '#475569', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '7px' }}>
+              <MessageSquare style={{ width: '14px', height: '14px' }} /> About Appeals
             </h4>
-            <p className="text-sm text-slate-600 leading-relaxed">
-              If your session is unexpectedly terminated or you believe a violation was flagged in error,
-              you may submit an appeal directly from this page or the exam page. An admin will review it
-              and can approve your re-entry. <strong>Do not close the browser</strong> while your appeal
-              is pending. If approved, extra time may be granted to compensate for the interruption.
+            <p style={{ fontSize: '13px', color: '#64748B', lineHeight: 1.6 }}>
+              If your session is unexpectedly terminated or you believe a system flag was raised in error, you may submit an appeal. An admin will review it and can approve your re-entry.{' '}
+              <strong style={{ color: '#475569' }}>Do not close the browser</strong> while your appeal is pending.
             </p>
-          </Card>
+          </div>
 
-          {/* ── Bottom CTA — state-driven ── */}
+          {/* CTA */}
           {renderCTA()}
 
         </div>
       </div>
-    </div>
+    </>
   );
 }

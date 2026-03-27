@@ -105,7 +105,7 @@ export default function SystemDashboard() {
           <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>
             System Overview
           </h1>
-          <p className="text-sm mt-1" style={{ color: '#94A3B8' }}>
+          <p className="text-sm font-medium mt-1" style={{ color: '#64748B' }}>
             Platform health and live activity
           </p>
         </div>
@@ -133,14 +133,14 @@ export default function SystemDashboard() {
                   style={{ background: iconBg }}>
                   <Icon className="h-4 w-4" style={{ color: iconColor }} />
                 </div>
-                {href && <ArrowUpRight className="h-3.5 w-3.5" style={{ color: '#CBD5E1' }} />}
+                {href && <ArrowUpRight className="h-3.5 w-3.5" style={{ color: '#64748B' }} />}
               </div>
               <p className="text-2xl font-bold tabular-nums" style={{ color: '#0F172A' }}>
                 {value === null
-                  ? <span className="text-xl" style={{ color: '#CBD5E1' }}>—</span>
+                  ? <span className="text-xl" style={{ color: '#94A3B8' }}>—</span>
                   : value}
               </p>
-              <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{label}</p>
+              <p className="text-xs font-semibold mt-0.5" style={{ color: '#64748B' }}>{label}</p>
             </Panel>
           );
           return href ? <Link key={label} href={href}>{card}</Link> : <div key={label}>{card}</div>;
@@ -183,7 +183,7 @@ export default function SystemDashboard() {
       {/* ── Divider ─────────────────────────────────────────────── */}
       <div className="flex items-center gap-3">
         <div className="flex-1 h-px" style={{ background: '#E2E8F0' }} />
-        <p className="text-[10px] font-semibold tracking-widest uppercase" style={{ color: '#CBD5E1' }}>Quick Access</p>
+        <p className="text-[10px] font-semibold tracking-widest uppercase" style={{ color: '#64748B' }}>Quick Access</p>
         <div className="flex-1 h-px" style={{ background: '#E2E8F0' }} />
       </div>
 
@@ -205,8 +205,8 @@ export default function SystemDashboard() {
                 <ArrowUpRight className="h-4 w-4 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: accent }} />
               </div>
               <div className="flex-1">
-                <p className="text-sm font-semibold mb-1" style={{ color: '#0F172A' }}>{title}</p>
-                <p className="text-xs leading-relaxed" style={{ color: '#94A3B8' }}>{desc}</p>
+                <p className="text-sm font-bold mb-1" style={{ color: '#0F172A' }}>{title}</p>
+                <p className="text-xs font-medium leading-relaxed" style={{ color: '#475569' }}>{desc}</p>
               </div>
             </div>
           </Link>

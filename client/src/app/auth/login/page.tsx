@@ -9,91 +9,56 @@ import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import api from '@/lib/axios';
-
-import { Button } from '@/components/ui/button';
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { AuthShell, AuthField, PasswordInput } from '@/components/auth/AuthShell';
 
 const formSchema = z.object({
-  email: z.string().email({
-    message: 'Please enter a valid email address.',
-  }),
-  password: z.string().min(1, {
-    message: 'Password is required.',
-  }),
+  email: z.string().email({ message: 'Please enter a valid email address.' }),
+  password: z.string().min(1, { message: 'Password is required.' }),
 });
+
+type FormValues = z.infer<typeof formSchema>;
 
 export default function LoginPage() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
 
-  const form = useForm<z.infer<typeof formSchema>>({
+  const { register, handleSubmit, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: {
-      email: '',
-      password: '',
-    },
+    defaultValues: { email: '', password: '' },
   });
 
-  async function onSubmit(values: z.infer<typeof formSchema>) {
+  async function onSubmit(values: FormValues) {
     setIsLoading(true);
     try {
-      // 1. Login to get tokens
       const response = await api.post('/auth/login', values);
 
       if (response.data.access_token) {
-        // Store tokens
         localStorage.setItem('access_token', response.data.access_token);
         localStorage.setItem('refresh_token', response.data.refresh_token);
-        
         toast.success('Login successful');
 
-        // 2. Fetch User Role
         const meResponse = await api.get('/auth/me');
-        const { role, must_change_password } = meResponse.data; // "STUDENT", "ADMIN", "SYSADMIN"
-        
-        // 3. Redirect based on role and setup requirements
-        if (must_change_password) {
-           router.push('/auth/setup-password');
-        } else if (role === 'SYSADMIN') {
-           router.push('/sys/dashboard');
-        } else if (role === 'ADMIN') {
-           router.push('/admin/dashboard');
-        } else {
-           router.push('/student/dashboard');
-        }
+        const { role, must_change_password } = meResponse.data;
 
-      } else if (response.data.message && response.data.message.includes('OTP')) {
-        // OTP Required for New Device validation
+        if (must_change_password) {
+          router.push('/auth/setup-password');
+        } else if (role === 'SYSADMIN') {
+          router.push('/sys/dashboard');
+        } else if (role === 'ADMIN') {
+          router.push('/admin/dashboard');
+        } else {
+          router.push('/student/dashboard');
+        }
+      } else if (response.data.message?.includes('OTP')) {
         toast.info('New device detected. OTP sent to your email.');
         router.push(`/auth/verify-otp?type=device&email=${values.email}`);
       }
     } catch (error: any) {
-      console.error(error);
       const status = error.response?.status;
       const msg = error.response?.data?.detail || 'Authentication failed';
-      
       if (status === 403 && msg.includes('locked')) {
-        toast.error("Account is locked due to too many failed attempts.");
-        // Optional: Redirect to unlock page immediately or let them click a link
-        setTimeout(() => {
-           router.push('/auth/unlock-account');
-        }, 2000);
+        toast.error('Account is locked due to too many failed attempts.');
+        setTimeout(() => router.push('/auth/unlock-account'), 2000);
       } else {
         toast.error(msg);
       }
@@ -103,71 +68,58 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-gray-50 dark:bg-gray-900">
-      <Card className="w-[400px]">
-        <CardHeader>
-          <CardTitle className="text-2xl font-bold text-center">Login</CardTitle>
-          <CardDescription className="text-center">
-            Enter your credentials to access the proctoring system
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-              <FormField
-                control={form.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Email</FormLabel>
-                    <FormControl>
-                      <Input placeholder="student@example.com" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="password"
-                render={({ field }) => (
-                  <FormItem>
-                    <div className="flex items-center justify-between">
-                      <FormLabel>Password</FormLabel>
-                      <a 
-                        href="/auth/forgot-password" 
-                        className="text-sm font-medium text-blue-600 hover:text-blue-500"
-                      >
-                        Forgot password?
-                      </a>
-                    </div>
-                    <FormControl>
-                      <Input type="password" placeholder="••••••••" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Sign In
-              </Button>
-            </form>
-          </Form>
-        </CardContent>
-        <CardFooter className="flex justify-center">
-          <p className="text-sm text-gray-500">
-            Don't have an account?{' '}
-            <a href="/auth/register" className="font-medium text-blue-600 hover:text-blue-500">
-              Register
-            </a>
-            <span className="mx-2 text-gray-400">|</span>
-            <a href="/auth/teacher-apply" className="font-medium text-blue-600 hover:text-blue-500">
-              Apply as Teacher
-            </a>
-          </p>
-        </CardFooter>
-      </Card>
-    </div>
+    <AuthShell
+      title="Welcome back"
+      subtitle="Sign in to your ProctorAI account to continue."
+      leftHeading={'Monitor Smarter,\nNot Harder.'}
+      leftBody="ProctorAI's AI engine watches, learns, and alerts — so exam integrity is never a question."
+      features={[
+        'Real-time face & gaze tracking',
+        'Automatic tab-switch detection',
+        'Instant risk scoring & alerts',
+        'Proof capture & detailed reports',
+      ]}
+      footer={
+        <>
+          Don&apos;t have an account?{' '}
+          <a href="/auth/register" className="auth-link">Register</a>
+          <span style={{ margin: '0 8px', color: '#E2E8F0' }}>|</span>
+          <a href="/auth/teacher-apply" className="auth-link">Apply as Teacher</a>
+        </>
+      }
+    >
+      <form onSubmit={handleSubmit(onSubmit)}>
+        <AuthField label="Email address" error={errors.email?.message} required>
+          <input
+            type="email"
+            placeholder="you@example.com"
+            className={`auth-input${errors.email ? ' has-error' : ''}`}
+            {...register('email')}
+          />
+        </AuthField>
+
+        <AuthField
+          label={
+            <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              Password
+              <a href="/auth/forgot-password" className="auth-link" style={{ fontSize: '12px', fontWeight: 500 }}>
+                Forgot password?
+              </a>
+            </span> as any
+          }
+          error={errors.password?.message}
+          required
+        >
+          <PasswordInput hasError={!!errors.password} {...register('password')} />
+        </AuthField>
+
+        <div style={{ marginTop: '8px' }}>
+          <button type="submit" className="auth-btn" disabled={isLoading}>
+            {isLoading && <Loader2 style={{ width: '15px', height: '15px', animation: 'spin 1s linear infinite' }} />}
+            Sign In
+          </button>
+        </div>
+      </form>
+    </AuthShell>
   );
 }

@@ -3,14 +3,58 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { Loader2, ArrowRight, Monitor, LogOut, CheckCircle2, ShieldAlert, AlertTriangle, Cpu } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
 import { parseUTC } from '@/lib/fmt-date';
 
 type CheckStatus = 'pending' | 'checking' | 'pass' | 'fail';
+
+function StatusIndicator({ status }: { status: CheckStatus }) {
+  if (status === 'checking') return <Loader2 style={{ width: '22px', height: '22px', color: '#22577A', animation: 'spin 1s linear infinite' }} />;
+  if (status === 'pass') return <CheckCircle2 style={{ width: '22px', height: '22px', color: '#22C55E' }} />;
+  if (status === 'fail') return <ShieldAlert style={{ width: '22px', height: '22px', color: '#EF4444' }} />;
+  return <div style={{ width: '22px', height: '22px', borderRadius: '50%', border: '2px solid #E2E8F0' }} />;
+}
+
+function CheckCard({ icon, title, subtitle, status, error }: {
+  icon: React.ReactNode; title: string; subtitle: string; status: CheckStatus; error?: string;
+}) {
+  return (
+    <div style={{
+      background: '#fff',
+      border: `1.5px solid ${status === 'fail' ? 'rgba(239,68,68,0.25)' : status === 'pass' ? 'rgba(34,197,94,0.2)' : '#E2E8F0'}`,
+      borderRadius: '12px', overflow: 'hidden',
+      transition: 'border-color 200ms',
+    }}>
+      <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{
+            width: '40px', height: '40px', borderRadius: '10px',
+            background: 'rgba(34,87,122,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            {icon}
+          </div>
+          <div>
+            <h3 style={{ fontSize: '14.5px', fontWeight: 700, color: '#0F172A' }}>{title}</h3>
+            <p style={{ fontSize: '12.5px', color: '#94A3B8', marginTop: '2px' }}>{subtitle}</p>
+          </div>
+        </div>
+        <StatusIndicator status={status} />
+      </div>
+
+      {status === 'fail' && error && (
+        <div style={{
+          margin: '0 16px 14px', padding: '10px 14px', borderRadius: '8px',
+          background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.15)',
+          display: 'flex', alignItems: 'flex-start', gap: '8px',
+        }}>
+          <AlertTriangle style={{ width: '14px', height: '14px', color: '#EF4444', flexShrink: 0, marginTop: '2px' }} />
+          <p style={{ fontSize: '13px', color: '#DC2626', lineHeight: 1.5 }}>{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function SystemCheckPage() {
   const router = useRouter();
@@ -21,13 +65,11 @@ export default function SystemCheckPage() {
 
   const [exam, setExam] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-
   const [fsStatus, setFsStatus] = useState<CheckStatus>('pending');
   const [sessionStatus, setSessionStatus] = useState<CheckStatus>('pending');
   const [sessionError, setSessionError] = useState<string>('');
   const [engineStatus, setEngineStatus] = useState<CheckStatus>('pending');
   const [engineError, setEngineError] = useState<string>('');
-
   const [isExamReady, setIsExamReady] = useState(false);
   const [countdown, setCountdown] = useState<number>(0);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -38,37 +80,22 @@ export default function SystemCheckPage() {
       try {
         const res = await api.get(`/exam/${examId}/status`);
         const data = res.data;
-
-        // Block terminated sessions — send to the dedicated terminated page
-        if (data.session_status === 'TERMINATED') {
-          router.replace(`/student/exam/${examId}/terminated`);
-          return;
-        }
-
+        if (data.session_status === 'TERMINATED') { router.replace(`/student/exam/${examId}/terminated`); return; }
         setExam(data);
         setIsExamReady(data.allowed_to_start);
-
-        // If exam hasn't started yet, start a countdown to the actual start_window
         if (!data.allowed_to_start && data.start_window) {
           const startMs = parseUTC(data.start_window).getTime();
           const msUntilStart = Math.max(0, startMs - Date.now());
-
           if (msUntilStart > 0) {
             countdownEndRef.current = startMs;
             setCountdown(Math.ceil(msUntilStart / 1000));
-
             countdownIntervalRef.current = setInterval(() => {
               const remaining = Math.max(0, Math.ceil((countdownEndRef.current - Date.now()) / 1000));
               setCountdown(remaining);
-              if (remaining <= 0) {
-                clearInterval(countdownIntervalRef.current!);
-                countdownIntervalRef.current = null;
-                setIsExamReady(true);
-              }
+              if (remaining <= 0) { clearInterval(countdownIntervalRef.current!); setIsExamReady(true); }
             }, 1000);
           }
         }
-
         setLoading(false);
         runSystemChecks();
       } catch {
@@ -77,25 +104,18 @@ export default function SystemCheckPage() {
       }
     };
     initSystem();
-    return () => {
-      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-    };
+    return () => { if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current); };
   }, [examId]);
 
   const runSystemChecks = async () => {
-    // 1. Cross-device lock
-    setSessionStatus('checking');
-    setSessionError('');
+    setSessionStatus('checking'); setSessionError('');
     try {
       await api.post(`/exam/${examId}/lock-session`);
       setSessionStatus('pass');
     } catch (err: any) {
       setSessionStatus('fail');
       if (err.response?.status === 409) {
-        setSessionError(
-          err.response.data?.detail ||
-            'This exam is already active on another device. Please use that device.'
-        );
+        setSessionError(err.response.data?.detail || 'This exam is already active on another device. Please use that device.');
         toast.error('Another device is already active for this exam.');
       } else {
         setSessionError('Failed to lock concurrent sessions.');
@@ -103,39 +123,27 @@ export default function SystemCheckPage() {
       }
     }
 
-    // 2. Fullscreen capability check
     setFsStatus('checking');
     setTimeout(() => {
       setFsStatus(document.fullscreenEnabled ? 'pass' : 'fail');
-      if (!document.fullscreenEnabled) {
-        toast.error('Your browser does not support fullscreen mode. Please use Chrome or Edge.');
-      }
+      if (!document.fullscreenEnabled) toast.error('Your browser does not support fullscreen mode. Please use Chrome or Edge.');
     }, 1200);
 
-    // 3. Proctoring engine availability check
-    setEngineStatus('checking');
-    setEngineError('');
+    setEngineStatus('checking'); setEngineError('');
     try {
       const res = await api.get(`/exam/${examId}/engine-status`);
-      if (res.data.available) {
-        setEngineStatus('pass');
-      } else {
-        setEngineStatus('fail');
-        setEngineError(res.data.message || 'Proctoring engine is unavailable.');
-        toast.error(res.data.message || 'Proctoring engine is unavailable.');
-      }
+      if (res.data.available) { setEngineStatus('pass'); }
+      else { setEngineStatus('fail'); setEngineError('Please wait a few minutes — we are allocating a proctoring engine for your session.'); toast.error('Proctoring engine is being allocated. Please retry in a moment.'); }
     } catch {
       setEngineStatus('fail');
-      setEngineError('Could not reach the proctoring engine. Please contact your administrator.');
-      toast.error('Proctoring engine check failed.');
+      setEngineError('Please wait a few minutes — we are allocating a proctoring engine for your session.');
+      toast.error('Proctoring engine is being allocated. Please retry in a moment.');
     }
   };
 
   const handleStartExam = async () => {
     try {
-      if (document.documentElement.requestFullscreen) {
-        await document.documentElement.requestFullscreen();
-      }
+      if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
       await api.post(`/exam/start/${examId}`);
       router.push(`/student/exam/${examId}/active`);
     } catch (err: any) {
@@ -155,137 +163,105 @@ export default function SystemCheckPage() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const StatusIcon = ({ status }: { status: CheckStatus }) => {
-    if (status === 'checking') return <Loader2 className="h-6 w-6 animate-spin text-indigo-500" />;
-    if (status === 'pass') return <CheckCircle2 className="h-6 w-6 text-emerald-500" />;
-    if (status === 'fail') return <ShieldAlert className="h-6 w-6 text-rose-500" />;
-    return <div className="h-6 w-6 rounded-full border-2 border-slate-200" />;
-  };
-
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center p-24">
-        <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Loader2 style={{ width: '28px', height: '28px', color: '#22577A', animation: 'spin 1s linear infinite' }} />
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex overflow-hidden bg-slate-50">
-      <div className="flex-1 overflow-y-auto p-6 md:p-12">
-        <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <div className="text-center mb-10">
-            <h1 className="text-3xl font-bold text-slate-900 mb-2">
+    <>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '24px', background: '#F8FAFC' }}>
+        <div style={{ maxWidth: '580px', margin: '0 auto' }} className="st-fadein">
+
+          <div style={{ textAlign: 'center', marginBottom: '28px' }}>
+            <div style={{
+              width: '52px', height: '52px', borderRadius: '14px',
+              background: 'rgba(34,87,122,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              margin: '0 auto 14px',
+            }}>
+              <ShieldAlert style={{ width: '24px', height: '24px', color: '#22577A' }} />
+            </div>
+            <h1 style={{ fontSize: '22px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.02em', marginBottom: '6px' }}>
               {isReconnect ? 'Reconnect System Check' : 'Final System Lock'}
             </h1>
-            <p className="text-lg text-slate-600">
+            <p style={{ fontSize: '14px', color: '#64748B' }}>
               {isReconnect
                 ? 'Verifying your device before reconnecting to the exam.'
                 : 'Preparing the secure environment for your exam.'}
             </p>
           </div>
 
-          <div className="space-y-4">
-            {/* Cross-device lock */}
-            <Card className="p-5 border-slate-200 shadow-sm overflow-hidden">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="bg-indigo-100 p-2.5 rounded-lg">
-                    <LogOut className="h-6 w-6 text-indigo-600" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-slate-900 text-lg">Cross-Device Lock</h3>
-                    <p className="text-sm text-slate-500">Revoking access on all other active devices</p>
-                  </div>
-                </div>
-                <StatusIcon status={sessionStatus} />
-              </div>
-              {sessionStatus === 'fail' && sessionError && (
-                <Alert className="mt-4 bg-rose-50 border-rose-200">
-                  <AlertTriangle className="h-4 w-4 text-rose-600" />
-                  <AlertDescription className="text-rose-800 text-sm">{sessionError}</AlertDescription>
-                </Alert>
-              )}
-            </Card>
-
-            {/* Fullscreen check */}
-            <Card className="p-5 flex items-center justify-between border-slate-200 shadow-sm">
-              <div className="flex items-center gap-4">
-                <div className="bg-indigo-100 p-2.5 rounded-lg">
-                  <Monitor className="h-6 w-6 text-indigo-600" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-slate-900 text-lg">Fullscreen Enforcement</h3>
-                  <p className="text-sm text-slate-500">Checking browser capability for Kiosk mode</p>
-                </div>
-              </div>
-              <StatusIcon status={fsStatus} />
-            </Card>
-
-            {/* Proctoring engine check */}
-            <Card className="p-5 border-slate-200 shadow-sm overflow-hidden">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="bg-indigo-100 p-2.5 rounded-lg">
-                    <Cpu className="h-6 w-6 text-indigo-600" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-slate-900 text-lg">Proctoring Engine</h3>
-                    <p className="text-sm text-slate-500">Verifying AI monitoring service availability</p>
-                  </div>
-                </div>
-                <StatusIcon status={engineStatus} />
-              </div>
-              {engineStatus === 'fail' && engineError && (
-                <Alert className="mt-4 bg-rose-50 border-rose-200">
-                  <AlertTriangle className="h-4 w-4 text-rose-600" />
-                  <AlertDescription className="text-rose-800 text-sm">{engineError}</AlertDescription>
-                </Alert>
-              )}
-            </Card>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
+            <CheckCard
+              icon={<LogOut style={{ width: '18px', height: '18px', color: '#22577A' }} />}
+              title="Cross-Device Lock"
+              subtitle="Revoking access on all other active devices"
+              status={sessionStatus}
+              error={sessionError}
+            />
+            <CheckCard
+              icon={<Monitor style={{ width: '18px', height: '18px', color: '#22577A' }} />}
+              title="Fullscreen Enforcement"
+              subtitle="Checking browser capability for kiosk mode"
+              status={fsStatus}
+            />
+            <CheckCard
+              icon={<Cpu style={{ width: '18px', height: '18px', color: '#22577A' }} />}
+              title="Proctoring Engine"
+              subtitle="Verifying AI monitoring service availability"
+              status={engineStatus}
+              error={engineError}
+            />
           </div>
 
           {anyFailed && (
-            <Button
+            <button
               onClick={runSystemChecks}
-              variant="outline"
-              className="w-full border-slate-300"
+              className="st-btn-ghost"
+              style={{ width: '100%', justifyContent: 'center', marginBottom: '14px' }}
             >
-              <Loader2 className="h-4 w-4 mr-2" /> Retry All Checks
-            </Button>
+              <Loader2 style={{ width: '14px', height: '14px' }} /> Retry All Checks
+            </button>
           )}
 
-          <div className="pt-4 transition-all">
+          {/* Launch button */}
+          <div>
             {anyChecking ? (
-              <Button disabled className="w-full h-14 text-lg bg-slate-200 text-slate-500">
-                <Loader2 className="h-5 w-5 mr-3 animate-spin" /> Finalizing Environment…
-              </Button>
+              <button disabled className="st-btn" style={{ width: '100%', padding: '14px', fontSize: '15px', background: '#94A3B8', cursor: 'not-allowed' }}>
+                <Loader2 style={{ width: '18px', height: '18px', animation: 'spin 1s linear infinite' }} /> Finalizing Environment…
+              </button>
             ) : !allPassed ? (
-              <Button disabled className="w-full h-14 text-lg bg-rose-100 text-rose-600">
-                Fix the errors above to continue
-              </Button>
+              <button disabled className="st-btn" style={{ width: '100%', padding: '14px', fontSize: '15px', background: 'rgba(239,68,68,0.1)', color: '#DC2626', border: '1.5px solid rgba(239,68,68,0.2)', cursor: 'not-allowed' }}>
+                Waiting for proctoring engine…
+              </button>
             ) : !isExamReady ? (
-              <Button disabled className="w-full h-14 text-lg bg-amber-500 text-white shadow-xl shadow-amber-500/20">
-                Exam begins in {formatCountdown(countdown)}
-              </Button>
+              <button disabled className="st-btn st-btn-warning" style={{ width: '100%', padding: '14px', fontSize: '18px', fontFamily: "'Plus Jakarta Sans', sans-serif", letterSpacing: '0.04em', cursor: 'not-allowed', fontWeight: 800 }}>
+                {formatCountdown(countdown)}
+              </button>
             ) : (
-              <Button
+              <button
                 onClick={handleStartExam}
-                className="w-full h-14 text-lg bg-emerald-600 hover:bg-emerald-700 shadow-xl shadow-emerald-600/20 font-bold"
+                className="st-btn st-btn-success st-btn-lg"
+                style={{ width: '100%', padding: '14px', fontSize: '15px', boxShadow: '0 8px 24px rgba(34,197,94,0.25)' }}
               >
                 {isReconnect ? 'Reconnect to Exam' : 'Enter Fullscreen & Start Exam'}
-                <ArrowRight className="h-5 w-5 ml-2" />
-              </Button>
+                <ArrowRight style={{ width: '18px', height: '18px' }} />
+              </button>
             )}
           </div>
 
-          <p className="text-center text-xs text-slate-400 mt-6 max-w-sm mx-auto">
+          <p style={{ textAlign: 'center', fontSize: '11.5px', color: '#94A3B8', marginTop: '14px', lineHeight: 1.6, maxWidth: '400px', margin: '14px auto 0' }}>
             {isReconnect
               ? 'Your timer resumed from where it stopped. Any time lost may have been compensated.'
               : 'By clicking "Start Exam", your browser will be locked to the exam window. Navigating away may automatically terminate your attempt.'}
           </p>
         </div>
       </div>
-    </div>
+    </>
   );
 }

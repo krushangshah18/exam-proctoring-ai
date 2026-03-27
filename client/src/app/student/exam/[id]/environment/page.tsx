@@ -2,64 +2,78 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { Loader2, ArrowRight, Sun, Volume2, CheckCircle2, XCircle, ScanFace, RefreshCw, Box } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Loader2, ArrowRight, Sun, Volume2, CheckCircle2, XCircle, ScanFace, RefreshCw, ScanSearch } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
 
 type CheckStatus = 'pending' | 'checking' | 'pass' | 'fail';
 
 function CheckRow({
-  icon,
-  title,
-  subtitle,
-  iconBg,
-  iconColor,
-  status,
-  onRetry,
+  icon, title, subtitle, status, onRetry, accent, errorHint,
 }: {
-  icon: React.ReactNode;
-  title: string;
-  subtitle: string;
-  iconBg: string;
-  iconColor: string;
-  status: CheckStatus;
-  onRetry: () => void;
+  icon: React.ReactNode; title: string; subtitle: string; status: CheckStatus;
+  onRetry: () => void; accent: string; errorHint?: string;
 }) {
   return (
-    <Card className="p-4 flex items-center justify-between border-slate-200">
-      <div className="flex items-center gap-4">
-        <div className={`${iconBg} p-2 rounded-lg`}>
-          <div className={iconColor}>{icon}</div>
+    <div style={{
+      background: '#fff',
+      border: `1.5px solid ${status === 'fail' ? 'rgba(239,68,68,0.25)' : status === 'pass' ? 'rgba(34,197,94,0.2)' : '#E2E8F0'}`,
+      borderRadius: '10px', overflow: 'hidden',
+      transition: 'border-color 200ms',
+    }}>
+      <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ width: '36px', height: '36px', borderRadius: '9px', background: accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            {icon}
+          </div>
+          <div>
+            <h3 style={{ fontSize: '13.5px', fontWeight: 700, color: '#0F172A' }}>{title}</h3>
+            <p style={{ fontSize: '12px', color: '#64748B', marginTop: '1px' }}>{subtitle}</p>
+          </div>
         </div>
-        <div>
-          <h3 className="font-semibold text-slate-900">{title}</h3>
-          <p className="text-sm text-slate-500">{subtitle}</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+          {status === 'checking' && <Loader2 style={{ width: '18px', height: '18px', color: '#22577A', animation: 'spin 1s linear infinite' }} />}
+          {status === 'pass' && <CheckCircle2 style={{ width: '18px', height: '18px', color: '#22C55E' }} />}
+          {status === 'fail' && (
+            <>
+              <XCircle style={{ width: '18px', height: '18px', color: '#EF4444' }} />
+              <button
+                onClick={onRetry}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '5px',
+                  padding: '5px 10px', borderRadius: '6px', cursor: 'pointer',
+                  background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)',
+                  color: '#DC2626', fontSize: '12px', fontWeight: 600,
+                  fontFamily: "'Plus Jakarta Sans', sans-serif",
+                }}
+              >
+                <RefreshCw style={{ width: '11px', height: '11px' }} /> Retry
+              </button>
+            </>
+          )}
+          {status === 'pending' && (
+            <div style={{ width: '18px', height: '18px', borderRadius: '50%', border: '2px solid #E2E8F0' }} />
+          )}
         </div>
       </div>
-      <div className="flex items-center gap-2">
-        {status === 'checking' && <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />}
-        {status === 'pass' && <CheckCircle2 className="h-5 w-5 text-emerald-500" />}
-        {status === 'fail' && (
-          <>
-            <XCircle className="h-5 w-5 text-rose-500" />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={onRetry}
-              className="h-7 gap-1 text-xs border-rose-200 text-rose-700 hover:bg-rose-50"
-            >
-              <RefreshCw className="h-3 w-3" /> Retry
-            </Button>
-          </>
-        )}
-        {status === 'pending' && (
-          <div className="h-5 w-5 rounded-full border-2 border-slate-200" />
-        )}
-      </div>
-    </Card>
+
+      {/* Error hints for object detection failures */}
+      {status === 'fail' && errorHint && (
+        <div style={{
+          margin: '0 14px 12px',
+          padding: '9px 12px',
+          borderRadius: '7px',
+          background: 'rgba(239,68,68,0.05)',
+          border: '1px solid rgba(239,68,68,0.15)',
+          fontSize: '12px',
+          color: '#DC2626',
+          fontWeight: 500,
+          lineHeight: 1.5,
+        }}>
+          {errorHint}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -77,7 +91,9 @@ export default function EnvironmentCheckPage() {
 
   const [lightStatus, setLightStatus] = useState<CheckStatus>('pending');
   const [noiseStatus, setNoiseStatus] = useState<CheckStatus>('pending');
-  const [faceStatus, setFaceStatus] = useState<CheckStatus>('pending');
+  const [faceStatus, setFaceStatus]   = useState<CheckStatus>('pending');
+  const [objStatus, setObjStatus]     = useState<CheckStatus>('pending');
+  const [objErrorHint, setObjErrorHint] = useState<string>('');
 
   const startStream = useCallback(async () => {
     const camId = localStorage.getItem(`exam_cam_${examId}`);
@@ -91,23 +107,29 @@ export default function EnvironmentCheckPage() {
     return s;
   }, [examId]);
 
-  // --- Individual check functions ---
+  const captureFrame = useCallback((): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      if (!videoRef.current || !canvasRef.current) return reject(new Error('Video not ready'));
+      const ctx = canvasRef.current.getContext('2d');
+      if (!ctx) return reject(new Error('Canvas context unavailable'));
+      ctx.drawImage(videoRef.current, 0, 0, 320, 240);
+      canvasRef.current.toBlob(blob => {
+        if (blob) resolve(blob);
+        else reject(new Error('Failed to capture frame'));
+      }, 'image/jpeg', 0.9);
+    });
+  }, []);
 
   const checkLighting = useCallback(async () => {
     setLightStatus('checking');
-    await new Promise((r) => setTimeout(r, 1500));
-    if (!videoRef.current || !canvasRef.current) {
-      setLightStatus('fail');
-      return;
-    }
+    await new Promise(r => setTimeout(r, 1500));
+    if (!videoRef.current || !canvasRef.current) { setLightStatus('fail'); return; }
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) { setLightStatus('fail'); return; }
     ctx.drawImage(videoRef.current, 0, 0, 320, 240);
     const data = ctx.getImageData(0, 0, 320, 240).data;
     let sum = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
-    }
+    for (let i = 0; i < data.length; i += 4) sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
     const brightness = sum / (320 * 240);
     setLightStatus(brightness >= 40 ? 'pass' : 'fail');
     if (brightness < 40) toast.error('Room is too dark. Improve lighting and retry.');
@@ -120,21 +142,14 @@ export default function EnvironmentCheckPage() {
     analyser.fftSize = 256;
     ctx.createMediaStreamSource(mediaStream).connect(analyser);
     const arr = new Uint8Array(analyser.frequencyBinCount);
-
-    await new Promise<void>((resolve) => {
-      let cycles = 0;
-      let peak = 0;
+    await new Promise<void>(resolve => {
+      let cycles = 0; let peak = 0;
       const tick = () => {
         analyser.getByteFrequencyData(arr);
         const vol = arr.reduce((a, b) => a + b, 0) / arr.length;
         if (vol > peak) peak = vol;
         if (++cycles < 60) requestAnimationFrame(tick);
-        else {
-          ctx.close();
-          setNoiseStatus(peak > 70 ? 'fail' : 'pass');
-          if (peak > 70) toast.error('Background noise too high. Find a quieter spot.');
-          resolve();
-        }
+        else { ctx.close(); setNoiseStatus(peak > 70 ? 'fail' : 'pass'); if (peak > 70) toast.error('Background noise too high.'); resolve(); }
       };
       tick();
     });
@@ -143,28 +158,44 @@ export default function EnvironmentCheckPage() {
   const checkFace = useCallback(async () => {
     setFaceStatus('checking');
     try {
-      if (!videoRef.current || !canvasRef.current) throw new Error('Video not ready');
-      const ctx = canvasRef.current.getContext('2d');
-      if (!ctx) throw new Error('Canvas context unavailable');
-      ctx.drawImage(videoRef.current, 0, 0, 320, 240);
-      const blob = await new Promise<Blob | null>((resolve) =>
-        canvasRef.current!.toBlob(resolve, 'image/jpeg', 0.9)
-      );
-      if (!blob) throw new Error('Failed to capture image');
+      const blob = await captureFrame();
       const form = new FormData();
       form.append('image', blob, 'capture.jpg');
-      const res = await api.post(`/exam/${examId}/verify-face`, form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      const res = await api.post(`/exam/${examId}/verify-face`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
       setFaceStatus(res.data.verified ? 'pass' : 'fail');
       if (!res.data.verified) toast.error(res.data.message || 'Identity check failed. Reposition and retry.');
     } catch (err: any) {
       setFaceStatus('fail');
       toast.error(err.response?.data?.detail || err.message || 'Identity check failed.');
     }
-  }, [examId]);
+  }, [examId, captureFrame]);
 
-  // Initial load: open stream then run all checks in sequence
+  const checkObjects = useCallback(async () => {
+    setObjStatus('checking');
+    setObjErrorHint('');
+    try {
+      // Small delay so the student is settled after face check
+      await new Promise(r => setTimeout(r, 800));
+      const blob = await captureFrame();
+      const form = new FormData();
+      form.append('image', blob, 'capture.jpg');
+      const res = await api.post(`/exam/${examId}/check-objects`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (res.data.passed) {
+        setObjStatus('pass');
+      } else {
+        setObjStatus('fail');
+        const hint = res.data.issues.join(' ');
+        setObjErrorHint(hint);
+        toast.error(res.data.issues[0] || 'Object check failed.');
+      }
+    } catch (err: any) {
+      setObjStatus('fail');
+      const msg = err.response?.data?.detail || 'Object detection failed. Please retry.';
+      setObjErrorHint(msg);
+      toast.error(msg);
+    }
+  }, [examId, captureFrame]);
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -173,138 +204,127 @@ export default function EnvironmentCheckPage() {
         await checkLighting();
         await checkNoise(s);
         await checkFace();
+        await checkObjects();
       } catch {
         toast.error('Failed to access camera/microphone.');
         router.replace(`/student/exam/${examId}/device`);
       }
     };
     init();
-    return () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    };
+    return () => { streamRef.current?.getTracks().forEach(t => t.stop()); };
   }, []);
 
   useEffect(() => {
-    if (!loading && stream && videoRef.current) {
-      videoRef.current.srcObject = stream;
-    }
+    if (!loading && stream && videoRef.current) videoRef.current.srcObject = stream;
   }, [loading, stream]);
 
   const handleNext = () => router.push(`/student/exam/${examId}/system`);
-
-  const allPassed = lightStatus === 'pass' && noiseStatus === 'pass' && faceStatus === 'pass';
-  const anyChecking = [lightStatus, noiseStatus, faceStatus].includes('checking');
+  const allPassed   = lightStatus === 'pass' && noiseStatus === 'pass' && faceStatus === 'pass' && objStatus === 'pass';
+  const anyChecking = [lightStatus, noiseStatus, faceStatus, objStatus].includes('checking');
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center p-24">
-        <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Loader2 style={{ width: '28px', height: '28px', color: '#22577A', animation: 'spin 1s linear infinite' }} />
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex overflow-hidden">
-      <div className="flex-1 overflow-y-auto p-6 md:p-12">
-        <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <div>
-            <h1 className="text-3xl font-bold text-slate-900 mb-2">Environment Checklist</h1>
-            <p className="text-lg text-slate-600">Verifying your surroundings for exam integrity.</p>
+    <>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}} @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.6}}`}</style>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '24px', background: '#F8FAFC' }}>
+        <div style={{ maxWidth: '860px', margin: '0 auto' }} className="st-fadein">
+
+          <div style={{ marginBottom: '24px' }}>
+            <h1 style={{ fontSize: '22px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.02em', marginBottom: '5px' }}>Environment Checklist</h1>
+            <p style={{ fontSize: '14px', color: '#64748B' }}>Verifying your surroundings for exam integrity.</p>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-8">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
             {/* Camera preview */}
-            <Card className="p-4 bg-slate-900 border-slate-800 overflow-hidden">
-              <div className="aspect-video bg-black rounded-lg overflow-hidden flex items-center justify-center relative">
+            <div style={{ borderRadius: '12px', overflow: 'hidden', border: '1.5px solid #CBD5E1', boxShadow: '0 1px 4px rgba(15,23,42,0.08)', background: '#0F172A' }}>
+              <div style={{ aspectRatio: '16/9', position: 'relative' }}>
                 <video
                   ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-cover"
-                  style={{ transform: 'scaleX(-1)' }}
+                  autoPlay playsInline muted
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: 'block', transform: 'scaleX(-1)' }}
                 />
-                <canvas ref={canvasRef} width={320} height={240} className="hidden" />
+                <canvas ref={canvasRef} width={320} height={240} style={{ display: 'none' }} />
+
                 {faceStatus === 'checking' && (
-                  <div className="absolute inset-0 border-4 border-indigo-500/50 border-dashed rounded-xl m-8 animate-pulse shadow-[0_0_20px_rgba(99,102,241,0.5)]">
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white font-bold bg-black/60 px-4 py-2 rounded-full flex gap-2 items-center">
-                      <ScanFace className="h-5 w-5 animate-bounce" /> Matching Identity
+                  <div style={{ position: 'absolute', inset: '20px', border: '3px dashed rgba(87,204,153,0.6)', borderRadius: '12px', animation: 'pulse 1.5s ease-in-out infinite', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ background: 'rgba(0,0,0,0.7)', padding: '8px 16px', borderRadius: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <ScanFace style={{ width: '16px', height: '16px', color: '#57CC99' }} />
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#fff' }}>Matching Identity</span>
+                    </div>
+                  </div>
+                )}
+
+                {objStatus === 'checking' && (
+                  <div style={{ position: 'absolute', inset: '20px', border: '3px dashed rgba(147,51,234,0.6)', borderRadius: '12px', animation: 'pulse 1.5s ease-in-out infinite', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ background: 'rgba(0,0,0,0.7)', padding: '8px 16px', borderRadius: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <ScanSearch style={{ width: '16px', height: '16px', color: '#C084FC' }} />
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#fff' }}>Scanning Environment</span>
                     </div>
                   </div>
                 )}
               </div>
-            </Card>
+            </div>
 
-            {/* Check list */}
-            <div className="space-y-4">
+            {/* Checks + proceed */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <CheckRow
-                icon={<Sun className="h-5 w-5" />}
-                iconBg="bg-amber-100"
-                iconColor="text-amber-600"
+                icon={<Sun style={{ width: '17px', height: '17px', color: '#D97706' }} />}
+                accent="rgba(245,158,11,0.12)"
                 title="Room Lighting"
                 subtitle="Checking for clear visibility"
                 status={lightStatus}
                 onRetry={checkLighting}
               />
-
               <CheckRow
-                icon={<Volume2 className="h-5 w-5" />}
-                iconBg="bg-sky-100"
-                iconColor="text-sky-600"
+                icon={<Volume2 style={{ width: '17px', height: '17px', color: '#0284C7' }} />}
+                accent="rgba(2,132,199,0.1)"
                 title="Background Noise"
                 subtitle="Monitoring for quiet environment"
                 status={noiseStatus}
                 onRetry={() => streamRef.current && checkNoise(streamRef.current)}
               />
-
               <CheckRow
-                icon={<ScanFace className="h-5 w-5" />}
-                iconBg="bg-emerald-100"
-                iconColor="text-emerald-600"
+                icon={<ScanFace style={{ width: '17px', height: '17px', color: '#22C55E' }} />}
+                accent="rgba(34,197,94,0.1)"
                 title="Identity Verification"
                 subtitle="Matching face with account profile"
                 status={faceStatus}
                 onRetry={checkFace}
               />
+              <CheckRow
+                icon={<ScanSearch style={{ width: '17px', height: '17px', color: '#9333EA' }} />}
+                accent="rgba(147,51,234,0.08)"
+                title="Object Detection"
+                subtitle="Scanning for prohibited items in frame"
+                status={objStatus}
+                onRetry={checkObjects}
+                errorHint={objErrorHint}
+              />
 
-              {/* Object Detection stub */}
-              <Card className="p-4 flex items-center justify-between border-slate-200 opacity-60">
-                <div className="flex items-center gap-4">
-                  <div className="bg-purple-100 p-2 rounded-lg">
-                    <Box className="h-5 w-5 text-purple-600" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-slate-900">Object Detection</h3>
-                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-purple-50 text-purple-700 border-purple-200">
-                        Coming Soon
-                      </Badge>
-                    </div>
-                    <p className="text-sm text-slate-500">Scanning for prohibited items — model integration pending</p>
-                  </div>
-                </div>
-                <div className="h-5 w-5 rounded-full border-2 border-dashed border-slate-300" />
-              </Card>
-
-              <div className="pt-4">
-                <Button
-                  onClick={handleNext}
-                  disabled={!allPassed || anyChecking}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 transition-all"
-                  size="lg"
-                >
-                  {anyChecking
-                    ? 'Analyzing Environment…'
-                    : allPassed
-                    ? 'Proceed to System Checks'
-                    : 'Fix Failed Checks Above'}
-                  {allPassed && !anyChecking && <ArrowRight className="h-4 w-4 ml-2" />}
-                </Button>
-              </div>
+              <button
+                onClick={handleNext}
+                disabled={!allPassed || anyChecking}
+                className="st-btn st-btn-lg"
+                style={{ width: '100%', marginTop: 'auto' }}
+              >
+                {anyChecking
+                  ? <><Loader2 style={{ width: '16px', height: '16px', animation: 'spin 1s linear infinite' }} /> Analyzing Environment…</>
+                  : allPassed
+                  ? <>Proceed to System Checks <ArrowRight style={{ width: '16px', height: '16px' }} /></>
+                  : 'Fix Failed Checks Above'}
+              </button>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
