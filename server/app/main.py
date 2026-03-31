@@ -27,6 +27,7 @@ async def _exam_status_scheduler():
     from app.db.session import SessionLocal
     from app.db import models
     from app.db.enums import ExamStatus, SessionStatus
+    from sqlalchemy import func
 
     while True:
         try:
@@ -93,6 +94,40 @@ async def _exam_status_scheduler():
                             )
                         # else: leave running — student has admin-granted extra time
 
+                from app.exam.events import push_event_sync
+
+                # ── helper: mark a session ENDED and set invite.used ──────────
+                def _auto_end_session(sess, exam_obj, reason=""):
+                    sess.status = SessionStatus.ENDED.value
+                    sess.end_time = now
+                    invite = db.query(models.ExamInvite).filter(
+                        func.lower(models.ExamInvite.student_email) == func.lower(sess.user.email),
+                        models.ExamInvite.exam_id == sess.exam_id,
+                    ).first()
+                    if invite:
+                        invite.used = True
+                    push_event_sync(str(sess.id), "TIME_UP", {"auto_submitted": True})
+                    log.info("Session %s auto-ended%s", sess.id, f" ({reason})" if reason else "")
+
+                # ── Gap 1: ACTIVE sessions in LIVE exams past personal deadline ─
+                active_overdue_q = (
+                    db.query(models.ExamSession, models.Exam)
+                    .join(models.Exam, models.Exam.id == models.ExamSession.exam_id)
+                    .filter(
+                        models.Exam.status == ExamStatus.LIVE.value,
+                        models.ExamSession.status == SessionStatus.ACTIVE.value,
+                        models.ExamSession.start_time.isnot(None),
+                    )
+                    .all()
+                )
+                active_overdue = []
+                for sess, exam in active_overdue_q:
+                    start = sess.start_time.replace(tzinfo=UTC) if sess.start_time.tzinfo is None else sess.start_time
+                    deadline = start + timedelta(minutes=exam.duration_minutes) + timedelta(seconds=sess.time_extension_seconds or 0)
+                    if now >= deadline:
+                        _auto_end_session(sess, exam, "personal deadline reached")
+                        active_overdue.append(sess.id)
+
                 # Detect disconnected sessions (no heartbeat for > 90 seconds)
                 heartbeat_cutoff = now - timedelta(seconds=90)
                 stale_sessions = (
@@ -108,19 +143,29 @@ async def _exam_status_scheduler():
                     sess.status = SessionStatus.DISCONNECTED.value
                     log.info("Session %s marked DISCONNECTED (last heartbeat: %s)", sess.id, sess.last_heartbeat)
 
-                # Auto-terminate sessions disconnected for > 5 min
-                from app.exam.events import push_event_sync
-                disconnect_terminate_cutoff = now - timedelta(minutes=5)
-                long_disconnected = (
-                    db.query(models.ExamSession)
+                # Auto-end/terminate disconnected sessions
+                disconnect_cutoff = now - timedelta(minutes=5)
+                long_disconnected_q = (
+                    db.query(models.ExamSession, models.Exam)
+                    .join(models.Exam, models.Exam.id == models.ExamSession.exam_id)
                     .filter(
                         models.ExamSession.status == SessionStatus.DISCONNECTED.value,
-                        models.ExamSession.last_heartbeat <= disconnect_terminate_cutoff,
+                        models.ExamSession.last_heartbeat <= disconnect_cutoff,
                         models.ExamSession.last_heartbeat.isnot(None),
                     )
                     .all()
                 )
-                for sess in long_disconnected:
+                long_disconnected = []
+                for sess, exam in long_disconnected_q:
+                    long_disconnected.append(sess.id)
+                    # ── Gap 3: if personal deadline already passed → ENDED not TERMINATED
+                    if sess.start_time:
+                        start = sess.start_time.replace(tzinfo=UTC) if sess.start_time.tzinfo is None else sess.start_time
+                        deadline = start + timedelta(minutes=exam.duration_minutes) + timedelta(seconds=sess.time_extension_seconds or 0)
+                        if now >= deadline:
+                            _auto_end_session(sess, exam, "disconnected + deadline passed")
+                            continue
+                    # Deadline not yet reached → genuine policy termination
                     sess.status = SessionStatus.TERMINATED.value
                     sess.terminated_by = "SYSTEM_DISCONNECT"
                     sess.terminated_reason = "Session auto-terminated: student disconnected for over 5 minutes"
@@ -129,12 +174,9 @@ async def _exam_status_scheduler():
                         "terminated_by": "SYSTEM_DISCONNECT",
                         "terminated_reason": sess.terminated_reason,
                     })
-                    log.info(
-                        "Session %s auto-terminated (disconnected since %s)", sess.id, sess.last_heartbeat
-                    )
+                    log.info("Session %s auto-terminated (disconnected since %s)", sess.id, sess.last_heartbeat)
 
                 # Also check sessions in already-ENDED exams whose personal deadline has now expired
-                # (students who were given time extensions past the exam end_window)
                 ended_exam_sessions = (
                     db.query(models.ExamSession, models.Exam)
                     .join(models.Exam, models.Exam.id == models.ExamSession.exam_id)
@@ -158,20 +200,19 @@ async def _exam_status_scheduler():
                         + timedelta(seconds=sess.time_extension_seconds or 0)
                     )
                     if now >= personal_deadline:
-                        sess.status = SessionStatus.ENDED.value
-                        sess.end_time = now
+                        _auto_end_session(sess, exam, "extended past exam window")
                         extended_auto_ended.append(sess.id)
-                        log.info("Session %s auto-ended (extended past exam window, deadline %s)", sess.id, personal_deadline)
 
-                if scheduled_to_live or live_to_ended or stale_sessions or long_disconnected or extended_auto_ended:
+                if scheduled_to_live or live_to_ended or stale_sessions or long_disconnected or extended_auto_ended or active_overdue:
                     db.commit()
                     log.info(
-                        "Exam scheduler: %d SCHEDULED→LIVE, %d LIVE→ENDED, %d DISCONNECTED, %d auto-terminated, %d extended-sessions ended",
+                        "Exam scheduler: %d SCHEDULED→LIVE, %d LIVE→ENDED, %d DISCONNECTED, %d disconnect-handled, %d extended-ended, %d overdue-ended",
                         len(scheduled_to_live),
                         len(live_to_ended),
                         len(stale_sessions),
                         len(long_disconnected),
                         len(extended_auto_ended),
+                        len(active_overdue),
                     )
             except Exception as e:
                 db.rollback()
@@ -188,6 +229,9 @@ async def _exam_status_scheduler():
 async def lifespan(app: FastAPI):
     # Seed engine containers + ensure settings row exist
     from app.exam.proctor_startup import run_all as _proctor_startup
+    from app.exam.events import set_event_loop
+
+    set_event_loop(asyncio.get_running_loop())
     _proctor_startup()
 
     scheduler = asyncio.create_task(_exam_status_scheduler())

@@ -133,8 +133,7 @@ export default function DeviceSelectionPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
             {/* Camera preview */}
-            <div style={{ borderRadius: '12px', overflow: 'hidden', border: '1.5px solid #CBD5E1', boxShadow: '0 1px 4px rgba(15,23,42,0.08)', background: '#0F172A' }}>
-              <div style={{ aspectRatio: '16/9', position: 'relative' }}>
+            <div style={{ aspectRatio: '4/3', position: 'relative', borderRadius: '12px', overflow: 'hidden', border: '1.5px solid #CBD5E1', boxShadow: '0 1px 4px rgba(15,23,42,0.08)', background: '#0F172A', lineHeight: 0 }}>
                 <video
                   ref={videoRef}
                   autoPlay playsInline muted
@@ -149,7 +148,6 @@ export default function DeviceSelectionPage() {
                 <div style={{ position: 'absolute', bottom: '10px', left: '10px', background: 'rgba(0,0,0,0.6)', padding: '3px 8px', borderRadius: '4px' }}>
                   <span style={{ fontSize: '10px', fontWeight: 700, color: '#57CC99', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Preview</span>
                 </div>
-              </div>
             </div>
 
             {/* Controls */}

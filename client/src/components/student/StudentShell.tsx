@@ -1,8 +1,14 @@
 'use client';
 
 import React from 'react';
-import { GraduationCap, History, LogOut, User, ChevronLeft, ShieldCheck } from 'lucide-react';
+import { GraduationCap, LogOut, ChevronDown, User, ChevronLeft, ShieldCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 // ── Shared CSS injected once ─────────────────────────────────────────────────
 
@@ -65,9 +71,10 @@ export function StudentStyles() {
       /* ── Cards ── */
       .st-card {
         background: #fff;
-        border: 1.5px solid #E2E8F0;
+        border: 1.5px solid #CBD5E1;
         border-radius: 12px;
         overflow: hidden;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
       }
 
       /* ── Inputs ── */
@@ -190,7 +197,7 @@ export function StudentPageShell({
     : 'S';
 
   return (
-    <div className="st-root" style={{ minHeight: '100vh', background: '#F8FAFC', fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+    <div className="st-root" style={{ minHeight: '100vh', background: '#EEF4F8', fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
       <StudentStyles />
 
       {/* Header */}
@@ -230,44 +237,51 @@ export function StudentPageShell({
             )}
 
             {/* Right: nav actions */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               {onLogout && (
-                <>
-                  <button
-                    onClick={() => router.push('/student/history')}
-                    className="st-btn-ghost"
-                    style={{ gap: '5px', padding: '7px 12px', fontSize: '13px' }}
-                  >
-                    <History style={{ width: '14px', height: '14px' }} />
-                    <span style={{ display: 'none' }} className="sm-visible">Exam History</span>
-                  </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        padding: '6px 10px', borderRadius: '10px', cursor: 'pointer',
+                        background: 'transparent', border: 'none', transition: 'background 150ms',
+                      }}
+                      onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#F1F5F9'}
+                      onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
+                    >
+                      <div style={{
+                        width: '30px', height: '30px', borderRadius: '50%',
+                        background: '#22577A', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '12px', fontWeight: 700, color: '#fff', flexShrink: 0,
+                      }}>
+                        {loading ? '·' : initials}
+                      </div>
+                      <span style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>
+                        {loading ? '…' : user?.full_name?.split(' ')[0] || 'Student'}
+                      </span>
+                      <ChevronDown style={{ width: '14px', height: '14px', color: '#94A3B8' }} />
+                    </button>
+                  </DropdownMenuTrigger>
 
-                  <button
-                    onClick={() => router.push('/student/profile')}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: '8px',
-                      padding: '6px 10px', borderRadius: '8px', cursor: 'pointer',
-                      background: 'transparent', border: 'none', transition: 'background 150ms',
-                    }}
-                    onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#F1F5F9'}
-                    onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
-                  >
-                    <div style={{
-                      width: '30px', height: '30px', borderRadius: '50%',
-                      background: '#22577A', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: '12px', fontWeight: 700, color: '#fff', flexShrink: 0,
-                    }}>
-                      {loading ? '·' : initials}
-                    </div>
-                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#475569', display: 'none' }}>
-                      {loading ? '…' : user?.full_name?.split(' ')[0] || 'Student'}
-                    </span>
-                  </button>
-
-                  <button onClick={onLogout} className="st-btn-ghost" style={{ padding: '7px 10px', color: '#94A3B8' }}>
-                    <LogOut style={{ width: '14px', height: '14px' }} />
-                  </button>
-                </>
+                  <DropdownMenuContent align="end" className="w-44">
+                    <DropdownMenuItem
+                      onClick={() => router.push('/student/profile')}
+                      className="cursor-pointer"
+                    >
+                      <User />
+                      Profile
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={onLogout}
+                      className="cursor-pointer text-red-600 focus:text-red-600"
+                    >
+                      <LogOut />
+                      Logout
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               )}
             </div>
           </div>

@@ -55,7 +55,7 @@ export function AuthShell({
           border-color: #38A3A5;
           box-shadow: 0 0 0 3px rgba(56,163,165,0.12);
         }
-        .auth-input::placeholder { color: #CBD5E1; }
+        .auth-input::placeholder { color: #64748B; }
         .auth-input.has-error { border-color: #EF4444 !important; }
         .auth-input.has-error:focus {
           border-color: #EF4444 !important;
@@ -81,7 +81,7 @@ export function AuthShell({
           border-color: #38A3A5;
           box-shadow: 0 0 0 3px rgba(56,163,165,0.12);
         }
-        .auth-textarea::placeholder { color: #CBD5E1; }
+        .auth-textarea::placeholder { color: #64748B; }
 
         .auth-btn {
           display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -281,12 +281,12 @@ export function AuthShell({
             {backHref && (
               <a href={backHref} style={{
                 display: 'inline-flex', alignItems: 'center', gap: '5px',
-                color: '#94A3B8', fontSize: '13px', fontWeight: 500,
+                color: '#64748B', fontSize: '13px', fontWeight: 500,
                 textDecoration: 'none', marginBottom: '22px',
                 transition: 'color 150ms',
               }}
               onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#475569'}
-              onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#94A3B8'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#64748B'}
               >
                 <ArrowLeft style={{ width: '14px', height: '14px' }} />
                 {backLabel}
@@ -301,7 +301,7 @@ export function AuthShell({
               {title}
             </h1>
             {subtitle && (
-              <p style={{ color: '#94A3B8', fontSize: '14px', lineHeight: 1.6, marginBottom: '26px' }}>
+              <p style={{ color: '#64748B', fontSize: '14px', lineHeight: 1.6, marginBottom: '26px' }}>
                 {subtitle}
               </p>
             )}
@@ -309,7 +309,7 @@ export function AuthShell({
             {children}
 
             {footer && (
-              <div style={{ marginTop: '20px', textAlign: 'center', fontSize: '13px', color: '#94A3B8', lineHeight: 1.7 }}>
+              <div style={{ marginTop: '20px', textAlign: 'center', fontSize: '13px', color: '#64748B', lineHeight: 1.7 }}>
                 {footer}
               </div>
             )}
@@ -325,11 +325,20 @@ export function AuthShell({
 export function AuthField({
   label, error, children, required,
 }: {
-  label: string;
+  label: React.ReactNode;
   error?: string;
   children: React.ReactNode;
   required?: boolean;
 }) {
+  const renderedLabel = typeof label === 'string'
+    ? (
+      <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '3px', maxWidth: '100%' }}>
+        <span>{label}</span>
+        {required && <span style={{ color: '#EF4444', whiteSpace: 'nowrap' }}>*</span>}
+      </span>
+    )
+    : label;
+
   return (
     <div style={{ marginBottom: '16px' }}>
       <label style={{
@@ -337,8 +346,7 @@ export function AuthField({
         color: '#475569', marginBottom: '6px',
         fontFamily: "'Plus Jakarta Sans', sans-serif",
       }}>
-        {label}
-        {required && <span style={{ color: '#EF4444', marginLeft: '3px' }}>*</span>}
+        {renderedLabel}
       </label>
       {children}
       {error && (

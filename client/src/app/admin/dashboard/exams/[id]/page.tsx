@@ -17,6 +17,7 @@ interface ExamInvite {
   token: string;
   expires_at: string;
   used: boolean;
+  session_status?: string | null;
 }
 
 interface ExamDetail {
@@ -283,41 +284,73 @@ export default function AdminExamDetailsPage() {
               </div>
             </div>
 
-            {Object.keys(exam.config ?? {}).length > 0 && (
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: '#94A3B8' }}>Browser Checks</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {Object.entries(exam.config).map(([key, enabled]) => (
-                    <span key={key}
-                      className="inline-flex items-center px-2 py-1 rounded-md text-xs border"
-                      style={enabled
-                        ? { background: '#ECFDF5', color: '#15803D', borderColor: '#BBF7D0' }
-                        : { background: '#F8FAFC', color: '#94A3B8', borderColor: '#E2E8F0', textDecoration: 'line-through' }
-                      }>
-                      {key.replace(/_/g, ' ')}
-                    </span>
+            {(() => {
+              const allConfig = { ...(exam.config ?? {}), ...(exam.detection_config ?? {}) };
+              const KEY_MAP: Record<string, { group: string; label: string }> = {
+                // Objects
+                DETECT_PHONE:          { group: 'Objects',  label: 'phone' },
+                DETECT_BOOK:           { group: 'Objects',  label: 'book' },
+                DETECT_HEADPHONE:      { group: 'Objects',  label: 'headphone' },
+                DETECT_EARBUD:         { group: 'Objects',  label: 'earbud' },
+                phone_detected:        { group: 'Objects',  label: 'phone' },
+                book_detected:         { group: 'Objects',  label: 'book' },
+                earphones:             { group: 'Objects',  label: 'earbud' },
+                // Looking / Gaze
+                DETECT_LOOKING_AWAY:   { group: 'Looking',  label: 'away' },
+                DETECT_LOOKING_DOWN:   { group: 'Looking',  label: 'down' },
+                DETECT_LOOKING_UP:     { group: 'Looking',  label: 'up' },
+                DETECT_LOOKING_SIDE:   { group: 'Looking',  label: 'away' },
+                looking_away:          { group: 'Looking',  label: 'away' },
+                eye_gaze:              { group: 'Looking',  label: 'eye gaze' },
+                // Face
+                DETECT_FACE_HIDDEN:    { group: 'Face',     label: 'hidden' },
+                DETECT_PARTIAL_FACE:   { group: 'Face',     label: 'partial' },
+                DETECT_FAKE_PRESENCE:  { group: 'Face',     label: 'fake presence' },
+                static_photo:          { group: 'Face',     label: 'fake presence' },
+                // Audio
+                DETECT_SPEAKER_AUDIO:  { group: 'Audio',    label: 'speaker audio' },
+                audio_analysis:        { group: 'Audio',    label: 'audio analysis' },
+                // People
+                DETECT_MULTIPLE_PEOPLE: { group: 'People', label: 'multiple people' },
+                multiple_person:        { group: 'People', label: 'multiple people' },
+                // Browser
+                tab_switching:         { group: 'Browser',  label: 'tab switching' },
+              };
+              const groups: Record<string, Set<string>> = {};
+              for (const [key, enabled] of Object.entries(allConfig)) {
+                if (!enabled) continue;
+                const mapped = KEY_MAP[key];
+                if (!mapped) continue;
+                if (!groups[mapped.group]) groups[mapped.group] = new Set();
+                groups[mapped.group].add(mapped.label);
+              }
+              const GROUP_ORDER = ['Objects', 'Looking', 'Face', 'Audio', 'People', 'Browser'];
+              const active = GROUP_ORDER.filter(g => groups[g]?.size > 0);
+              if (!active.length) return null;
+              return (
+                <div className="space-y-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Detection Rules</p>
+                  {active.map(group => (
+                    <div key={group} className="flex items-center gap-2 text-xs">
+                      <span className="font-bold shrink-0" style={{ color: '#475569', minWidth: '64px' }}>{group}</span>
+                      <span style={{ color: '#64748B' }}>—</span>
+                      <div className="flex flex-wrap gap-1">
+                        {[...groups[group]].map(label => (
+                          <span key={label}
+                            className="px-2 py-0.5 rounded-md border text-xs font-medium"
+                            style={group === 'Browser'
+                              ? { background: '#FFFBEB', color: '#B45309', borderColor: '#FDE68A' }
+                              : { background: '#EFF6FF', color: '#1D4ED8', borderColor: '#BFDBFE' }
+                            }>
+                            {label}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                   ))}
                 </div>
-              </div>
-            )}
-
-            {exam.detection_config && Object.keys(exam.detection_config).length > 0 && (
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: '#94A3B8' }}>AI Detection</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {Object.entries(exam.detection_config).map(([key, enabled]) => (
-                    <span key={key}
-                      className="inline-flex items-center px-2 py-1 rounded-md text-xs border"
-                      style={enabled
-                        ? { background: '#EFF6FF', color: '#1D4ED8', borderColor: '#BFDBFE' }
-                        : { background: '#F8FAFC', color: '#94A3B8', borderColor: '#E2E8F0', textDecoration: 'line-through' }
-                      }>
-                      {key.replace(/_/g, ' ')}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
         </div>
 
@@ -370,17 +403,16 @@ export default function AdminExamDetailsPage() {
                     >
                       <td className="px-4 py-2.5 text-sm font-medium" style={{ color: '#0F172A' }}>{invite.student_email}</td>
                       <td className="px-4 py-2.5 text-center">
-                        {invite.used ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border"
-                            style={{ background: '#ECFDF5', color: '#15803D', borderColor: '#BBF7D0' }}>
-                            <CheckCircle2 className="h-3 w-3" /> Accessed
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border"
-                            style={{ background: '#F8FAFC', color: '#475569', borderColor: '#E2E8F0' }}>
-                            <Clock className="h-3 w-3" /> Pending
-                          </span>
-                        )}
+                        {(() => {
+                          const ss = invite.session_status;
+                          if (ss === 'TERMINATED')
+                            return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border" style={{ background: '#FFF1F2', color: '#BE123C', borderColor: '#FECDD3' }}><ShieldAlert className="h-3 w-3" /> Terminated</span>;
+                          if (ss === 'ENDED' || invite.used)
+                            return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border" style={{ background: '#ECFDF5', color: '#15803D', borderColor: '#BBF7D0' }}><CheckCircle2 className="h-3 w-3" /> Completed</span>;
+                          if (ss === 'ACTIVE')
+                            return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border" style={{ background: '#EFF6FF', color: '#1D4ED8', borderColor: '#BFDBFE' }}><span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" /> In Progress</span>;
+                          return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border" style={{ background: '#F8FAFC', color: '#475569', borderColor: '#E2E8F0' }}><Clock className="h-3 w-3" /> Pending</span>;
+                        })()}
                       </td>
                     </tr>
                   ))

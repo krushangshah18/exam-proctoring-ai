@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import {
-  Loader2, CheckCircle2, ShieldAlert,
+  Loader2, CheckCircle2, Shield, ShieldAlert,
   Maximize2, Clock, Eye, BookOpen,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -58,6 +58,11 @@ function openSSE(url: string, token: string, handlers: Record<string, (data: any
 }
 
 type AlertKind = 'warning' | 'critical' | 'info' | 'success';
+type ExamAlert = {
+  id: string;
+  kind: AlertKind;
+  message: string;
+};
 
 /* ── main component ──────────────────────────────────────────────────────── */
 export default function ActiveExamPage() {
@@ -81,16 +86,31 @@ export default function ActiveExamPage() {
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [fullscreenExited, setFullscreenExited] = useState(false);
   const [tabSwitchCount, setTabSwitchCount]     = useState(0);
+  const [alerts, setAlerts]               = useState<ExamAlert[]>([]);
 
   const tabThreshold = exam?.config?.tab_switching ? (exam?.flag_threshold || 3) : Infinity;
 
-  /* push alert — toast only, auto-dismisses */
+  /* in-exam alerts — stacked, deduped, auto-dismissed */
   const pushAlert = useCallback((kind: AlertKind, message: string) => {
-    if (kind === 'critical') toast.error(message,   { duration: 6000 });
-    else if (kind === 'warning')  toast.warning(message, { duration: 6000 });
-    else if (kind === 'success')  toast.success(message, { duration: 5000 });
-    else                          toast.info(message,    { duration: 5000 });
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setAlerts(prev => {
+      const existingIndex = prev.findIndex(alert => alert.message === message);
+      if (existingIndex >= 0) {
+        const next = [...prev];
+        next[existingIndex] = { ...next[existingIndex], id, kind };
+        return next.slice(-4);
+      }
+      return [...prev, { id, kind, message }].slice(-4);
+    });
   }, []);
+
+  useEffect(() => {
+    if (!alerts.length) return;
+    const timers = alerts.map(alert => setTimeout(() => {
+      setAlerts(prev => prev.filter(item => item.id !== alert.id));
+    }, alert.kind === 'critical' ? 7000 : 5500));
+    return () => timers.forEach(clearTimeout);
+  }, [alerts]);
 
   /* timer */
   const startTimer = useCallback((remaining: number) => {
@@ -135,6 +155,11 @@ export default function ActiveExamPage() {
       TIME_EXTENDED: (data) => {
         pushAlert('success', `Time extended by ${data.added_minutes} minute(s)!`);
         setTimeLeft(prev => prev + data.added_minutes * 60);
+      },
+      TIME_UP: () => {
+        clearInterval(timerRef.current!);
+        setTimeLeft(0);
+        handleAutoSubmit();
       },
       TERMINATED: () => {
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -287,7 +312,7 @@ export default function ActiveExamPage() {
       if (!document.hidden) return;
       const next = tabSwitchCount + 1;
       setTabSwitchCount(next);
-      pushAlert('critical', `Tab switch detected (${next}/${exam?.flag_threshold || 3} warnings)`);
+      pushAlert('critical', `Tab switch detected (${next}/3 allowed)`);
       try {
         const res = await api.post(`/exam/${examId}/proctor-violation`, { reason: 'tab_switch' });
         if (res.data?.risk?.terminated) { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); router.replace(`/student/exam/${examId}/terminated`); }
@@ -318,6 +343,55 @@ export default function ActiveExamPage() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  const getAlertTheme = (kind: AlertKind) => {
+    if (kind === 'critical') {
+      return {
+        title: 'Exam Alert',
+        border: '1px solid rgba(220,38,38,0.2)',
+        background: 'linear-gradient(135deg, rgba(254,242,242,0.98) 0%, rgba(255,255,255,0.98) 100%)',
+        shadow: '0 18px 40px rgba(127,29,29,0.18)',
+        iconBg: 'rgba(220,38,38,0.1)',
+        iconColor: '#DC2626',
+        titleColor: '#B91C1C',
+        messageColor: '#991B1B',
+      };
+    }
+    if (kind === 'warning') {
+      return {
+        title: 'Warning',
+        border: '1px solid rgba(217,119,6,0.22)',
+        background: 'linear-gradient(135deg, rgba(255,251,235,0.98) 0%, rgba(255,255,255,0.98) 100%)',
+        shadow: '0 18px 40px rgba(146,64,14,0.14)',
+        iconBg: 'rgba(245,158,11,0.12)',
+        iconColor: '#D97706',
+        titleColor: '#B45309',
+        messageColor: '#92400E',
+      };
+    }
+    if (kind === 'success') {
+      return {
+        title: 'Time Extended',
+        border: '1px solid rgba(34,197,94,0.22)',
+        background: 'linear-gradient(135deg, rgba(240,253,244,0.98) 0%, rgba(255,255,255,0.98) 100%)',
+        shadow: '0 18px 40px rgba(21,128,61,0.14)',
+        iconBg: 'rgba(34,197,94,0.12)',
+        iconColor: '#16A34A',
+        titleColor: '#15803D',
+        messageColor: '#166534',
+      };
+    }
+    return {
+      title: 'Notice',
+      border: '1px solid rgba(37,99,235,0.18)',
+      background: 'linear-gradient(135deg, rgba(239,246,255,0.98) 0%, rgba(255,255,255,0.98) 100%)',
+      shadow: '0 18px 40px rgba(30,64,175,0.12)',
+      iconBg: 'rgba(37,99,235,0.1)',
+      iconColor: '#2563EB',
+      titleColor: '#1D4ED8',
+      messageColor: '#1E3A8A',
+    };
+  };
+
   /* ── loading screen ─────────────────────────────────────────────────────── */
   if (loading) {
     return (
@@ -345,6 +419,7 @@ export default function ActiveExamPage() {
         @keyframes ping  { 75%,100% { transform: scale(2); opacity: 0; } }
         @keyframes pulse-timer { 0%,100% { opacity: 1; } 50% { opacity: 0.65; } }
         @keyframes slide-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slide-alert { from { opacity: 0; transform: translateY(-8px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
       `}</style>
 
       {/* ── FULLSCREEN EXIT OVERLAY ────────────────────────────────────────── */}
@@ -448,6 +523,77 @@ export default function ActiveExamPage() {
           </button>
         </div>
       </header>
+
+      {alerts.length > 0 && (
+        <div style={{
+          position: 'fixed',
+          top: '70px',
+          right: '18px',
+          zIndex: 220,
+          width: 'min(380px, calc(100vw - 36px))',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          pointerEvents: 'none',
+        }}>
+          {alerts.map(alert => (
+            (() => {
+              const theme = getAlertTheme(alert.kind);
+              return (
+                <div
+                  key={alert.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '10px',
+                    padding: '12px 14px',
+                    borderRadius: '14px',
+                    border: theme.border,
+                    background: theme.background,
+                    boxShadow: theme.shadow,
+                    animation: 'slide-alert 180ms ease-out',
+                    pointerEvents: 'auto',
+                  }}
+                >
+                  <div style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '10px',
+                    flexShrink: 0,
+                    background: theme.iconBg,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}>
+                    <ShieldAlert style={{ width: '16px', height: '16px', color: theme.iconColor }} />
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{
+                      fontSize: '11px',
+                      fontWeight: 800,
+                      color: theme.titleColor,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.08em',
+                      marginBottom: '3px',
+                    }}>
+                      {theme.title}
+                    </p>
+                    <p style={{
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      lineHeight: 1.55,
+                      color: theme.messageColor,
+                      wordBreak: 'break-word',
+                    }}>
+                      {alert.message}
+                    </p>
+                  </div>
+                </div>
+              );
+            })()
+          ))}
+        </div>
+      )}
 
       {/* ── BODY ──────────────────────────────────────────────────────────── */}
       <div

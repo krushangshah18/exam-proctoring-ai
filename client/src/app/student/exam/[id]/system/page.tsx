@@ -36,7 +36,7 @@ function CheckCard({ icon, title, subtitle, status, error }: {
           </div>
           <div>
             <h3 style={{ fontSize: '14.5px', fontWeight: 700, color: '#0F172A' }}>{title}</h3>
-            <p style={{ fontSize: '12.5px', color: '#94A3B8', marginTop: '2px' }}>{subtitle}</p>
+            <p style={{ fontSize: '12.5px', color: '#64748B', marginTop: '2px' }}>{subtitle}</p>
           </div>
         </div>
         <StatusIndicator status={status} />
@@ -255,7 +255,7 @@ export default function SystemCheckPage() {
             )}
           </div>
 
-          <p style={{ textAlign: 'center', fontSize: '11.5px', color: '#94A3B8', marginTop: '14px', lineHeight: 1.6, maxWidth: '400px', margin: '14px auto 0' }}>
+          <p style={{ textAlign: 'center', fontSize: '11.5px', color: '#64748B', marginTop: '14px', lineHeight: 1.6, maxWidth: '400px', margin: '14px auto 0' }}>
             {isReconnect
               ? 'Your timer resumed from where it stopped. Any time lost may have been compensated.'
               : 'By clicking "Start Exam", your browser will be locked to the exam window. Navigating away may automatically terminate your attempt.'}

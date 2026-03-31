@@ -322,19 +322,40 @@ def create_exam(
     def _utc(dt: datetime) -> datetime:
         return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
+    from app.db.enums import ExamMode as _ExamMode
+    end_utc = _utc(data.end_window)
+    start_utc_val = _utc(data.start_window)
+
+    if data.exam_mode == _ExamMode.FLEXIBLE:
+        # Auto-derive hard_join_deadline = end_window − duration
+        computed_hjd = end_utc - timedelta(minutes=data.duration_minutes)
+        hard_join_deadline_val = computed_hjd
+        allow_late_ext = data.allow_late_extension
+        max_late = data.max_late_minutes
+    else:  # FIXED
+        # end_window must equal start_window + duration
+        expected_end = start_utc_val + timedelta(minutes=data.duration_minutes)
+        if abs((end_utc - expected_end).total_seconds()) > 60:
+            raise HTTPException(status_code=400, detail="FIXED exam: end_window must equal start_window + duration_minutes.")
+        if data.hard_join_deadline is None:
+            raise HTTPException(status_code=400, detail="FIXED exam: hard_join_deadline is required.")
+        hard_join_deadline_val = _utc(data.hard_join_deadline)
+        allow_late_ext = False
+        max_late = 0
+
     new_exam = models.Exam(
         title=data.title,
         created_by=current_admin.id,
         exam_mode=data.exam_mode.value,
         status=ExamStatus.SCHEDULED.value,
-        start_window=_utc(data.start_window),
-        end_window=_utc(data.end_window),
+        start_window=start_utc_val,
+        end_window=end_utc,
         duration_minutes=data.duration_minutes,
-        hard_join_deadline=_utc(data.hard_join_deadline),
+        hard_join_deadline=hard_join_deadline_val,
         flag_threshold=data.flag_threshold,
         late_join_policy=data.late_join_policy.value,
-        allow_late_extension=data.allow_late_extension,
-        max_late_minutes=data.max_late_minutes,
+        allow_late_extension=allow_late_ext,
+        max_late_minutes=max_late,
         config=data.config.model_dump(),
         detection_config=data.detection_config.model_dump(),
     )
@@ -442,6 +463,21 @@ def get_exam_detail(
 
     invites = db.query(models.ExamInvite).filter(models.ExamInvite.exam_id == exam.id).all()
 
+    # Build email → best session status map
+    _STATUS_PRIORITY = {'TERMINATED': 4, 'ENDED': 3, 'ACTIVE': 2, 'CREATED': 1}
+    sessions_with_users = (
+        db.query(models.ExamSession, models.User)
+        .join(models.User, models.User.id == models.ExamSession.user_id)
+        .filter(models.ExamSession.exam_id == exam.id)
+        .all()
+    )
+    session_map: dict[str, str] = {}
+    for sess, user in sessions_with_users:
+        email = user.email.lower()
+        existing = session_map.get(email)
+        if not existing or _STATUS_PRIORITY.get(sess.status, 0) > _STATUS_PRIORITY.get(existing, 0):
+            session_map[email] = sess.status
+
     return {
         "id": str(exam.id),
         "title": exam.title,
@@ -466,6 +502,7 @@ def get_exam_detail(
                 "token": inv.token,
                 "expires_at": inv.expires_at,
                 "used": inv.used,
+                "session_status": session_map.get(inv.student_email.lower()),
             }
             for inv in invites
         ],
@@ -514,9 +551,23 @@ def update_exam(
     def _utc(dt: datetime) -> datetime:
         return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
+    from app.db.enums import ExamMode as _ExamMode
     new_start = _utc(data.start_window)
     new_end = _utc(data.end_window)
-    new_deadline = _utc(data.hard_join_deadline)
+
+    if data.exam_mode == _ExamMode.FLEXIBLE:
+        new_deadline = new_end - timedelta(minutes=data.duration_minutes)
+        new_allow_late_ext = data.allow_late_extension
+        new_max_late = data.max_late_minutes
+    else:  # FIXED
+        expected_end = new_start + timedelta(minutes=data.duration_minutes)
+        if abs((new_end - expected_end).total_seconds()) > 60:
+            raise HTTPException(status_code=400, detail="FIXED exam: end_window must equal start_window + duration_minutes.")
+        if data.hard_join_deadline is None:
+            raise HTTPException(status_code=400, detail="FIXED exam: hard_join_deadline is required.")
+        new_deadline = _utc(data.hard_join_deadline)
+        new_allow_late_ext = False
+        new_max_late = 0
 
     # Detect schedule changes (UTC-aware comparison)
     schedule_changed = (
@@ -533,8 +584,8 @@ def update_exam(
     exam.hard_join_deadline = new_deadline
     exam.flag_threshold = data.flag_threshold
     exam.late_join_policy = data.late_join_policy.value
-    exam.allow_late_extension = data.allow_late_extension
-    exam.max_late_minutes = data.max_late_minutes
+    exam.allow_late_extension = new_allow_late_ext
+    exam.max_late_minutes = new_max_late
     exam.config = data.config.model_dump()
     exam.detection_config = data.detection_config.model_dump()
 
@@ -919,6 +970,9 @@ def extend_session_time(
     )
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
+    from app.db.enums import ExamMode as _ExamMode
+    if exam.exam_mode == _ExamMode.FIXED.value:
+        raise HTTPException(status_code=400, detail="Time extensions are not allowed for FIXED mode exams.")
 
     sess = db.query(models.ExamSession).filter(
         models.ExamSession.id == session_id,
@@ -968,6 +1022,9 @@ def bulk_extend_time(
     )
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
+    from app.db.enums import ExamMode as _ExamMode
+    if exam.exam_mode == _ExamMode.FIXED.value:
+        raise HTTPException(status_code=400, detail="Time extensions are not allowed for FIXED mode exams.")
 
     active_sessions = db.query(models.ExamSession).filter(
         models.ExamSession.exam_id == exam_id,
@@ -1143,8 +1200,9 @@ async def get_session_alert_history(
     if not session.proctor_pc_id or not session.proctor_engine_url:
         return {"alerts": [], "warnings": []}
 
-    try:
-        log_data = await fetch_session_log(session.proctor_engine_url, session.proctor_pc_id)
+    from app.core import log as _log
+
+    def _parse_log(log_data: dict):
         alerts = [
             {
                 "message"   : e.get("message", "Alert"),
@@ -1164,9 +1222,38 @@ async def get_session_alert_history(
             }
             for e in log_data.get("warning_log", [])
         ]
-        return {"alerts": list(reversed(alerts)), "warnings": list(reversed(warnings))}
-    except Exception:
-        return {"alerts": [], "warnings": []}
+        return list(reversed(alerts)), list(reversed(warnings))
+
+    # Try live session log first
+    try:
+        log_data = await fetch_session_log(session.proctor_engine_url, session.proctor_pc_id)
+        _log.info("alert-history session_log keys=%s alert_count=%d warning_count=%d",
+                  list(log_data.keys()),
+                  len(log_data.get("alert_log", [])),
+                  len(log_data.get("warning_log", [])))
+        alerts, warnings = _parse_log(log_data)
+        if alerts or warnings:
+            return {"alerts": alerts, "warnings": warnings}
+    except Exception as e:
+        _log.warning("alert-history fetch_session_log failed (pc_id=%s): %s", session.proctor_pc_id, e)
+
+    # Fall back to the persisted report (available for ENDED/TERMINATED sessions)
+    if session.proctor_report_id:
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=15.0, write=4.0, pool=4.0)) as client:
+                r = await client.get(f"{session.proctor_engine_url}/report/{session.proctor_report_id}")
+                r.raise_for_status()
+                alerts, warnings = _parse_log(r.json())
+                _log.info("alert-history report fallback report_id=%s alerts=%d warnings=%d",
+                          session.proctor_report_id, len(alerts), len(warnings))
+                return {"alerts": alerts, "warnings": warnings}
+        except Exception as e:
+            _log.warning("alert-history report fallback failed (report_id=%s): %s", session.proctor_report_id, e)
+
+    _log.warning("alert-history returning empty for session=%s (pc_id=%s, report_id=%s)",
+                 session_id, session.proctor_pc_id, session.proctor_report_id)
+    return {"alerts": [], "warnings": []}
 
 
 class DebugModeBody(BaseModel):

@@ -136,7 +136,7 @@ export default function VerifyOTPPage() {
           </button>
         </div>
 
-        <p style={{ textAlign: 'center', fontSize: '13px', color: '#94A3B8', marginTop: '16px' }}>
+        <p style={{ textAlign: 'center', fontSize: '13px', color: '#64748B', marginTop: '16px' }}>
           Didn&apos;t receive the code?{' '}
           <button
             type="button"

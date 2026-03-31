@@ -70,7 +70,7 @@ export default function ForgotPasswordPage() {
           }}>
             <MailCheck style={{ width: '26px', height: '26px', color: '#57CC99' }} />
           </div>
-          <p style={{ color: '#94A3B8', fontSize: '13px' }}>
+          <p style={{ color: '#64748B', fontSize: '13px' }}>
             Didn&apos;t receive it?{' '}
             <button
               type="button"

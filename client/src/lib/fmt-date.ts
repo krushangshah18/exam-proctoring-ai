@@ -41,6 +41,12 @@ const DATETIME_OPTS: Intl.DateTimeFormatOptions = {
 const DATETIME_TZ_OPTS: Intl.DateTimeFormatOptions = {
   ...DATE_OPTS, ...TIME_TZ_OPTS,
 };
+const IST_DATE_OPTS: Intl.DateTimeFormatOptions = {
+  day: 'numeric', month: 'numeric', year: 'numeric', timeZone: 'Asia/Kolkata',
+};
+const IST_DATETIME_OPTS: Intl.DateTimeFormatOptions = {
+  hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZone: 'Asia/Kolkata',
+};
 
 // ─── Without timezone label (use for compact/secondary displays) ──────────────
 
@@ -85,4 +91,20 @@ export function fmtDateTimeTZ(iso: string): string {
 export function fmtDateTimeTZFromDate(d: Date): string {
   if (isNaN(d.getTime())) return '—';
   return d.toLocaleString(undefined, DATETIME_TZ_OPTS);
+}
+
+/** "31/3/2026, 11:03:28 AM IST" — always displayed in India Standard Time */
+export function fmtDateTimeIST(iso: string): string {
+  const d = parseUTC(iso);
+  if (isNaN(d.getTime())) return '—';
+  const date = d.toLocaleDateString('en-IN', IST_DATE_OPTS);
+  const time = d.toLocaleTimeString('en-IN', IST_DATETIME_OPTS);
+  return `${date}, ${time} IST`;
+}
+
+/** "11:03:28 AM IST" — always displayed in India Standard Time */
+export function fmtTimeIST(iso: string): string {
+  const d = parseUTC(iso);
+  if (isNaN(d.getTime())) return '—';
+  return `${d.toLocaleTimeString('en-IN', IST_DATETIME_OPTS)} IST`;
 }

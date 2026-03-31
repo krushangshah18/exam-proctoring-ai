@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Loader2, RefreshCw, ShieldAlert,
-  AlertTriangle, FileText, Users, Clock, HardDrive, Eye, X, AlertCircle, ChevronRight, ChevronDown,
+  AlertTriangle, FileText, Users, Clock, Eye, X, AlertCircle, ChevronRight, ChevronDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
@@ -85,10 +85,12 @@ function StatusBadge({ status }: { status: string }) {
 
 function fmtDuration(s: number | null): string {
   if (s == null) return '—';
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  if (h > 0) return `${h}h ${m % 60}m`;
-  return `${m}m ${s % 60}s`;
+  const total = Math.floor(s);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (h > 0) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
 function fmtDateTime(iso: string | null): string {
@@ -184,24 +186,30 @@ function FullReportModal({
           {data && (
             <>
               {/* Summary grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {[
-                  { label: 'Risk State', value: <RiskBadge state={data.risk_state} /> },
-                  { label: 'Final Score', value: <span className="font-bold" style={{ color: '#0F172A' }}>{data.final_score?.toFixed(0) ?? '—'}</span> },
-                  { label: 'Alerts', value: <span className="font-bold" style={{ color: '#EF4444' }}>{data.alert_count ?? 0}</span> },
-                  { label: 'Warnings', value: <span className="font-bold" style={{ color: '#F59E0B' }}>{data.warning_count ?? 0}</span> },
-                  { label: 'Duration', value: fmtDuration(data.duration_s) },
-                  { label: 'Size', value: data.size_kb ? `${data.size_kb.toFixed(0)} KB` : '—' },
-                  { label: 'Proofs', value: data.proof_count ?? 0 },
-                  { label: 'Terminated', value: data.terminated ? <span className="font-semibold" style={{ color: '#EF4444' }}>Yes</span> : 'No' },
-                ].map(({ label, value }) => (
-                  <div key={label} className="rounded-lg border p-3"
-                    style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#94A3B8' }}>{label}</p>
-                    <div className="text-sm">{value}</div>
+              {(() => {
+                const riskState   = data.risk_state   ?? session.risk_state;
+                const finalScore  = data.final_score  ?? session.final_score  ?? session.risk_score;
+                const isTerminated = data.terminated  ?? session.terminated   ?? false;
+                const rows = [
+                  { label: 'Risk State',  value: <RiskBadge state={riskState} /> },
+                  { label: 'Final Score', value: <span className="font-bold" style={{ color: '#0F172A' }}>{finalScore != null ? Number(finalScore).toFixed(0) : '—'}</span> },
+                  { label: 'Alerts',      value: <span className="font-bold" style={{ color: '#EF4444' }}>{data.alert_count ?? 0}</span> },
+                  { label: 'Warnings',    value: <span className="font-bold" style={{ color: '#F59E0B' }}>{data.warning_count ?? 0}</span> },
+                  { label: 'Duration',    value: fmtDuration(data.duration_s ?? session.duration_s) },
+                  { label: 'Terminated',  value: isTerminated ? <span className="font-semibold" style={{ color: '#EF4444' }}>Yes</span> : <span style={{ color: '#475569' }}>No</span> },
+                ];
+                return (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {rows.map(({ label, value }) => (
+                      <div key={label} className="rounded-lg border p-3"
+                        style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
+                        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#94A3B8' }}>{label}</p>
+                        <div className="text-sm">{value}</div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                );
+              })()}
 
               {/* Events */}
               {(() => {
@@ -306,7 +314,6 @@ export default function ExamReportsPage() {
 
   const withReports = reports.filter(r => r.report_id);
   const totalAlerts = withReports.reduce((s, r) => s + (r.alert_count ?? 0), 0);
-  const totalSize = withReports.reduce((s, r) => s + (r.size_kb ?? 0), 0);
   const studentGroups: StudentGroup[] = Object.values(
     reports.reduce<Record<string, StudentGroup>>((acc, report) => {
       const key = report.student_email || report.session_id;
@@ -330,11 +337,13 @@ export default function ExamReportsPage() {
     );
   }
 
+  const totalWarnings = withReports.reduce((s, r) => s + (r.warning_count ?? 0), 0);
+
   const statCards = [
-    { label: 'Students',          value: studentGroups.length,           icon: Users,      iconBg: '#EFF6FF',  iconColor: '#22577A' },
-    { label: 'Reports Available', value: withReports.length,             icon: FileText,   iconBg: '#ECFDF5',  iconColor: '#15803D' },
-    { label: 'Total Alerts',      value: totalAlerts,                    icon: ShieldAlert, iconBg: '#FFF1F2', iconColor: '#BE123C' },
-    { label: 'Storage Used',      value: `${(totalSize / 1024).toFixed(1)} MB`, icon: HardDrive, iconBg: '#FFFBEB', iconColor: '#B45309' },
+    { label: 'Students',          value: studentGroups.length, icon: Users,      iconBg: '#EFF6FF',  iconColor: '#22577A' },
+    { label: 'Reports Available', value: withReports.length,   icon: FileText,   iconBg: '#ECFDF5',  iconColor: '#15803D' },
+    { label: 'Total Alerts',      value: totalAlerts,          icon: ShieldAlert, iconBg: '#FFF1F2', iconColor: '#BE123C' },
+    { label: 'Total Warnings',    value: totalWarnings,        icon: AlertTriangle, iconBg: '#FFFBEB', iconColor: '#B45309' },
   ];
 
   return (
@@ -443,13 +452,7 @@ export default function ExamReportsPage() {
                             <p className="font-semibold text-sm" style={{ color: '#0F172A' }}>
                               Segment {group.reports.length - idx}
                             </p>
-                            <StatusBadge status={r.session_status} />
-                            {r.terminated && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold border"
-                                style={{ background: '#FFF1F2', color: '#BE123C', borderColor: '#FECDD3' }}>
-                                Terminated
-                              </span>
-                            )}
+                            <StatusBadge status={r.terminated ? 'TERMINATED' : (r.session_status === 'TERMINATED' ? 'ENDED' : r.session_status)} />
                           </div>
                           <div className="flex items-center gap-4 mt-2 text-xs flex-wrap" style={{ color: '#94A3B8' }}>
                             <span className="flex items-center gap-1">
@@ -461,7 +464,7 @@ export default function ExamReportsPage() {
                             )}
                             {r.duration_s != null && <span>{fmtDuration(r.duration_s)}</span>}
                           </div>
-                          {r.terminated_reason && (
+                          {r.terminated && r.terminated_reason && (
                             <p className="text-xs mt-1" style={{ color: '#EF4444' }}>
                               Reason: {r.terminated_reason}
                             </p>
@@ -486,16 +489,6 @@ export default function ExamReportsPage() {
                               <p className="text-xl font-bold" style={{ color: '#F59E0B' }}>{r.warning_count ?? 0}</p>
                               <p className="text-xs" style={{ color: '#94A3B8' }}>Warnings</p>
                             </div>
-                            <div className="text-center">
-                              <p className="text-sm font-semibold" style={{ color: '#475569' }}>{r.size_kb ? `${r.size_kb.toFixed(0)} KB` : '—'}</p>
-                              <p className="text-xs" style={{ color: '#94A3B8' }}>Size</p>
-                            </div>
-                            {r.proof_count != null && r.proof_count > 0 && (
-                              <div className="text-center">
-                                <p className="text-sm font-semibold" style={{ color: '#475569' }}>{r.proof_count}</p>
-                                <p className="text-xs" style={{ color: '#94A3B8' }}>Proofs</p>
-                              </div>
-                            )}
                             <button
                               onClick={() => setViewSession(r)}
                               className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border transition-all duration-150"

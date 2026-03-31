@@ -59,11 +59,13 @@ class ExamCreateRequest(BaseModel):
     start_window: datetime
     end_window: datetime
     duration_minutes: int = Field(..., gt=0)
-    hard_join_deadline: datetime
+    # FLEXIBLE: backend auto-derives as end_window − duration; FIXED: admin-provided
+    hard_join_deadline: datetime | None = None
 
-    flag_threshold: int = Field(default=30, ge=0)
+    flag_threshold: int = Field(default=3, ge=0)
 
     late_join_policy: LateJoinPolicy = LateJoinPolicy.REVIEW
+    # FIXED mode: always forced False by backend
     allow_late_extension: bool = False
     max_late_minutes: int = Field(default=0, ge=0)
 
@@ -83,15 +85,6 @@ class ExamCreateRequest(BaseModel):
         start = values.get("start_window")
         if start and v <= start:
             raise ValueError("end_window must be after start_window")
-        return v
-
-    @validator("hard_join_deadline")
-    def deadline_in_window(cls, v, values):
-        start = values.get("start_window")
-        end = values.get("end_window")
-        if start and end:
-            if v < start or v > end:
-                raise ValueError("hard_join_deadline must be between start_window and end_window")
         return v
 
     @validator("invites", each_item=True)
@@ -117,9 +110,10 @@ class ExamUpdateRequest(BaseModel):
     start_window: datetime
     end_window: datetime
     duration_minutes: int = Field(..., gt=0)
-    hard_join_deadline: datetime
+    # FLEXIBLE: backend auto-derives as end_window − duration; FIXED: admin-provided
+    hard_join_deadline: datetime | None = None
 
-    flag_threshold: int = Field(default=30, ge=0)
+    flag_threshold: int = Field(default=3, ge=0)
 
     late_join_policy: LateJoinPolicy = LateJoinPolicy.REVIEW
     allow_late_extension: bool = False
@@ -141,15 +135,6 @@ class ExamUpdateRequest(BaseModel):
         start = values.get("start_window")
         if start and v <= start:
             raise ValueError("end_window must be after start_window")
-        return v
-
-    @validator("hard_join_deadline")
-    def deadline_in_window(cls, v, values):
-        start = values.get("start_window")
-        end = values.get("end_window")
-        if start and end:
-            if v < start or v > end:
-                raise ValueError("hard_join_deadline must be between start_window and end_window")
         return v
 
     @validator("invites", each_item=True)
@@ -184,6 +169,7 @@ class ExamInviteResponse(BaseModel):
     token: str
     expires_at: datetime
     used: bool
+    session_status: str | None = None
 
     class Config:
         from_attributes = True

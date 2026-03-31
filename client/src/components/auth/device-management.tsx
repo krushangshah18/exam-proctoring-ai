@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Laptop, Smartphone, Trash2, ShieldCheck, ShieldAlert, Globe } from 'lucide-react';
+import { Laptop, Smartphone, Trash2, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -13,7 +13,8 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import api from '@/lib/axios';
-
+import { fmtDateTimeIST } from '@/lib/fmt-date';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 import { jwtDecode } from 'jwt-decode';
 
@@ -36,6 +37,7 @@ export default function DeviceManagement() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentFingerprint, setCurrentFingerprint] = useState<string | null>(null);
+  const [deviceToRevoke, setDeviceToRevoke] = useState<Device | null>(null);
 
   const fetchDevices = async () => {
     try {
@@ -63,11 +65,10 @@ export default function DeviceManagement() {
   }, []);
 
   const handleRevoke = async (deviceId: string) => {
-    if (!confirm("Are you sure you want to revoke this device? It will be logged out immediately.")) return;
-
     try {
       await api.post(`/auth/devices/${deviceId}/revoke`);
       toast.success("Device revoked successfully");
+      setDeviceToRevoke(null);
       fetchDevices(); // Refresh list
     } catch (error: any) {
       console.error(error);
@@ -82,74 +83,94 @@ export default function DeviceManagement() {
   );
 
   return (
-    <Card className="w-full max-w-4xl mx-auto mt-8">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Laptop className="h-6 w-6" />
-          Active Sessions & Devices
-        </CardTitle>
-        <CardDescription>
-          Manage the devices that have accessed your account.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-4">
-          {devices.map((device) => {
-             const isCurrent = device.fingerprint === currentFingerprint;
-             return (
-            <div
-              key={device.id}
-              className={`flex items-center justify-between p-4 border rounded-lg transition-colors ${
-                isCurrent 
-                  ? 'bg-primary/5 border-primary/20' 
-                  : 'bg-card hover:bg-accent/10'
-              }`}
-            >
-              <div className="flex items-start gap-4">
-                <div className={`p-2 rounded-full ${isCurrent ? 'bg-primary/10 text-primary' : 'bg-secondary'}`}>
-                   {device.user_agent.toLowerCase().includes('mobile') ? <Smartphone className="h-5 w-5" /> : <Laptop className="h-5 w-5" />}
-                </div>
-                <div>
-                  <div className="font-medium flex items-center gap-2">
-                    {device.ip_address}
-                    {isCurrent && (
-                      <Badge className="bg-primary hover:bg-primary/90">Current Device</Badge>
-                    )}
-                    {device.trusted ? (
-                      <Badge variant="secondary" className="text-green-600 bg-green-100 dark:bg-green-900/30">
-                        <ShieldCheck className="w-3 h-3 mr-1" /> Trusted
-                      </Badge>
-                    ) : (
-                       <Badge variant="outline" className="text-yellow-600">Pending</Badge>
-                    )}
-                    {device.revoked && <Badge variant="destructive">Revoked</Badge>}
-                  </div>
-                  <p className="text-sm text-muted-foreground truncate max-w-md" title={device.user_agent}>
-                    {device.user_agent}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Last active: {new Date(device.last_seen).toLocaleString()}
-                  </p>
-                </div>
-              </div>
-              
-              {!device.revoked && !isCurrent && (
-                <Button 
-                  variant="destructive" 
-                  size="sm"
-                  onClick={() => handleRevoke(device.id)}
+    <>
+      <Card className="w-full max-w-4xl mx-auto mt-8">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Laptop className="h-6 w-6" />
+            Active Sessions & Devices
+          </CardTitle>
+          <CardDescription className="text-slate-600">
+            Manage the devices that have accessed your account.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {devices.map((device) => {
+              const isCurrent = device.fingerprint === currentFingerprint;
+              return (
+                <div
+                  key={device.id}
+                  className={`flex items-center justify-between p-4 border rounded-lg transition-colors ${
+                    isCurrent
+                      ? 'bg-primary/5 border-primary/20'
+                      : 'bg-card hover:bg-accent/10'
+                  }`}
                 >
-                  <Trash2 className="h-4 w-4 mr-1" />
-                  Revoke
-                </Button>
-              )}
-            </div>
-          )})}
-          {devices.length === 0 && (
-             <p className="text-center text-muted-foreground">No device history found.</p>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+                  <div className="flex items-start gap-4">
+                    <div className={`p-2 rounded-full ${isCurrent ? 'bg-primary/10 text-primary' : 'bg-secondary'}`}>
+                      {device.user_agent.toLowerCase().includes('mobile') ? <Smartphone className="h-5 w-5" /> : <Laptop className="h-5 w-5" />}
+                    </div>
+                    <div>
+                      <div className="font-medium flex items-center gap-2">
+                        {device.ip_address}
+                        {isCurrent && (
+                          <Badge className="bg-primary hover:bg-primary/90">Current Device</Badge>
+                        )}
+                        {device.trusted ? (
+                          <Badge variant="secondary" className="text-green-600 bg-green-100 dark:bg-green-900/30">
+                            <ShieldCheck className="w-3 h-3 mr-1" /> Trusted
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-yellow-600">Pending</Badge>
+                        )}
+                        {device.revoked && <Badge variant="destructive">Revoked</Badge>}
+                      </div>
+                      <p className="max-w-md truncate text-sm text-slate-500" title={device.user_agent}>
+                        {device.user_agent}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Last active: {fmtDateTimeIST(device.last_seen)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {!device.revoked && !isCurrent && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => setDeviceToRevoke(device)}
+                    >
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Revoke
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+            {devices.length === 0 && (
+              <p className="text-center text-slate-600">No device history found.</p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <ConfirmDialog
+        isOpen={!!deviceToRevoke}
+        onOpenChange={(open) => {
+          if (!open) setDeviceToRevoke(null);
+        }}
+        title="Revoke device access?"
+        description={
+          deviceToRevoke
+            ? `This will immediately sign out the device at ${deviceToRevoke.ip_address}.`
+            : 'This will immediately sign out the selected device.'
+        }
+        confirmLabel="Revoke Device"
+        cancelLabel="Cancel"
+        variant="destructive"
+        onConfirm={() => deviceToRevoke && handleRevoke(deviceToRevoke.id)}
+      />
+    </>
   );
 }

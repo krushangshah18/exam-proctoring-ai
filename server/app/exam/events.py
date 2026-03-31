@@ -14,11 +14,17 @@ Queue lifecycle:
 """
 
 import asyncio
-import json
 from typing import Dict
 
 # session_id (str) → asyncio.Queue
 _queues: Dict[str, asyncio.Queue] = {}
+_main_loop: asyncio.AbstractEventLoop | None = None
+
+
+def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Register the app's main event loop for thread-safe sync event pushes."""
+    global _main_loop
+    _main_loop = loop
 
 
 def get_queue(session_id: str) -> asyncio.Queue:
@@ -45,16 +51,17 @@ async def push_event(session_id: str, event_type: str, data: dict) -> None:
 def push_event_sync(session_id: str, event_type: str, data: dict) -> None:
     """
     Push an event from a sync context (sync FastAPI route handler).
-    Uses call_soon_threadsafe so the asyncio event loop handles the put.
+    Uses the app's registered main event loop so threadpool handlers can
+    still enqueue SSE events reliably.
     """
-    if session_id not in _queues:
+    if session_id not in _queues or _main_loop is None:
         return
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.call_soon_threadsafe(
-                _queues[session_id].put_nowait,
-                {"type": event_type, "data": data},
-            )
-    except (RuntimeError, asyncio.QueueFull):
+        _main_loop.call_soon_threadsafe(
+            _queues[session_id].put_nowait,
+            {"type": event_type, "data": data},
+        )
+    except RuntimeError:
+        pass
+    except asyncio.QueueFull:
         pass

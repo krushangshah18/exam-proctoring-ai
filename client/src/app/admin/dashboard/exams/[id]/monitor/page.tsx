@@ -10,6 +10,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import api from "@/lib/axios";
+import { fmtTimeIST } from "@/lib/fmt-date";
 
 // ──────────────────────────────────────────────
 // Types
@@ -193,21 +194,21 @@ function ExpandableAlertRow({ entry, index, engineUrl }: { entry: AlertEntry; in
   return (
     <div className="rounded-lg overflow-hidden border" style={{ borderColor: '#FECDD3', background: 'rgba(254,242,242,0.5)' }}>
       <button className="w-full px-3 py-2.5 flex items-start gap-2 text-left" onClick={() => setExpanded(e => !e)}>
-        <span className="text-xs font-mono mt-0.5 shrink-0" style={{ color: '#94A3B8' }}>{String(index + 1).padStart(2, '0')}</span>
+        <span className="text-xs font-mono mt-0.5 shrink-0" style={{ color: '#64748B' }}>{String(index + 1).padStart(2, '0')}</span>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium leading-snug" style={{ color: '#BE123C' }}>{entry.message}</p>
           {entry.score_added !== undefined && entry.score_added > 0 && (
-            <p className="text-xs mt-0.5" style={{ color: '#FDA4AF' }}>+{entry.score_added.toFixed(1)} pts · {new Date(entry.ts).toLocaleTimeString()}</p>
+            <p className="text-xs mt-0.5" style={{ color: '#FDA4AF' }}>+{entry.score_added.toFixed(1)} pts · {fmtTimeIST(new Date(entry.ts).toISOString())}</p>
           )}
         </div>
         {entry.proof_url && (
-          <span className="text-xs shrink-0" style={{ color: '#94A3B8' }}>{expanded ? '▲' : '▼'}</span>
+          <span className="text-xs shrink-0" style={{ color: '#64748B' }}>{expanded ? '▲' : '▼'}</span>
         )}
       </button>
       {expanded && entry.proof_url && (
         <div className="px-3 pb-3">
           {!proofObjectUrl ? (
-            <div className="flex items-center gap-2 py-3 text-xs" style={{ color: '#94A3B8' }}>
+            <div className="flex items-center gap-2 py-3 text-xs" style={{ color: '#64748B' }}>
               <Loader2 className="h-4 w-4 animate-spin" /> Loading proof...
             </div>
           ) : entry.proof_type === 'audio' ? (
@@ -216,7 +217,7 @@ function ExpandableAlertRow({ entry, index, engineUrl }: { entry: AlertEntry; in
             </audio>
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={proofObjectUrl} alt="Proof" className="w-full rounded-lg object-cover mt-1" style={{ maxHeight: 160 }} />
+            <img src={proofObjectUrl} alt="Proof" className="w-full rounded-lg object-contain mt-1" style={{ maxHeight: 320, background: '#0F172A' }} />
           )}
         </div>
       )}
@@ -224,9 +225,10 @@ function ExpandableAlertRow({ entry, index, engineUrl }: { entry: AlertEntry; in
   );
 }
 
-function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated }: {
+function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionTerminated }: {
   session: SessionCard;
   examId: string;
+  examMode: string;
   onScoreUpdate: (sessionId: string, score: number) => void;
   onSessionTerminated: () => void;
 }) {
@@ -246,16 +248,21 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
   const [debugMode, setDebugMode] = useState(false);
   const [togglingDebug, setTogglingDebug] = useState(false);
   const sseCloseRef = useRef<(() => void) | null>(null);
-  const frameIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const frameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const frameAbortRef = useRef<AbortController | null>(null);
   const prevFrameUrl = useRef<string | null>(null);
+  const frameFetchingRef = useRef(false);
 
   const fetchFrame = useCallback(async () => {
+    if (frameFetchingRef.current) return;
+    frameFetchingRef.current = true;
+    frameAbortRef.current = new AbortController();
     const token = localStorage.getItem('access_token') || '';
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     try {
       const res = await fetch(
         `${base}/admin/exams/${examId}/sessions/${session.session_id}/live-frame`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        { headers: { Authorization: `Bearer ${token}` }, signal: frameAbortRef.current.signal }
       );
       if (res.status === 204 || !res.ok) return;
       const blob = await res.blob();
@@ -264,8 +271,9 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
       const old = prevFrameUrl.current;
       prevFrameUrl.current = url;
       setFrameUrl(url);
-      if (old) setTimeout(() => URL.revokeObjectURL(old), 1000);
+      if (old) URL.revokeObjectURL(old);
     } catch {}
+    finally { frameFetchingRef.current = false; }
   }, [examId, session.session_id]);
 
   useEffect(() => {
@@ -279,13 +287,13 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
             proof_type: e.proof_type ?? 'image', score_added: e.score_added ?? 0,
             ts: now - (e.elapsed_s ?? 0) * 1000,
           }));
-          setAlerts(prev => [...prev, ...histAlerts]);
+          setAlerts(histAlerts);
         }
         if (data.warnings?.length) {
           const histWarnings: WarningEntry[] = data.warnings.map((e: any) => ({
             message: e.message, ts: now - (e.elapsed_s ?? 0) * 1000,
           }));
-          setWarnings(prev => [...prev, ...histWarnings]);
+          setWarnings(histWarnings);
         }
       })
       .catch(() => {})
@@ -295,8 +303,16 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
 
   useEffect(() => {
     if (session.status !== 'ACTIVE') return;
-    fetchFrame();
-    frameIntervalRef.current = setInterval(fetchFrame, 1500);
+
+    let stopped = false;
+    const loop = async () => {
+      while (!stopped) {
+        await fetchFrame();
+        await new Promise(r => { frameTimerRef.current = setTimeout(r, 800); });
+      }
+    };
+    loop();
+
     const token = localStorage.getItem('access_token') || '';
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     sseCloseRef.current = openSSE(
@@ -306,8 +322,10 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
         message: (d: any) => {
           if (d?.risk) {
             const risk: RiskInfo = {
-              score: d.risk.score ?? 0, fixed: d.risk.fixed ?? 0,
-              decaying: d.risk.decaying, state: d.risk.state ?? 'NORMAL',
+              score: d.risk.score ?? 0,
+              fixed: d.risk.fixed ?? 0,
+              decaying: d.risk.decaying,
+              state: d.risk.state ?? 'NORMAL',
               terminated: d.risk.terminated,
             };
             setLiveRisk(risk);
@@ -328,9 +346,11 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
       }
     );
     return () => {
-      if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+      stopped = true;
+      if (frameTimerRef.current) clearTimeout(frameTimerRef.current);
+      frameAbortRef.current?.abort();
       sseCloseRef.current?.();
-      if (prevFrameUrl.current) URL.revokeObjectURL(prevFrameUrl.current);
+      if (prevFrameUrl.current) { URL.revokeObjectURL(prevFrameUrl.current); prevFrameUrl.current = null; }
     };
   }, [session.session_id, session.status, fetchFrame]);
 
@@ -376,7 +396,7 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
         <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid #1E293B' }}>
           <div className="flex items-center gap-2">
             <Bot className="h-4 w-4" style={{ color: '#818CF8' }} />
-            <span className="text-sm font-medium" style={{ color: '#CBD5E1' }}>AI Proctoring Feed</span>
+            <span className="text-sm font-medium" style={{ color: '#475569' }}>AI Proctoring Feed</span>
             {session.status === 'ACTIVE' && (
               <span className="flex items-center gap-1 text-xs font-semibold px-1.5 py-0.5 rounded"
                 style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>
@@ -402,8 +422,8 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
           {frameUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={frameUrl} alt="Live proctoring frame"
-              className="w-full aspect-video rounded-lg object-cover"
-              style={{ background: '#1E293B' }} />
+              className="w-full rounded-lg object-contain"
+              style={{ background: '#1E293B', maxHeight: '360px' }} />
           ) : (
             <div className="aspect-video rounded-lg flex flex-col items-center justify-center gap-3"
               style={{ background: '#1E293B', border: '1px solid #334155' }}>
@@ -432,13 +452,13 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
               style={{ color: RISK_COLORS[liveRisk.state] ?? '#22c55e', letterSpacing: '-0.03em' }}>
               {Math.round(liveRisk.score)}
             </p>
-            <span className="text-xs mb-1.5" style={{ color: '#94A3B8' }}>/ 100</span>
+            <span className="text-xs mb-1.5" style={{ color: '#64748B' }}>/ 100</span>
           </div>
           <div className="h-2 rounded-full overflow-hidden" style={{ background: '#F1F5F9' }}>
             <div className="h-2 rounded-full transition-all duration-700"
               style={{ width: `${Math.min(liveRisk.score, 100)}%`, background: RISK_COLORS[liveRisk.state] ?? '#22c55e' }} />
           </div>
-          <div className="flex gap-4 text-xs" style={{ color: '#94A3B8' }}>
+          <div className="flex gap-4 text-xs" style={{ color: '#64748B' }}>
             <span>Fixed <span className="font-semibold" style={{ color: '#475569' }}>{Math.round(liveRisk.fixed)}</span></span>
             {liveRisk.decaying !== undefined && (
               <span>Decaying <span className="font-semibold" style={{ color: '#475569' }}>{Math.round(liveRisk.decaying)}</span></span>
@@ -453,17 +473,17 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
           <div className="grid grid-cols-3 gap-3 pt-2" style={{ borderTop: '1px solid #F1F5F9' }}>
             <div className="text-center">
               <p className="text-lg font-bold" style={{ color: '#EF4444' }}>{alerts.length}</p>
-              <p className="text-xs" style={{ color: '#94A3B8' }}>Alerts</p>
+              <p className="text-xs" style={{ color: '#64748B' }}>Alerts</p>
             </div>
             <div className="text-center">
               <p className="text-lg font-bold" style={{ color: '#F59E0B' }}>{warnings.length}</p>
-              <p className="text-xs" style={{ color: '#94A3B8' }}>Warnings</p>
+              <p className="text-xs" style={{ color: '#64748B' }}>Warnings</p>
             </div>
             <div className="text-center">
               <p className="text-lg font-bold" style={{ color: '#475569' }}>
                 {session.time_extension_seconds > 0 ? `+${Math.round(session.time_extension_seconds / 60)}m` : '–'}
               </p>
-              <p className="text-xs" style={{ color: '#94A3B8' }}>Time Ext.</p>
+              <p className="text-xs" style={{ color: '#64748B' }}>Time Ext.</p>
             </div>
           </div>
         </div>
@@ -478,7 +498,7 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
             className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px`}
             style={alertTab === 'alerts'
               ? { borderBottomColor: '#EF4444', color: '#BE123C' }
-              : { borderBottomColor: 'transparent', color: '#94A3B8' }
+              : { borderBottomColor: 'transparent', color: '#64748B' }
             }
           >
             Alerts
@@ -492,7 +512,7 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
             className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors -mb-px`}
             style={alertTab === 'warnings'
               ? { borderBottomColor: '#F59E0B', color: '#B45309' }
-              : { borderBottomColor: 'transparent', color: '#94A3B8' }
+              : { borderBottomColor: 'transparent', color: '#64748B' }
             }
           >
             Warnings
@@ -505,25 +525,25 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
         <div className="p-3">
           <div className="space-y-2 max-h-56 overflow-y-auto">
             {!historyLoaded ? (
-              <div className="flex items-center justify-center gap-2 py-6 text-sm" style={{ color: '#94A3B8' }}>
+              <div className="flex items-center justify-center gap-2 py-6 text-sm" style={{ color: '#64748B' }}>
                 <Loader2 className="h-4 w-4 animate-spin" /> Loading history…
               </div>
             ) : alertTab === 'alerts' ? (
               alerts.length === 0
-                ? <p className="text-sm text-center py-6" style={{ color: '#94A3B8' }}>No alerts yet</p>
+                ? <p className="text-sm text-center py-6" style={{ color: '#64748B' }}>No alerts yet</p>
                 : alerts.map((a, i) => (
                   <ExpandableAlertRow key={i} entry={a} index={alerts.length - 1 - i} engineUrl={session.proctor_engine_url} />
                 ))
             ) : (
               warnings.length === 0
-                ? <p className="text-sm text-center py-6" style={{ color: '#94A3B8' }}>No warnings yet</p>
+                ? <p className="text-sm text-center py-6" style={{ color: '#64748B' }}>No warnings yet</p>
                 : warnings.map((w, i) => (
                   <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-lg border text-xs"
                     style={{ background: 'rgba(255,251,235,0.5)', borderColor: '#FDE68A' }}>
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" style={{ color: '#F59E0B' }} />
                     <div>
                       <p style={{ color: '#B45309' }}>{w.message}</p>
-                      <p className="mt-0.5" style={{ color: '#FDE68A' }}>{new Date(w.ts).toLocaleTimeString()}</p>
+                      <p className="mt-0.5" style={{ color: '#FDE68A' }}>{fmtTimeIST(new Date(w.ts).toISOString())}</p>
                     </div>
                   </div>
                 ))
@@ -537,27 +557,41 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
         <div className="bg-white rounded-xl border overflow-hidden"
           style={{ borderColor: '#E2E8F0', boxShadow: '0 1px 3px rgba(15,23,42,0.04)' }}>
           <div className="flex items-center gap-2 px-4 py-3" style={{ borderBottom: '1px solid #F1F5F9' }}>
-            <Timer className="h-4 w-4" style={{ color: '#15803D' }} />
+            <Timer className="h-4 w-4" style={{ color: examMode === 'FIXED' ? '#94A3B8' : '#15803D' }} />
             <span className="text-sm font-semibold" style={{ color: '#0F172A' }}>Grant Extra Time</span>
+            {examMode === 'FIXED' && (
+              <span className="text-xs px-2 py-0.5 rounded-full ml-auto"
+                style={{ background: '#F1F5F9', color: '#64748B', border: '1px solid #E2E8F0' }}>
+                Disabled — FIXED mode
+              </span>
+            )}
           </div>
-          <div className="p-4 flex gap-3">
-            <input
-              type="number" min={1} placeholder="Minutes"
-              value={extMinutes} onChange={(e) => setExtMinutes(e.target.value)}
-              className="w-32 px-3 py-2 text-sm rounded-lg border outline-none transition-all"
-              style={{ borderColor: '#E2E8F0', color: '#0F172A' }}
-              onFocus={e => { (e.target as HTMLElement).style.borderColor = '#38A3A5'; (e.target as HTMLElement).style.boxShadow = '0 0 0 3px rgba(56,163,165,0.12)'; }}
-              onBlur={e => { (e.target as HTMLElement).style.borderColor = '#E2E8F0'; (e.target as HTMLElement).style.boxShadow = 'none'; }}
-            />
-            <button
-              onClick={handleExtend} disabled={extending}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white transition-all duration-150"
-              style={{ background: extending ? '#94A3B8' : '#15803D', cursor: extending ? 'not-allowed' : 'pointer' }}
-            >
-              {extending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Grant Extension
-            </button>
-          </div>
+          {examMode !== 'FIXED' ? (
+            <div className="p-4 flex gap-3">
+              <input
+                type="number" min={1} placeholder="Minutes"
+                value={extMinutes} onChange={(e) => setExtMinutes(e.target.value)}
+                className="w-32 px-3 py-2 text-sm rounded-lg border outline-none transition-all"
+                style={{ borderColor: '#E2E8F0', color: '#0F172A' }}
+                onFocus={e => { (e.target as HTMLElement).style.borderColor = '#38A3A5'; (e.target as HTMLElement).style.boxShadow = '0 0 0 3px rgba(56,163,165,0.12)'; }}
+                onBlur={e => { (e.target as HTMLElement).style.borderColor = '#E2E8F0'; (e.target as HTMLElement).style.boxShadow = 'none'; }}
+              />
+              <button
+                onClick={handleExtend} disabled={extending}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white transition-all duration-150"
+                style={{ background: extending ? '#94A3B8' : '#15803D', cursor: extending ? 'not-allowed' : 'pointer' }}
+              >
+                {extending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Grant Extension
+              </button>
+            </div>
+          ) : (
+            <div className="p-4">
+              <p className="text-sm" style={{ color: '#64748B' }}>
+                Time extensions are not allowed in FIXED mode. All students share the same absolute deadline.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -574,7 +608,7 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
               <span className="text-sm font-semibold" style={{ color: '#BE123C' }}>Terminate Session</span>
             </div>
             {liveRisk.score < 100 && (
-              <span className="text-xs" style={{ color: '#94A3B8' }}>Available at risk ≥ 100</span>
+              <span className="text-xs" style={{ color: '#64748B' }}>Available at risk ≥ 100</span>
             )}
           </div>
           <div className="p-4 space-y-3">
@@ -596,7 +630,7 @@ function LiveMonitorPanel({ session, examId, onScoreUpdate, onSessionTerminated 
                 </button>
               </>
             ) : (
-              <p className="text-sm" style={{ color: '#94A3B8' }}>
+              <p className="text-sm" style={{ color: '#64748B' }}>
                 The terminate button unlocks when the student's risk score reaches 100.
                 Current score: <strong>{Math.round(liveRisk.score)}</strong>.
               </p>
@@ -696,7 +730,7 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
             <div className="flex items-start justify-between px-5 py-4" style={{ borderBottom: '1px solid #FDE68A' }}>
               <div>
                 <p className="font-semibold" style={{ color: '#0F172A' }}>{rr.student_name}</p>
-                <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{rr.student_email}</p>
+                <p className="text-xs mt-0.5" style={{ color: '#64748B' }}>{rr.student_email}</p>
               </div>
               <div className="flex items-center gap-2">
                 <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold border"
@@ -711,7 +745,7 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
             </div>
             <div className="p-5 space-y-4">
               <div className="p-3 rounded-lg border" style={{ background: '#fff', borderColor: '#E2E8F0' }}>
-                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#94A3B8' }}>Student's Reason</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: '#64748B' }}>Student's Reason</p>
                 <p className="text-sm leading-relaxed" style={{ color: '#475569' }}>"{rr.reason}"</p>
               </div>
 
@@ -730,8 +764,8 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
               {!isDisconnect && (
                 <div className="flex items-start gap-2 p-2.5 rounded-lg border"
                   style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
-                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" style={{ color: '#94A3B8' }} />
-                  <p className="text-xs" style={{ color: '#94A3B8' }}>
+                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" style={{ color: '#64748B' }} />
+                  <p className="text-xs" style={{ color: '#64748B' }}>
                     Timer continued running during this appeal. No extra time is typically granted for {rr.termination_type === "ADMIN" ? "admin-terminated" : "system-flagged"} sessions, but you may still add minutes if appropriate.
                   </p>
                 </div>
@@ -739,7 +773,7 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
 
               <div className="grid sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-semibold block mb-1.5" style={{ color: '#94A3B8' }}>Review Note (optional)</label>
+                  <label className="text-xs font-semibold block mb-1.5" style={{ color: '#64748B' }}>Review Note (optional)</label>
                   <Textarea
                     placeholder="Add a note for the student…"
                     rows={2}
@@ -749,7 +783,7 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold block mb-1.5" style={{ color: '#94A3B8' }}>
+                  <label className="text-xs font-semibold block mb-1.5" style={{ color: '#64748B' }}>
                     {isDisconnect ? "Extra Minutes if Approved" : "Extra Minutes (optional)"}
                   </label>
                   <input
@@ -762,7 +796,7 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
                     onBlur={e => { (e.target as HTMLElement).style.borderColor = '#E2E8F0'; (e.target as HTMLElement).style.boxShadow = 'none'; }}
                   />
                   {isDisconnect && rr.suggested_extension_minutes && (
-                    <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
+                    <p className="text-xs mt-1" style={{ color: '#64748B' }}>
                       Suggested: {rr.suggested_extension_minutes} min
                     </p>
                   )}
@@ -797,14 +831,14 @@ function AppealsPanel({ examId, onUpdate }: { examId: string; onUpdate: () => vo
 
       {reviewed.length > 0 && (
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: '#94A3B8' }}>Reviewed</p>
+          <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: '#64748B' }}>Reviewed</p>
           <div className="space-y-2">
             {reviewed.slice(0, 10).map((rr) => (
               <div key={rr.id} className="flex items-center justify-between p-3 rounded-xl border"
                 style={{ background: '#fff', borderColor: '#E2E8F0' }}>
                 <div>
                   <p className="text-sm font-medium" style={{ color: '#0F172A' }}>{rr.student_name}</p>
-                  <p className="text-xs truncate mt-0.5" style={{ color: '#94A3B8' }}>"{rr.reason}"</p>
+                  <p className="text-xs truncate mt-0.5" style={{ color: '#64748B' }}>"{rr.reason}"</p>
                 </div>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border ml-3 shrink-0"
                   style={rr.status === "APPROVED"
@@ -842,6 +876,7 @@ export default function MonitoringDashboard() {
   const [bulkMinutes, setBulkMinutes] = useState("");
   const [bulkExtending, setBulkExtending] = useState(false);
   const [search, setSearch] = useState('');
+  const [examMode, setExamMode] = useState<string>('FLEXIBLE');
 
   useEffect(() => {
     setActiveTab(searchParams.get('tab') === 'appeals' ? 'appeals' : 'sessions');
@@ -856,6 +891,10 @@ export default function MonitoringDashboard() {
   const handleScoreUpdate = useCallback((sessionId: string, score: number) => {
     setSessions(prev => prev.map(s => s.session_id === sessionId ? { ...s, risk_score: score } : s));
   }, []);
+
+  useEffect(() => {
+    api.get(`/admin/exams/${examId}`).then(res => setExamMode(res.data.exam_mode ?? 'FLEXIBLE')).catch(() => {});
+  }, [examId]);
 
   const fetchSessions = useCallback(async () => {
     try {
@@ -926,7 +965,7 @@ export default function MonitoringDashboard() {
         </button>
         <div className="flex-1">
           <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Live Monitoring</h1>
-          <p className="text-sm mt-0.5" style={{ color: '#94A3B8' }}>Real-time session overview and appeal management</p>
+          <p className="text-sm mt-0.5" style={{ color: '#64748B' }}>Real-time session overview and appeal management</p>
         </div>
         <button
           onClick={fetchSessions}
@@ -953,7 +992,7 @@ export default function MonitoringDashboard() {
               </div>
               <div>
                 <p className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.03em' }}>{value}</p>
-                <p className="text-xs" style={{ color: '#94A3B8' }}>{label}</p>
+                <p className="text-xs" style={{ color: '#64748B' }}>{label}</p>
               </div>
             </div>
           </div>
@@ -961,7 +1000,7 @@ export default function MonitoringDashboard() {
       </div>
 
       {/* Bulk time extension */}
-      {activeSessions.length > 0 && (
+      {activeSessions.length > 0 && examMode !== 'FIXED' && (
         <div className="rounded-xl border p-4 flex flex-wrap items-center gap-4"
           style={{ background: '#ECFDF5', borderColor: '#BBF7D0' }}>
           <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: '#15803D' }}>
@@ -995,7 +1034,7 @@ export default function MonitoringDashboard() {
           className="px-5 py-2 rounded-md text-sm font-medium transition-all"
           style={activeTab === "sessions"
             ? { background: '#fff', color: '#0F172A', boxShadow: '0 1px 3px rgba(15,23,42,0.08)' }
-            : { background: 'transparent', color: '#94A3B8' }
+            : { background: 'transparent', color: '#64748B' }
           }
         >
           <div className="flex items-center gap-2">
@@ -1009,7 +1048,7 @@ export default function MonitoringDashboard() {
           className="px-5 py-2 rounded-md text-sm font-medium transition-all"
           style={activeTab === "appeals"
             ? { background: '#fff', color: '#0F172A', boxShadow: '0 1px 3px rgba(15,23,42,0.08)' }
-            : { background: 'transparent', color: '#94A3B8' }
+            : { background: 'transparent', color: '#64748B' }
           }
         >
           <div className="flex items-center gap-2">
@@ -1043,7 +1082,7 @@ export default function MonitoringDashboard() {
             {filteredSessions.length === 0 ? (
               <div className="text-center py-16">
                 <Users className="h-12 w-12 mx-auto mb-3" style={{ color: '#E2E8F0' }} />
-                <p className="text-sm" style={{ color: '#94A3B8' }}>
+                <p className="text-sm" style={{ color: '#64748B' }}>
                   {sessions.length === 0 ? 'No student sessions yet' : 'No students match your search'}
                 </p>
               </div>
@@ -1073,7 +1112,7 @@ export default function MonitoringDashboard() {
                               </span>
                             )}
                           </div>
-                          <p className="text-xs truncate mt-0.5" style={{ color: '#94A3B8' }}>{sess.student_email}</p>
+                          <p className="text-xs truncate mt-0.5" style={{ color: '#64748B' }}>{sess.student_email}</p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           <StatusBadge status={sess.status} />
@@ -1083,11 +1122,11 @@ export default function MonitoringDashboard() {
 
                       <RiskBar score={sess.risk_score} />
 
-                      <div className="flex items-center gap-4 text-xs flex-wrap" style={{ color: '#94A3B8' }}>
+                      <div className="flex items-center gap-4 text-xs flex-wrap" style={{ color: '#64748B' }}>
                         {sess.last_heartbeat && (
                           <span className="flex items-center gap-1">
                             <Activity className="h-3 w-3" style={{ color: '#86EFAC' }} />
-                            Last seen {new Date(sess.last_heartbeat).toLocaleTimeString()}
+                            Last seen {fmtTimeIST(sess.last_heartbeat)}
                           </span>
                         )}
                         {sess.time_extension_seconds > 0 && (
@@ -1113,13 +1152,15 @@ export default function MonitoringDashboard() {
                     <h2 className="text-lg font-semibold flex items-center gap-2" style={{ color: '#0F172A' }}>
                       <Eye className="h-5 w-5" style={{ color: '#22577A' }} /> {selectedSession.student_name}
                     </h2>
-                    <p className="text-sm mt-0.5" style={{ color: '#94A3B8' }}>{selectedSession.student_email}</p>
+                    <p className="text-sm mt-0.5" style={{ color: '#64748B' }}>{selectedSession.student_email}</p>
                   </div>
                   <StatusBadge status={selectedSession.status} />
                 </div>
                 <LiveMonitorPanel
+                  key={selectedSession.session_id}
                   session={selectedSession}
                   examId={examId}
+                  examMode={examMode}
                   onScoreUpdate={handleScoreUpdate}
                   onSessionTerminated={() => { fetchSessions(); setSelectedSession(null); }}
                 />
@@ -1128,7 +1169,7 @@ export default function MonitoringDashboard() {
               <div className="flex flex-col items-center justify-center h-64 rounded-xl border-2 border-dashed"
                 style={{ borderColor: '#E2E8F0' }}>
                 <Eye className="h-10 w-10 mb-3" style={{ color: '#E2E8F0' }} />
-                <p className="text-sm" style={{ color: '#94A3B8' }}>Select a student to open the live monitor</p>
+                <p className="text-sm" style={{ color: '#64748B' }}>Select a student to open the live monitor</p>
               </div>
             )}
           </div>

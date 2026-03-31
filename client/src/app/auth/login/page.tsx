@@ -80,12 +80,12 @@ export default function LoginPage() {
         'Proof capture & detailed reports',
       ]}
       footer={
-        <>
+        <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', columnGap: '8px', rowGap: '4px' }}>
           Don&apos;t have an account?{' '}
           <a href="/auth/register" className="auth-link">Register</a>
-          <span style={{ margin: '0 8px', color: '#E2E8F0' }}>|</span>
+          <span style={{ color: '#94A3B8', fontWeight: 500 }}>|</span>
           <a href="/auth/teacher-apply" className="auth-link">Apply as Teacher</a>
-        </>
+        </span>
       }
     >
       <form onSubmit={handleSubmit(onSubmit)}>
@@ -100,15 +100,17 @@ export default function LoginPage() {
 
         <AuthField
           label={
-            <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              Password
+            <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+              <span>
+                Password
+                <span style={{ color: '#EF4444', marginLeft: '3px', whiteSpace: 'nowrap' }}>*</span>
+              </span>
               <a href="/auth/forgot-password" className="auth-link" style={{ fontSize: '12px', fontWeight: 500 }}>
                 Forgot password?
               </a>
             </span> as any
           }
           error={errors.password?.message}
-          required
         >
           <PasswordInput hasError={!!errors.password} {...register('password')} />
         </AuthField>

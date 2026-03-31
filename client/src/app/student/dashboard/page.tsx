@@ -43,10 +43,10 @@ function ExamCard({ exam, onClick }: { exam: UpcomingExam; onClick: () => void }
       onMouseLeave={() => setHovered(false)}
       style={{
         background: '#fff',
-        border: `1.5px solid ${isLive ? 'rgba(34,197,94,0.35)' : hovered ? '#38A3A5' : '#E2E8F0'}`,
+        border: `1.5px solid ${isLive ? 'rgba(34,197,94,0.42)' : hovered ? '#38A3A5' : '#CBD5E1'}`,
         borderRadius: '12px', padding: '18px 20px', cursor: 'pointer',
         transition: 'border-color 150ms, box-shadow 150ms',
-        boxShadow: hovered ? '0 4px 16px rgba(34,87,122,0.1)' : '0 1px 3px rgba(0,0,0,0.04)',
+        boxShadow: hovered ? '0 10px 24px rgba(34,87,122,0.12)' : '0 6px 18px rgba(15,23,42,0.05)',
         position: 'relative', overflow: 'hidden',
       }}
     >
@@ -101,8 +101,8 @@ function ExamCard({ exam, onClick }: { exam: UpcomingExam; onClick: () => void }
       <div style={{ marginTop: '14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{
           fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
-          letterSpacing: '0.08em', color: '#94A3B8',
-          background: '#F8FAFC', padding: '3px 8px', borderRadius: '4px', border: '1px solid #E2E8F0',
+          letterSpacing: '0.08em', color: '#64748B',
+          background: '#F8FAFC', padding: '3px 8px', borderRadius: '4px', border: '1px solid #CBD5E1',
         }}>
           {exam.exam_mode}
         </span>
@@ -188,6 +188,7 @@ export default function StudentDashboard() {
           background: 'linear-gradient(135deg, #22577A 0%, #38A3A5 100%)',
           borderRadius: '14px', padding: '28px 32px', marginBottom: '28px',
           position: 'relative', overflow: 'hidden',
+          boxShadow: '0 18px 40px rgba(34, 87, 122, 0.16)',
         }}>
           {/* Dot grid */}
           <div style={{
@@ -255,10 +256,11 @@ export default function StudentDashboard() {
         {/* Upcoming Exams */}
         <div style={{ marginBottom: '28px' }} className="st-fadein">
           <div style={{
-            background: '#fff', border: '1.5px solid #E2E8F0', borderRadius: '14px', overflow: 'hidden',
+            background: '#fff', border: '1.5px solid #CBD5E1', borderRadius: '14px', overflow: 'hidden',
+            boxShadow: '0 12px 28px rgba(15,23,42,0.05)',
           }}>
             <div style={{
-              padding: '18px 22px', borderBottom: '1px solid #F1F5F9',
+              padding: '18px 22px', borderBottom: '1px solid #E2E8F0',
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             }}>
               <SectionHeader

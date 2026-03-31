@@ -93,6 +93,7 @@ export default function EnvironmentCheckPage() {
   const [noiseStatus, setNoiseStatus] = useState<CheckStatus>('pending');
   const [faceStatus, setFaceStatus]   = useState<CheckStatus>('pending');
   const [objStatus, setObjStatus]     = useState<CheckStatus>('pending');
+  const [noiseErrorHint, setNoiseErrorHint] = useState<string>('');
   const [objErrorHint, setObjErrorHint] = useState<string>('');
 
   const startStream = useCallback(async () => {
@@ -137,20 +138,54 @@ export default function EnvironmentCheckPage() {
 
   const checkNoise = useCallback(async (mediaStream: MediaStream) => {
     setNoiseStatus('checking');
+    setNoiseErrorHint('');
     const ctx = new window.AudioContext();
     const analyser = ctx.createAnalyser();
-    analyser.fftSize = 256;
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.85;
     ctx.createMediaStreamSource(mediaStream).connect(analyser);
-    const arr = new Uint8Array(analyser.frequencyBinCount);
+    const arr = new Float32Array(analyser.fftSize);
+
     await new Promise<void>(resolve => {
-      let cycles = 0; let peak = 0;
+      const samples: number[] = [];
+      const durationMs = 2500;
+      const startedAt = performance.now();
+
       const tick = () => {
-        analyser.getByteFrequencyData(arr);
-        const vol = arr.reduce((a, b) => a + b, 0) / arr.length;
-        if (vol > peak) peak = vol;
-        if (++cycles < 60) requestAnimationFrame(tick);
-        else { ctx.close(); setNoiseStatus(peak > 70 ? 'fail' : 'pass'); if (peak > 70) toast.error('Background noise too high.'); resolve(); }
+        analyser.getFloatTimeDomainData(arr);
+
+        let sumSquares = 0;
+        for (let i = 0; i < arr.length; i += 1) {
+          sumSquares += arr[i] * arr[i];
+        }
+        const rms = Math.sqrt(sumSquares / arr.length);
+        samples.push(rms);
+
+        if (performance.now() - startedAt < durationMs) {
+          requestAnimationFrame(tick);
+          return;
+        }
+
+        const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
+        const peak = Math.max(...samples);
+        const loudFrames = samples.filter(level => level > 0.05).length;
+        const loudRatio = loudFrames / samples.length;
+
+        ctx.close();
+
+        const failed = peak > 0.12 || avg > 0.035 || loudRatio > 0.3;
+
+        if (failed) {
+          setNoiseStatus('fail');
+          setNoiseErrorHint('Too much continuous background sound was detected. Reduce fan noise, nearby voices, or other ambient audio and retry.');
+          toast.error('Background noise is too high. Keep the room quieter and retry.');
+        } else {
+          setNoiseStatus('pass');
+        }
+
+        resolve();
       };
+
       tick();
     });
   }, []);
@@ -244,8 +279,7 @@ export default function EnvironmentCheckPage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
             {/* Camera preview */}
-            <div style={{ borderRadius: '12px', overflow: 'hidden', border: '1.5px solid #CBD5E1', boxShadow: '0 1px 4px rgba(15,23,42,0.08)', background: '#0F172A' }}>
-              <div style={{ aspectRatio: '16/9', position: 'relative' }}>
+            <div style={{ aspectRatio: '4/3', position: 'relative', borderRadius: '12px', overflow: 'hidden', border: '1.5px solid #CBD5E1', boxShadow: '0 1px 4px rgba(15,23,42,0.08)', background: '#0F172A', lineHeight: 0 }}>
                 <video
                   ref={videoRef}
                   autoPlay playsInline muted
@@ -270,7 +304,6 @@ export default function EnvironmentCheckPage() {
                     </div>
                   </div>
                 )}
-              </div>
             </div>
 
             {/* Checks + proceed */}
@@ -290,6 +323,7 @@ export default function EnvironmentCheckPage() {
                 subtitle="Monitoring for quiet environment"
                 status={noiseStatus}
                 onRetry={() => streamRef.current && checkNoise(streamRef.current)}
+                errorHint={noiseErrorHint}
               />
               <CheckRow
                 icon={<ScanFace style={{ width: '17px', height: '17px', color: '#22C55E' }} />}

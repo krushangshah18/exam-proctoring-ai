@@ -283,6 +283,7 @@ def get_exam_status(
         "allowed_to_start": allowed_to_start,
         "time_until_open_ms": time_until_open_ms,
         "config": exam.config,
+        "detection_config": exam.detection_config,
         "resume_state": get_resume_state(session, db),
     }
 
@@ -328,6 +329,7 @@ def get_session_active(
         "terminated_by": session.terminated_by,
         "server_now": datetime.now(UTC).isoformat(),
         "title": exam.title,
+        "exam_mode": exam.exam_mode,
         "flag_threshold": exam.flag_threshold,
         "config": exam.config,
         "active_resume_request": {
@@ -771,14 +773,6 @@ def start_exam(
         )
 
         if is_late:
-            if exam.allow_late_extension and exam.max_late_minutes and exam.max_late_minutes > 0:
-                max_cutoff = start_time + timedelta(minutes=exam.max_late_minutes)
-                if now > max_cutoff:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"The maximum late join window ({exam.max_late_minutes} minutes past exam start) has passed.",
-                    )
-
             if exam.late_join_policy == LateJoinPolicy.DENY.value:
                 raise HTTPException(status_code=403, detail="Hard deadline passed. Late joins are not permitted.")
             elif exam.late_join_policy == LateJoinPolicy.REVIEW.value:
@@ -848,16 +842,40 @@ def start_exam(
                 log.info("Reconnect/resume: cleared stale engine session pc_id=%s for session=%s",
                          old_pc_id, session.id)
     else:
+        join_time = datetime.now(UTC)
         session = models.ExamSession(
             user_id=current_user.id,
             exam_id=exam_id,
             status=SessionStatus.ACTIVE.value,
-            start_time=datetime.now(UTC),
+            start_time=join_time,
             device_fingerprint=device_fp,
             ip_address=request.client.host,
             user_agent=request.headers.get("user-agent"),
         )
         db.add(session)
+
+        # ── Set mode-aware time extension ────────────────────────────────────
+        from app.db.enums import ExamMode as _ExamMode
+        def _to_utc(dt):
+            return dt.replace(tzinfo=UTC) if dt and dt.tzinfo is None else dt
+
+        if exam.exam_mode == _ExamMode.FIXED.value:
+            # All students share deadline = start_window + duration
+            # extension encodes the offset: deadline = join_time + duration + extension
+            exam_start_utc = _to_utc(exam.start_window)
+            extension_s = int((exam_start_utc - join_time).total_seconds())
+            if extension_s < 0:  # late joiner loses time
+                session.time_extension_seconds = extension_s
+        else:  # FLEXIBLE
+            hjd = _to_utc(exam.hard_join_deadline)
+            if hjd and join_time > hjd:
+                # Late joiner: remaining time = end_window - join + bonus
+                end_utc = _to_utc(exam.end_window)
+                remaining_s = (end_utc - join_time).total_seconds()
+                bonus_s = (exam.max_late_minutes or 0) * 60 if exam.allow_late_extension else 0
+                total_s = remaining_s + bonus_s
+                extension_s = int(total_s - exam.duration_minutes * 60)  # negative
+                session.time_extension_seconds = extension_s
 
     db.commit()
     db.refresh(session)

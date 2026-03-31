@@ -81,12 +81,14 @@ const PRESETS = {
     detection: { DETECT_LOOKING_AWAY: true, DETECT_LOOKING_DOWN: true, DETECT_LOOKING_UP: true, DETECT_LOOKING_SIDE: true, DETECT_FACE_HIDDEN: true, DETECT_PARTIAL_FACE: true, DETECT_FAKE_PRESENCE: true, DETECT_SPEAKER_AUDIO: true, DETECT_PHONE: true, DETECT_BOOK: true, DETECT_HEADPHONE: true, DETECT_EARBUD: true, DETECT_MULTIPLE_PEOPLE: true },
   },
   MEDIUM: {
-    config: { eye_gaze: false, looking_away: true, static_photo: true, phone_detected: true, book_detected: false, earphones: true, audio_analysis: true, multiple_person: true, tab_switching: true },
-    detection: { DETECT_LOOKING_AWAY: true, DETECT_LOOKING_DOWN: false, DETECT_LOOKING_UP: false, DETECT_LOOKING_SIDE: true, DETECT_FACE_HIDDEN: true, DETECT_PARTIAL_FACE: true, DETECT_FAKE_PRESENCE: true, DETECT_SPEAKER_AUDIO: true, DETECT_PHONE: true, DETECT_BOOK: false, DETECT_HEADPHONE: true, DETECT_EARBUD: true, DETECT_MULTIPLE_PEOPLE: true },
+    // RELAXED + tab switching + looking side + book
+    config: { eye_gaze: false, looking_away: false, static_photo: true, phone_detected: true, book_detected: true, earphones: true, audio_analysis: true, multiple_person: true, tab_switching: true },
+    detection: { DETECT_LOOKING_AWAY: false, DETECT_LOOKING_DOWN: false, DETECT_LOOKING_UP: false, DETECT_LOOKING_SIDE: true, DETECT_FACE_HIDDEN: true, DETECT_PARTIAL_FACE: true, DETECT_FAKE_PRESENCE: true, DETECT_SPEAKER_AUDIO: true, DETECT_PHONE: true, DETECT_BOOK: true, DETECT_HEADPHONE: true, DETECT_EARBUD: true, DETECT_MULTIPLE_PEOPLE: true },
   },
   RELAXED: {
-    config: { eye_gaze: false, looking_away: false, static_photo: true, phone_detected: true, book_detected: false, earphones: false, audio_analysis: false, multiple_person: true, tab_switching: false },
-    detection: { DETECT_LOOKING_AWAY: false, DETECT_LOOKING_DOWN: false, DETECT_LOOKING_UP: false, DETECT_LOOKING_SIDE: false, DETECT_FACE_HIDDEN: true, DETECT_PARTIAL_FACE: true, DETECT_FAKE_PRESENCE: true, DETECT_SPEAKER_AUDIO: false, DETECT_PHONE: true, DETECT_BOOK: false, DETECT_HEADPHONE: false, DETECT_EARBUD: false, DETECT_MULTIPLE_PEOPLE: true },
+    // Core detections only: static photo, audio, phone, headphone, earbud, multiple people
+    config: { eye_gaze: false, looking_away: false, static_photo: true, phone_detected: true, book_detected: false, earphones: true, audio_analysis: true, multiple_person: true, tab_switching: false },
+    detection: { DETECT_LOOKING_AWAY: false, DETECT_LOOKING_DOWN: false, DETECT_LOOKING_UP: false, DETECT_LOOKING_SIDE: false, DETECT_FACE_HIDDEN: true, DETECT_PARTIAL_FACE: true, DETECT_FAKE_PRESENCE: true, DETECT_SPEAKER_AUDIO: true, DETECT_PHONE: true, DETECT_BOOK: false, DETECT_HEADPHONE: true, DETECT_EARBUD: true, DETECT_MULTIPLE_PEOPLE: true },
   },
 };
 
@@ -159,19 +161,29 @@ export default function CreateExamPage() {
     maxHardJoin = endWindow;
   }
 
+  // FIXED: lock end_window = start + duration, force no extensions
   useEffect(() => {
     if (examMode === 'FIXED') {
-      form.setValue('late_join_policy', 'DENY');
       form.setValue('allow_late_extension', false);
+      form.setValue('max_late_minutes', 0);
       if (startWindow && durationMinutes) {
         const s = new Date(startWindow);
-        if (!isNaN(s.getTime())) {
+        if (!isNaN(s.getTime()))
           form.setValue('end_window', toLocalInputString(new Date(s.getTime() + Number(durationMinutes) * 60000)));
-          form.setValue('hard_join_deadline', toLocalInputString(new Date(s.getTime() + 5 * 60000)));
-        }
       }
     }
   }, [examMode, startWindow, durationMinutes, form]);
+
+  // FLEXIBLE: auto-derive hard_join_deadline = end_window − duration
+  useEffect(() => {
+    if (examMode === 'FLEXIBLE' && endWindow && durationMinutes) {
+      const end = new Date(endWindow);
+      if (!isNaN(end.getTime())) {
+        const hjd = new Date(end.getTime() - Number(durationMinutes) * 60000);
+        form.setValue('hard_join_deadline', toLocalInputString(hjd));
+      }
+    }
+  }, [examMode, endWindow, durationMinutes, form]);
 
   const showDurationWarning = () => {
     if (!hardJoinDeadline || !durationMinutes || !endWindow) return false;
@@ -277,7 +289,7 @@ export default function CreateExamPage() {
                   <FormControl>
                     <input type="text" placeholder="e.g. CS401 Midterm Examination"
                       className={inputBase} style={inputStyle}
-                      onFocus={inputFocus} onBlur={inputBlur} {...field} />
+                      onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -301,7 +313,7 @@ export default function CreateExamPage() {
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Duration (Minutes)</FormLabel>
                   <FormControl>
                     <input type="number" min={1} className={inputBase} style={inputStyle}
-                      onFocus={inputFocus} onBlur={inputBlur} {...field} />
+                      onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -327,7 +339,7 @@ export default function CreateExamPage() {
                   <FormControl>
                     <input type="datetime-local" min={minStartString}
                       className={inputBase} style={inputStyle}
-                      onFocus={inputFocus} onBlur={inputBlur} {...field} />
+                      onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                   </FormControl>
                   {field.value && <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>{formatDatePreview(field.value)}</p>}
                   <FormMessage />
@@ -343,7 +355,7 @@ export default function CreateExamPage() {
                       disabled={examMode === 'FIXED'}
                       className={inputBase}
                       style={{ ...inputStyle, background: examMode === 'FIXED' ? '#F8FAFC' : undefined, opacity: examMode === 'FIXED' ? 0.6 : 1 }}
-                      onFocus={inputFocus} onBlur={inputBlur} {...field} />
+                      onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                   </FormControl>
                   {field.value && <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>{formatDatePreview(field.value)}</p>}
                   {examMode === 'FIXED' && <FormDescription>Auto-calculated from duration.</FormDescription>}
@@ -357,12 +369,17 @@ export default function CreateExamPage() {
                   <FormControl>
                     <input type="datetime-local"
                       min={startWindow || minStartString}
-                      max={maxHardJoin || undefined}
-                      className={inputBase} style={inputStyle}
-                      onFocus={inputFocus} onBlur={inputBlur} {...field} />
+                      max={examMode === 'FLEXIBLE' ? endWindow || undefined : undefined}
+                      disabled={examMode === 'FLEXIBLE'}
+                      className={inputBase}
+                      style={{ ...inputStyle, background: examMode === 'FLEXIBLE' ? '#F8FAFC' : undefined, opacity: examMode === 'FLEXIBLE' ? 0.7 : 1 }}
+                      onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                   </FormControl>
                   {field.value && <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>{formatDatePreview(field.value)}</p>}
-                  {examMode === 'FIXED' && <FormDescription>Max 5 minutes past start — auto-set.</FormDescription>}
+                  {examMode === 'FLEXIBLE'
+                    ? <FormDescription>Auto-calculated: end window − duration.</FormDescription>
+                    : <FormDescription>Latest time students may join the exam.</FormDescription>
+                  }
                   <FormMessage />
                 </FormItem>
               )} />
@@ -423,7 +440,7 @@ export default function CreateExamPage() {
                     <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Max Late Join (Mins past start)</FormLabel>
                     <FormControl>
                       <input type="number" min={1} className={inputBase} style={inputStyle}
-                        onFocus={inputFocus} onBlur={inputBlur} {...field} />
+                        onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                     </FormControl>
                     <FormDescription>Absolute cutoff: this many minutes after exam start time.</FormDescription>
                     <FormMessage />
@@ -460,40 +477,49 @@ export default function CreateExamPage() {
                 </FormItem>
               )} />
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-5 rounded-xl border"
-                style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
-                {[
-                  { id: 'DETECT_LOOKING_AWAY', label: 'Looking Away' },
-                  { id: 'DETECT_LOOKING_DOWN', label: 'Looking Down' },
-                  { id: 'DETECT_LOOKING_UP', label: 'Looking Up' },
-                  { id: 'DETECT_LOOKING_SIDE', label: 'Looking Side' },
-                  { id: 'DETECT_FACE_HIDDEN', label: 'Face Hidden' },
-                  { id: 'DETECT_PARTIAL_FACE', label: 'Partial Face' },
-                  { id: 'DETECT_FAKE_PRESENCE', label: 'Static Photo Spoofing' },
-                  { id: 'DETECT_SPEAKER_AUDIO', label: 'Speaker / Audio' },
-                  { id: 'DETECT_PHONE', label: 'Phone Detection' },
-                  { id: 'DETECT_BOOK', label: 'Book Detection' },
-                  { id: 'DETECT_HEADPHONE', label: 'Headphone Detection' },
-                  { id: 'DETECT_EARBUD', label: 'Earbud Detection' },
-                  { id: 'DETECT_MULTIPLE_PEOPLE', label: 'Multiple People' },
-                ].map(item => (
-                  <FormField key={item.id} control={form.control} name={`detection_config.${item.id}` as any} render={({ field }) => (
+              <div className="space-y-3">
+                {/* Always-on detections */}
+                <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg border"
+                  style={{ background: '#ECFDF5', borderColor: '#BBF7D0' }}>
+                  <ShieldCheck className="h-3.5 w-3.5 shrink-0" style={{ color: '#15803D' }} />
+                  <p className="text-xs font-medium" style={{ color: '#15803D' }}>
+                    <span className="font-semibold">Always enabled:</span> Face Hidden &amp; Partial Face — required for presence verification.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-5 rounded-xl border"
+                  style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
+                  {[
+                    { id: 'DETECT_LOOKING_AWAY', label: 'Eye Gaze' },
+                    { id: 'DETECT_LOOKING_DOWN', label: 'Head — Down' },
+                    { id: 'DETECT_LOOKING_UP', label: 'Head — Up' },
+                    { id: 'DETECT_LOOKING_SIDE', label: 'Head — Side' },
+                    { id: 'DETECT_FAKE_PRESENCE', label: 'Static Photo / Spoof' },
+                    { id: 'DETECT_SPEAKER_AUDIO', label: 'Speaker / Audio' },
+                    { id: 'DETECT_PHONE', label: 'Phone Detection' },
+                    { id: 'DETECT_BOOK', label: 'Book Detection' },
+                    { id: 'DETECT_HEADPHONE', label: 'Headphone Detection' },
+                    { id: 'DETECT_EARBUD', label: 'Earbud Detection' },
+                    { id: 'DETECT_MULTIPLE_PEOPLE', label: 'Multiple People' },
+                  ].map(item => (
+                    <FormField key={item.id} control={form.control} name={`detection_config.${item.id}` as any} render={({ field }) => (
+                      <FormItem className="flex items-center gap-3 space-y-0">
+                        <FormControl>
+                          <Switch checked={field.value} onCheckedChange={field.onChange} disabled={preset !== 'CUSTOM'} />
+                        </FormControl>
+                        <FormLabel className="text-sm font-medium" style={{ color: '#475569' }}>{item.label}</FormLabel>
+                      </FormItem>
+                    )} />
+                  ))}
+                  <FormField control={form.control} name="config.tab_switching" render={({ field }) => (
                     <FormItem className="flex items-center gap-3 space-y-0">
                       <FormControl>
                         <Switch checked={field.value} onCheckedChange={field.onChange} disabled={preset !== 'CUSTOM'} />
                       </FormControl>
-                      <FormLabel className="text-sm font-medium" style={{ color: '#475569' }}>{item.label}</FormLabel>
+                      <FormLabel className="text-sm font-medium" style={{ color: '#475569' }}>Tab Switching</FormLabel>
                     </FormItem>
                   )} />
-                ))}
-                <FormField control={form.control} name="config.tab_switching" render={({ field }) => (
-                  <FormItem className="flex items-center gap-3 space-y-0">
-                    <FormControl>
-                      <Switch checked={field.value} onCheckedChange={field.onChange} disabled={preset !== 'CUSTOM'} />
-                    </FormControl>
-                    <FormLabel className="text-sm font-medium" style={{ color: '#475569' }}>Tab Switching Tracker</FormLabel>
-                  </FormItem>
-                )} />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-4" style={{ borderTop: '1px solid #F1F5F9' }}>
@@ -501,8 +527,8 @@ export default function CreateExamPage() {
                   <FormItem>
                     <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Flag Threshold (Warnings)</FormLabel>
                     <FormControl>
-                      <input type="number" min={0} className={inputBase} style={inputStyle}
-                        onFocus={inputFocus} onBlur={inputBlur} {...field} />
+                      <input type="number" min={0} {...field} className={inputBase} style={inputStyle}
+                        onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                     </FormControl>
                     <FormDescription>Accumulated warnings before admin is notified.</FormDescription>
                     <FormMessage />

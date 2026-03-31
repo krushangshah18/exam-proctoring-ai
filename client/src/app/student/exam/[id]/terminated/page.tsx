@@ -232,7 +232,7 @@ export default function TerminatedPage() {
             )}
             <p style={{ fontSize: '11.5px', color: '#38A3A5', marginTop: '10px', fontWeight: 600 }}>Auto-checking for updates every 10 seconds…</p>
           </div>
-          <p style={{ fontSize: '12px', color: '#94A3B8', textAlign: 'center' }}>
+          <p style={{ fontSize: '12px', color: '#64748B', textAlign: 'center' }}>
             {isDisconnect
               ? 'If approved, you may receive extra time to compensate for the disconnection.'
               : 'If approved, your session will resume where it stopped.'}
@@ -309,6 +309,7 @@ export default function TerminatedPage() {
         .st-btn-ghost:hover{background:#F8FAFC;border-color:#CBD5E1}
         .st-btn-ghost:disabled{opacity:0.5;cursor:not-allowed}
         .st-textarea{display:block;width:100%;padding:9px 13px;border:1.5px solid #E2E8F0;border-radius:8px;font-size:14px;font-family:'Plus Jakarta Sans',sans-serif;color:#0F172A;background:#fff;line-height:1.6;resize:vertical;min-height:100px;transition:border-color 150ms,box-shadow 150ms;outline:none;}
+        .st-textarea::placeholder{color:#94A3B8;opacity:1}
         .st-textarea:focus{border-color:#38A3A5;box-shadow:0 0 0 3px rgba(56,163,165,0.12)}
       `}</style>
 
@@ -338,13 +339,13 @@ export default function TerminatedPage() {
             </span>
 
             <h1 style={{ fontSize: '22px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.02em' }}>Session Terminated</h1>
-            {examTitle && <p style={{ fontSize: '13.5px', color: '#94A3B8', marginTop: '4px' }}>{examTitle}</p>}
+            {examTitle && <p style={{ fontSize: '13.5px', color: '#64748B', marginTop: '4px', fontWeight: 500 }}>{examTitle}</p>}
           </div>
 
           <div style={{ padding: '20px 28px 24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             {terminatedReason && (
               <div style={{ padding: '12px 14px', background: '#F8FAFC', borderRadius: '10px', border: '1.5px solid #E2E8F0' }}>
-                <p style={{ fontSize: '10.5px', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '5px' }}>
+                <p style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '5px' }}>
                   Reason for Termination
                 </p>
                 <p style={{ fontSize: '13.5px', color: '#0F172A', fontWeight: 600 }}>{terminatedReason}</p>

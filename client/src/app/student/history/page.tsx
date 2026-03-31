@@ -63,7 +63,7 @@ function getExamStatusBadge(status: string): { label: string; className: string 
 function StatCell({ label, value, color }: { label: string; value: React.ReactNode; color?: string }) {
   return (
     <div>
-      <p style={{ fontSize: '10.5px', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>{label}</p>
+      <p style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>{label}</p>
       <p style={{ fontSize: '13.5px', fontWeight: 700, color: color || '#0F172A' }}>{value}</p>
     </div>
   );
@@ -102,14 +102,14 @@ export default function ExamHistoryPage() {
           </div>
           <div>
             <h1 style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.02em' }}>Exam History</h1>
-            <p style={{ fontSize: '13px', color: '#94A3B8', marginTop: '1px' }}>
+            <p style={{ fontSize: '13px', color: '#64748B', marginTop: '1px' }}>
               {loading ? '' : `${exams.length} exam${exams.length !== 1 ? 's' : ''} found`}
             </p>
           </div>
         </div>
 
         {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0', color: '#94A3B8' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0', color: '#64748B' }}>
             <Loader2 style={{ width: '28px', height: '28px', animation: 'spin 1s linear infinite' }} />
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           </div>
@@ -117,7 +117,7 @@ export default function ExamHistoryPage() {
           <div style={{ textAlign: 'center', padding: '80px 0' }}>
             <History style={{ width: '52px', height: '52px', color: '#E2E8F0', margin: '0 auto 16px' }} />
             <h2 style={{ fontSize: '17px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>No exam history yet</h2>
-            <p style={{ fontSize: '13.5px', color: '#94A3B8', marginBottom: '20px' }}>
+            <p style={{ fontSize: '13.5px', color: '#64748B', marginBottom: '20px' }}>
               Completed and past exams will appear here after they have ended.
             </p>
             <button onClick={() => router.push('/student/dashboard')} className="st-btn-ghost">
@@ -142,7 +142,7 @@ export default function ExamHistoryPage() {
                         </h3>
                         <span style={{
                           fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
-                          letterSpacing: '0.08em', color: '#94A3B8',
+                          letterSpacing: '0.08em', color: '#64748B',
                           background: '#F8FAFC', padding: '2px 7px', borderRadius: '4px', border: '1px solid #E2E8F0',
                         }}>
                           {exam.exam_mode}
@@ -160,11 +160,11 @@ export default function ExamHistoryPage() {
                     </div>
 
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <p style={{ fontSize: '10.5px', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '3px' }}>Exam Date</p>
+                      <p style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '3px' }}>Exam Date</p>
                       <p style={{ fontSize: '13.5px', fontWeight: 700, color: '#475569' }}>
                         {parseUTC(exam.start_window).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                       </p>
-                      <p style={{ fontSize: '12px', color: '#94A3B8' }}>{fmtTimeTZ(exam.start_window)}</p>
+                      <p style={{ fontSize: '12px', color: '#64748B' }}>{fmtTimeTZ(exam.start_window)}</p>
                     </div>
                   </div>
 
@@ -197,7 +197,7 @@ export default function ExamHistoryPage() {
 
                   {/* Submitted at */}
                   {submittedAt && (
-                    <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: '#94A3B8' }}>
+                    <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: '#64748B' }}>
                       <Clock style={{ width: '12px', height: '12px' }} />
                       Submitted at {fmtDateTimeTZ(exam.session_end_time!)}
                     </div>

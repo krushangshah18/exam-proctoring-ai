@@ -38,7 +38,7 @@ function StepDots({ step }: { step: number }) {
           }} />
         </div>
       ))}
-      <span style={{ fontSize: '11px', fontWeight: 600, color: '#94A3B8', marginLeft: '4px' }}>
+      <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748B', marginLeft: '4px' }}>
         Step {step} of 2
       </span>
     </div>
@@ -182,7 +182,7 @@ export default function RegisterPage() {
                     <p style={{ fontSize: '13px', fontWeight: 600, color: '#475569', marginBottom: '2px' }}>
                       Privacy Policy Consent
                     </p>
-                    <p style={{ fontSize: '12px', color: '#94A3B8', lineHeight: 1.5 }}>
+                    <p style={{ fontSize: '12px', color: '#64748B', lineHeight: 1.5 }}>
                       I authorize the collection of my biometric face data for AI proctoring purposes.
                     </p>
                     {errors.consent && (
@@ -224,7 +224,7 @@ export default function RegisterPage() {
                       flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px',
                     }}>
                       <AlertCircle style={{ width: '32px', height: '32px', color: '#EF4444' }} />
-                      <p style={{ color: '#94A3B8', fontSize: '13px', textAlign: 'center', padding: '0 16px' }}>
+                      <p style={{ color: '#64748B', fontSize: '13px', textAlign: 'center', padding: '0 16px' }}>
                         Camera access denied. Please allow camera access in your browser settings.
                       </p>
                     </div>
@@ -283,7 +283,7 @@ export default function RegisterPage() {
               )}
             </div>
 
-            <p style={{ fontSize: '12px', color: '#94A3B8', textAlign: 'center', lineHeight: 1.5 }}>
+            <p style={{ fontSize: '12px', color: '#64748B', textAlign: 'center', lineHeight: 1.5 }}>
               Ensure your face is clearly visible, well-lit, and centred in the frame.
             </p>
 

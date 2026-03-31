@@ -22,7 +22,7 @@ function FieldGroup({ label, hint, children }: { label: string; hint?: string; c
         {label}
       </label>
       {children}
-      {hint && <p style={{ fontSize: '11.5px', color: '#94A3B8', marginTop: '5px', fontWeight: 500 }}>{hint}</p>}
+      {hint && <p style={{ fontSize: '11.5px', color: '#64748B', marginTop: '5px', fontWeight: 500, lineHeight: 1.5 }}>{hint}</p>}
     </div>
   );
 }
@@ -146,11 +146,12 @@ export default function StudentProfile() {
           @keyframes spin{to{transform:rotate(360deg)}}
           @keyframes fadein{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
           .pf-input:focus{border-color:#38A3A5 !important; box-shadow:0 0 0 3px rgba(56,163,165,0.1) !important;}
-          .pf-input:disabled{background:#F8FAFC !important; color:#94A3B8 !important; cursor:not-allowed;}
+          .pf-input:disabled{background:#F8FAFC !important; color:#64748B !important; cursor:not-allowed;}
+          .pf-input::placeholder{color:#64748B;}
           .pf-card{background:#fff;border:1.5px solid #E2E8F0;border-radius:16px;padding:26px;box-shadow:0 1px 4px rgba(15,23,42,0.05);}
         `}</style>
 
-        <div style={{ maxWidth: '900px', animation: 'fadein 0.4s ease both' }}>
+        <div style={{ width: '100%', maxWidth: '900px', margin: '0 auto', animation: 'fadein 0.4s ease both' }}>
 
           {/* ── HERO BANNER CARD ──────────────────────────────────────────── */}
           <div style={{
@@ -178,10 +179,10 @@ export default function StudentProfile() {
 
             {/* Profile info row — overlaps banner */}
             <div style={{ background: '#fff', padding: '0 28px 22px' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: '-36px', flexWrap: 'wrap', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: '-36px', flexWrap: 'wrap', gap: '16px' }}>
 
                 {/* Avatar + name */}
-                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '16px', flex: 1, minWidth: '280px' }}>
                   {/* Avatar */}
                   <div style={{
                     width: '80px', height: '80px', borderRadius: '50%', flexShrink: 0,
@@ -204,7 +205,7 @@ export default function StudentProfile() {
                   </div>
 
                   {/* Name + email — shown below banner */}
-                  <div style={{ paddingBottom: '4px' }}>
+                  <div style={{ paddingBottom: '4px', textAlign: 'left' }}>
                     <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.02em', lineHeight: 1.2 }}>
                       {user?.full_name || 'Student'}
                     </h2>
@@ -226,6 +227,7 @@ export default function StudentProfile() {
                     color: '#22577A', fontSize: '13px', fontWeight: 700,
                     fontFamily: "'Plus Jakarta Sans', sans-serif",
                     transition: 'all 150ms',
+                    flexShrink: 0,
                   }}
                   onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(34,87,122,0.12)'; }}
                   onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(34,87,122,0.07)'; }}
@@ -236,18 +238,18 @@ export default function StudentProfile() {
               </div>
 
               {/* Role badge */}
-              <div style={{ marginTop: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <div style={{ marginTop: '14px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                 <GraduationCap style={{ width: '13px', height: '13px', color: '#38A3A5' }} />
                 <span style={{ fontSize: '12px', fontWeight: 600, color: '#38A3A5' }}>Student Account</span>
                 <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: '#CBD5E1', display: 'inline-block', margin: '0 4px' }} />
                 <Shield style={{ width: '12px', height: '12px', color: '#94A3B8' }} />
-                <span style={{ fontSize: '12px', fontWeight: 500, color: '#94A3B8' }}>Verified Identity</span>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: '#64748B' }}>Verified Identity</span>
               </div>
             </div>
           </div>
 
           {/* ── TWO-COLUMN GRID ───────────────────────────────────────────── */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', alignItems: 'start' }}>
 
             {/* Left — Basic Information */}
             <div className="pf-card">
@@ -266,7 +268,7 @@ export default function StudentProfile() {
                     className="pf-input"
                     style={{ ...inputStyle, paddingRight: '38px' }}
                   />
-                  <Lock style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', width: '13px', height: '13px', color: '#CBD5E1' }} />
+                  <Lock style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', width: '13px', height: '13px', color: '#94A3B8' }} />
                 </div>
               </FieldGroup>
 
@@ -325,7 +327,7 @@ export default function StudentProfile() {
                     onFocus={e => { e.currentTarget.style.borderColor = '#38A3A5'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(56,163,165,0.1)'; }}
                     onBlur={e => { e.currentTarget.style.borderColor = '#E2E8F0'; e.currentTarget.style.boxShadow = 'none'; }}
                   />
-                  <button onClick={() => setShowOld(v => !v)} tabIndex={-1} style={{ position: 'absolute', right: '11px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: '2px' }}>
+                  <button onClick={() => setShowOld(v => !v)} tabIndex={-1} style={{ position: 'absolute', right: '11px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#64748B', padding: '2px' }}>
                     {showOld ? <EyeOff style={{ width: '14px', height: '14px' }} /> : <Eye style={{ width: '14px', height: '14px' }} />}
                   </button>
                 </div>
@@ -345,7 +347,7 @@ export default function StudentProfile() {
                     onFocus={e => { e.currentTarget.style.borderColor = '#38A3A5'; e.currentTarget.style.boxShadow = '0 0 0 3px rgba(56,163,165,0.1)'; }}
                     onBlur={e => { e.currentTarget.style.borderColor = '#E2E8F0'; e.currentTarget.style.boxShadow = 'none'; }}
                   />
-                  <button onClick={() => setShowNew(v => !v)} tabIndex={-1} style={{ position: 'absolute', right: '11px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: '2px' }}>
+                  <button onClick={() => setShowNew(v => !v)} tabIndex={-1} style={{ position: 'absolute', right: '11px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#64748B', padding: '2px' }}>
                     {showNew ? <EyeOff style={{ width: '14px', height: '14px' }} /> : <Eye style={{ width: '14px', height: '14px' }} />}
                   </button>
                 </div>
@@ -370,7 +372,7 @@ export default function StudentProfile() {
                       e.currentTarget.style.boxShadow = 'none';
                     }}
                   />
-                  <button onClick={() => setShowConfirm(v => !v)} tabIndex={-1} style={{ position: 'absolute', right: '11px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: '2px' }}>
+                  <button onClick={() => setShowConfirm(v => !v)} tabIndex={-1} style={{ position: 'absolute', right: '11px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#64748B', padding: '2px' }}>
                     {showConfirm ? <EyeOff style={{ width: '14px', height: '14px' }} /> : <Eye style={{ width: '14px', height: '14px' }} />}
                   </button>
                 </div>

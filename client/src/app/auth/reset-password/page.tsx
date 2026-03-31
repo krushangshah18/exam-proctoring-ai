@@ -79,7 +79,7 @@ export default function ResetPasswordPage() {
           padding: '10px 12px', borderRadius: '8px',
           background: '#F8FAFC', border: '1px solid #E2E8F0',
         }}>
-          <span style={{ color: '#94A3B8', fontSize: '12px', lineHeight: 1.5 }}>
+          <span style={{ color: '#64748B', fontSize: '12px', lineHeight: 1.5 }}>
             Use at least 8 characters with a mix of letters, numbers and symbols.
           </span>
         </div>
