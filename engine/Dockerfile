@@ -50,6 +50,7 @@ COPY core/       core/
 COPY detectors/  detectors/
 COPY settings/   settings/
 COPY utils/      utils/
+COPY storage/    storage/
 COPY config.py  .
 COPY server.py  .
 COPY main.py    .
