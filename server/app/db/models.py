@@ -302,6 +302,12 @@ class EngineContainer(UUIDMixin, TimestampMixin, Base):
     max_sessions = Column(Integer, default=3, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
 
+    # EC2 instance management
+    ec2_instance_id  = Column(String, nullable=True)    # e.g. "i-0abc123def456"
+    ec2_region       = Column(String, nullable=True)    # e.g. "ap-south-1"
+    container_name   = Column(String, nullable=True)    # Docker container name e.g. "proctor1"
+    container_port   = Column(Integer, nullable=True)   # 8000 or 8001
+
     assignments = relationship("ExamEngineAssignment", back_populates="container")
 
 

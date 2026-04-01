@@ -1877,6 +1877,263 @@ def update_system_settings(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SYSADMIN — EC2 Engine instance management (start / stop / restart / apply-settings)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_ssm_client(region: str = "ap-south-1"):
+    import boto3, os
+    return boto3.client(
+        "ssm",
+        region_name=region,
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    )
+
+def _get_ec2_client(region: str = "ap-south-1"):
+    import boto3, os
+    return boto3.client(
+        "ec2",
+        region_name=region,
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    )
+
+def _build_env_file_content(s: models.EngineSettings, db_url: str, s3_bucket: str,
+                             aws_key: str, aws_secret: str, aws_region: str) -> str:
+    """Build the full engine .env content from current DB settings."""
+    return f"""DATABASE_URL={db_url}
+S3_BUCKET={s3_bucket}
+AWS_REGION={aws_region}
+AWS_ACCESS_KEY_ID={aws_key}
+AWS_SECRET_ACCESS_KEY={aws_secret}
+SAVE_REPORT=false
+
+STATE_WARNING={s.state_warning}
+STATE_HIGH_RISK={s.state_high_risk}
+STATE_ADMIN={s.state_admin_review}
+DECAY_AMOUNT={s.decay_amount}
+
+GAZE_SCORE={s.gaze_score}
+TAB_SWITCH_SCORE={s.tab_switch_score}
+TAB_SWITCH_TERMINATE_COUNT={s.tab_switch_terminate_count}
+
+PHONE_SCORE_2ND={s.phone_score_2nd}
+PHONE_SCORE_3RD={s.phone_score_3rd}
+BOOK_SCORE={s.book_score}
+HEADPHONE_SCORE={s.headphone_score}
+EARBUD_SCORE={s.earbud_score}
+
+MULTI_PEOPLE_SCORE_2ND={s.multi_people_score_2nd}
+MULTI_PEOPLE_SCORE_3RD={s.multi_people_score_3rd}
+MULTI_PEOPLE_TERMINATE_S={s.multi_people_terminate_s}
+
+NO_PERSON_SCORE_1={s.no_person_score_1}
+NO_PERSON_SCORE_2={s.no_person_score_2}
+NO_PERSON_TERMINATE_S={s.no_person_terminate_s}
+
+FAKE_PRESENCE_SCORE_1={s.fake_presence_score_1}
+FAKE_PRESENCE_SCORE_2={s.fake_presence_score_2}
+"""
+
+
+class EC2InstanceAction(BaseModel):
+    instance_id: str
+    region: str = "ap-south-1"
+
+
+class ContainerMetaUpdate(BaseModel):
+    ec2_instance_id: str
+    ec2_region: str = "ap-south-1"
+    container_name: str    # "proctor1" or "proctor2"
+    container_port: int    # 8000 or 8001
+
+
+@_system_settings_router.patch("/engine/containers/{container_id}/meta")
+def update_container_meta(
+    container_id: str,
+    body: ContainerMetaUpdate,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Store EC2 instance ID and container name on an EngineContainer row."""
+    container = db.query(models.EngineContainer).filter(
+        models.EngineContainer.id == container_id
+    ).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+    container.ec2_instance_id = body.ec2_instance_id
+    container.ec2_region      = body.ec2_region
+    container.container_name  = body.container_name
+    container.container_port  = body.container_port
+    db.commit()
+    return {"message": "Container metadata updated"}
+
+
+@_system_settings_router.post("/engine/ec2/start")
+def start_ec2_instance(
+    body: EC2InstanceAction,
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Start a stopped EC2 engine instance."""
+    try:
+        ec2 = _get_ec2_client(body.region)
+        ec2.start_instances(InstanceIds=[body.instance_id])
+        log.info("SYSADMIN: started EC2 instance %s", body.instance_id)
+        return {"message": f"Starting {body.instance_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@_system_settings_router.post("/engine/ec2/stop")
+def stop_ec2_instance(
+    body: EC2InstanceAction,
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Stop a running EC2 engine instance."""
+    try:
+        ec2 = _get_ec2_client(body.region)
+        ec2.stop_instances(InstanceIds=[body.instance_id])
+        log.info("SYSADMIN: stopped EC2 instance %s", body.instance_id)
+        return {"message": f"Stopping {body.instance_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@_system_settings_router.post("/engine/ec2/status")
+def get_ec2_status(
+    body: EC2InstanceAction,
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Get current state of an EC2 engine instance."""
+    try:
+        ec2 = _get_ec2_client(body.region)
+        resp = ec2.describe_instances(InstanceIds=[body.instance_id])
+        instance = resp["Reservations"][0]["Instances"][0]
+        return {
+            "instance_id": body.instance_id,
+            "state": instance["State"]["Name"],
+            "public_ip": instance.get("PublicIpAddress"),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@_system_settings_router.post("/engine/apply-settings")
+async def apply_engine_settings(
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role("SYSADMIN")),
+):
+    """
+    Push current EngineSettings from DB to all engine EC2 instances via SSM,
+    then restart their Docker containers so new scoring values take effect.
+
+    Steps:
+      1. Build .env content from current EngineSettings row
+      2. For each container with an ec2_instance_id:
+         a. Write new .env to the EC2 via SSM run_command
+         b. Restart the specific Docker container
+      3. Update container URLs if IP changed (via describe_instances)
+    """
+    import os
+
+    s = db.query(models.EngineSettings).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="EngineSettings not found")
+
+    containers = db.query(models.EngineContainer).filter(
+        models.EngineContainer.ec2_instance_id.isnot(None)
+    ).all()
+
+    if not containers:
+        raise HTTPException(
+            status_code=400,
+            detail="No containers have EC2 instance IDs set. Use PATCH /engine/containers/{id}/meta first."
+        )
+
+    db_url    = os.getenv("DATABASE_URL", "").replace("+psycopg2", "")
+    s3_bucket = os.getenv("S3_BUCKET", "")
+    aws_key   = os.getenv("AWS_ACCESS_KEY_ID", "")
+    aws_secret= os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    aws_region= os.getenv("AWS_REGION", "ap-south-1")
+
+    env_content = _build_env_file_content(s, db_url, s3_bucket, aws_key, aws_secret, aws_region)
+    # Escape for shell single-quote heredoc
+    env_escaped = env_content.replace("'", "'\\''")
+
+    results = []
+    processed_instances: set[str] = set()
+
+    for container in containers:
+        instance_id    = container.ec2_instance_id
+        region         = container.ec2_region or "ap-south-1"
+        container_name = container.container_name or "proctor1"
+
+        try:
+            ssm = _get_ssm_client(region)
+
+            # Write .env + restart container in one SSM command
+            # Only write .env once per EC2 instance (multiple containers share it)
+            write_env_cmd = ""
+            if instance_id not in processed_instances:
+                write_env_cmd = f"printf '%s' '{env_escaped}' > /home/ubuntu/.env && "
+                processed_instances.add(instance_id)
+
+            restart_cmd = f"{write_env_cmd}docker restart {container_name}"
+
+            resp = ssm.send_command(
+                InstanceIds=[instance_id],
+                DocumentName="AWS-RunShellScript",
+                Parameters={"commands": [restart_cmd]},
+                Comment=f"Apply engine settings and restart {container_name}",
+            )
+            command_id = resp["Command"]["CommandId"]
+            results.append({
+                "instance_id": instance_id,
+                "container": container_name,
+                "command_id": command_id,
+                "status": "sent",
+            })
+            log.info("SYSADMIN apply-settings: sent SSM command %s to %s/%s",
+                     command_id, instance_id, container_name)
+
+            # Update container URL if IP changed
+            ec2 = _get_ec2_client(region)
+            ec2_resp = ec2.describe_instances(InstanceIds=[instance_id])
+            new_ip = ec2_resp["Reservations"][0]["Instances"][0].get("PublicIpAddress")
+            if new_ip:
+                port = container.container_port or 8000
+                new_url = f"http://{new_ip}:{port}"
+                if container.url != new_url:
+                    # Check if another row already owns this URL; if so skip
+                    conflict = db.query(models.EngineContainer).filter(
+                        models.EngineContainer.url == new_url,
+                        models.EngineContainer.id != container.id,
+                    ).first()
+                    if conflict:
+                        log.warning("apply-settings: URL %s already owned by container %s, skipping update",
+                                    new_url, conflict.id)
+                    else:
+                        log.info("apply-settings: updating container URL %s → %s",
+                                 container.url, new_url)
+                        container.url = new_url
+
+        except Exception as exc:
+            log.error("apply-settings failed for %s/%s: %s", instance_id, container_name, exc)
+            results.append({
+                "instance_id": instance_id,
+                "container": container_name,
+                "status": "error",
+                "error": str(exc),
+            })
+
+    db.commit()
+    return {
+        "message": "Settings applied. Containers are restarting.",
+        "results": results,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SYSADMIN — Engine monitoring + cross-exam session oversight
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1905,6 +2162,10 @@ def get_engine_containers(
             "max_sessions": c.max_sessions,
             "is_active": c.is_active,
             "active_sessions": active_sessions,
+            "ec2_instance_id": c.ec2_instance_id,
+            "ec2_region": c.ec2_region,
+            "container_name": c.container_name,
+            "container_port": c.container_port,
         })
     return result
 

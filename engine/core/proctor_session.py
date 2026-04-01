@@ -700,7 +700,7 @@ class ProctorSession:
                         if proof_url:
                             self.alert_log[-1]["proof_url"] = proof_url
 
-                    # Upload proof to S3 (fire-and-forget, never blocks)
+                    # Upload proof to S3 then delete local file (prevents disk fill-up)
                     if self._s3_uploader and self._exam_session_id:
                         ext = Path(path).suffix.lstrip(".")
                         proof_s3_key = self._s3_uploader.upload_file(
@@ -709,8 +709,14 @@ class ProctorSession:
                             alert_key=rev.key,
                             extension=ext,
                         )
-                        if proof_s3_key and alert_was_logged:
-                            self.alert_log[-1]["proof_s3_key"] = proof_s3_key
+                        if proof_s3_key:
+                            if alert_was_logged:
+                                self.alert_log[-1]["proof_s3_key"] = proof_s3_key
+                            # Delete local file — S3 is the source of truth
+                            try:
+                                Path(path).unlink(missing_ok=True)
+                            except Exception:
+                                pass
 
         # Write alert to RDS now that we have the proof S3 key
         if alert_was_logged and self._db_writer and self._exam_session_id:

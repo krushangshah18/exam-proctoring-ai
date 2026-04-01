@@ -2,8 +2,26 @@
 #  AI Proctor — Risk Scoring Settings
 #
 #  Every score value, cooldown, tier threshold, and scoring rule lives here.
-#  Edit this file to tune scoring behaviour without touching engine logic.
+#  Values are read from environment variables at import time so the backend
+#  can update them by writing to the engine's .env and restarting containers.
+#  Defaults match the original hardcoded values.
 # ═══════════════════════════════════════════════════════════════════════════════
+
+import os
+
+def _f(key: str, default: float) -> float:
+    """Read a float env var, falling back to default."""
+    try:
+        return float(os.environ[key])
+    except (KeyError, ValueError):
+        return default
+
+def _i(key: str, default: int) -> int:
+    """Read an int env var, falling back to default."""
+    try:
+        return int(os.environ[key])
+    except (KeyError, ValueError):
+        return default
 
 # ── Score bucket classification ───────────────────────────────────────────────
 # Keys listed here go into the NON-DECAYING (fixed) bucket — their score
@@ -47,17 +65,13 @@ SCORE_COOLDOWNS: dict = {
 }
 
 # ── State machine thresholds ───────────────────────────────────────────────────
-# Total score (fixed + decaying) required to enter each exam state.
-STATE_WARNING   : float =  30.0   # NORMAL  → WARNING
-STATE_HIGH_RISK : float =  60.0   # WARNING → HIGH_RISK
-STATE_ADMIN     : float = 100.0   # HIGH_RISK → ADMIN_REVIEW
-                                   # ADMIN_REVIEW → TERMINATED (via termination rules)
+STATE_WARNING   : float = _f("STATE_WARNING",    30.0)
+STATE_HIGH_RISK : float = _f("STATE_HIGH_RISK",  60.0)
+STATE_ADMIN     : float = _f("STATE_ADMIN",     100.0)
 
 # ── Score decay ────────────────────────────────────────────────────────────────
-# Applied to the decaying bucket on a timed interval.
-# The interval is computed as max(60s, session_duration / 20) by the engine.
-DECAY_AMOUNT    : float =   5.0   # points removed from decaying bucket per tick
-DECAY_BUCKET_CAP: float = 150.0   # maximum value for either score bucket
+DECAY_AMOUNT    : float = _f("DECAY_AMOUNT",      5.0)
+DECAY_BUCKET_CAP: float = _f("DECAY_BUCKET_CAP", 150.0)
 
 # ── Grace occurrences ──────────────────────────────────────────────────────────
 # Number of leading occurrences that are warning-only (no score added).
@@ -71,23 +85,22 @@ GRACE_OCCURRENCES: dict = {
 }
 
 # ── Phone (non-decaying) ───────────────────────────────────────────────────────
-PHONE_SCORE_2ND : float = 25.0   # added on the (grace+1)th occurrence
-PHONE_SCORE_3RD : float = 50.0   # added on (grace+2)th+ occurrence
+PHONE_SCORE_2ND : float = _f("PHONE_SCORE_2ND", 25.0)
+PHONE_SCORE_3RD : float = _f("PHONE_SCORE_3RD", 50.0)
 
 # ── Book (decaying) ────────────────────────────────────────────────────────────
-BOOK_SCORE      : float = 20.0   # added every SCORE_COOLDOWNS["book"] seconds
+BOOK_SCORE      : float = _f("BOOK_SCORE", 20.0)
 
 # ── Headphone / earbud (decaying) ─────────────────────────────────────────────
-HEADPHONE_SCORE : float = 20.0
-EARBUD_SCORE    : float = 20.0
+HEADPHONE_SCORE : float = _f("HEADPHONE_SCORE", 20.0)
+EARBUD_SCORE    : float = _f("EARBUD_SCORE",    20.0)
 
 # ── Multiple people (non-decaying) ────────────────────────────────────────────
-MULTI_PEOPLE_SCORE_2ND : float = 20.0   # (grace+1)th occurrence
-MULTI_PEOPLE_SCORE_3RD : float = 50.0   # (grace+2)th+ occurrence
+MULTI_PEOPLE_SCORE_2ND : float = _f("MULTI_PEOPLE_SCORE_2ND", 20.0)
+MULTI_PEOPLE_SCORE_3RD : float = _f("MULTI_PEOPLE_SCORE_3RD", 50.0)
 
 # ── Gaze events: looking_away / down / up / side (decaying) ───────────────────
-# Score is added once per SCORE_COOLDOWNS["looking_*"] seconds while active.
-GAZE_SCORE      : float =  5.0
+GAZE_SCORE      : float = _f("GAZE_SCORE", 5.0)
 
 # ── Speaker audio — speech without lip movement ────────────────────────────────
 # All speaker audio knobs live here (scoring + alert cooldowns in one place).
@@ -106,47 +119,46 @@ GAZE_SCORE      : float =  5.0
 #   at OCC2_WARN_S         → alert  +OCC2_SCORE  fixed     (one-time)
 #   every REPEAT_INTERVAL  → alert  +OCC2_REPEAT fixed     (repeating)
 
-SPEAKER_WARN_COOLDOWN   : float =  3.0   # warn repeat cadence during grace window
-SPEAKER_ALERT_COOLDOWN  : float = 10.0   # min gap between alert banners (= REPEAT_INTERVAL)
+SPEAKER_WARN_COOLDOWN   : float = _f("SPEAKER_WARN_COOLDOWN",   3.0)
+SPEAKER_ALERT_COOLDOWN  : float = _f("SPEAKER_ALERT_COOLDOWN", 10.0)
 
 # Episode 1 tier
-SPEAKER_OCC1_WARN_S     : float =  3.0   # warn-only grace (seconds)
-SPEAKER_OCC1_SCORE      : float = 10.0   # score at end of grace (decaying)
-SPEAKER_OCC1_REPEAT     : float = 20.0   # repeating score every REPEAT_INTERVAL (fixed)
+SPEAKER_OCC1_WARN_S     : float = _f("SPEAKER_OCC1_WARN_S",   3.0)
+SPEAKER_OCC1_SCORE      : float = _f("SPEAKER_OCC1_SCORE",   10.0)
+SPEAKER_OCC1_REPEAT     : float = _f("SPEAKER_OCC1_REPEAT",  20.0)
 
 # Episode 2+ tier
-SPEAKER_OCC2_WARN_S     : float =  5.0   # warn-only grace (seconds)
-SPEAKER_OCC2_SCORE      : float = 20.0   # score at end of grace (fixed)
-SPEAKER_OCC2_REPEAT     : float = 20.0   # repeating score every REPEAT_INTERVAL (fixed)
+SPEAKER_OCC2_WARN_S     : float = _f("SPEAKER_OCC2_WARN_S",   5.0)
+SPEAKER_OCC2_SCORE      : float = _f("SPEAKER_OCC2_SCORE",   20.0)
+SPEAKER_OCC2_REPEAT     : float = _f("SPEAKER_OCC2_REPEAT",  20.0)
 
-SPEAKER_REPEAT_INTERVAL : float = 10.0   # cadence for all repeating tail scores
+SPEAKER_REPEAT_INTERVAL : float = _f("SPEAKER_REPEAT_INTERVAL", 10.0)
 
-# ── Partial face — too far from camera (decaying) ─────────────────────────────
-PARTIAL_FACE_SCORE         : float = 2.0   # score per scoring cooldown tick
-PARTIAL_FACE_DURATION_GATE : float = 5.0   # must be active this many seconds first (= score cooldown)
+# ── Partial face ───────────────────────────────────────────────────────────────
+PARTIAL_FACE_SCORE         : float = _f("PARTIAL_FACE_SCORE",          2.0)
+PARTIAL_FACE_DURATION_GATE : float = _f("PARTIAL_FACE_DURATION_GATE",  5.0)
 
-# ── Face hidden — person present but no landmarks (decaying, duration-tiered) ──
-FACE_HIDDEN_DUR_1   : float =  5.0   # seconds before tier-1 score
-FACE_HIDDEN_DUR_2   : float = 10.0   # seconds before tier-2 score
-FACE_HIDDEN_SCORE_1 : float = 10.0   # score added at tier 1
-FACE_HIDDEN_SCORE_2 : float = 20.0   # score added at tier 2
+# ── Face hidden ────────────────────────────────────────────────────────────────
+FACE_HIDDEN_DUR_1   : float = _f("FACE_HIDDEN_DUR_1",    5.0)
+FACE_HIDDEN_DUR_2   : float = _f("FACE_HIDDEN_DUR_2",   10.0)
+FACE_HIDDEN_SCORE_1 : float = _f("FACE_HIDDEN_SCORE_1", 10.0)
+FACE_HIDDEN_SCORE_2 : float = _f("FACE_HIDDEN_SCORE_2", 20.0)
 
-# ── Fake presence — no movement / no blink (non-decaying, duration-tiered) ────
-FAKE_PRESENCE_DUR_1   : float = 10.0   # seconds before tier-1 score
-FAKE_PRESENCE_DUR_2   : float = 25.0   # seconds before tier-2 score
-FAKE_PRESENCE_SCORE_1 : float = 30.0
-FAKE_PRESENCE_SCORE_2 : float = 60.0
+# ── Fake presence ──────────────────────────────────────────────────────────────
+FAKE_PRESENCE_DUR_1   : float = _f("FAKE_PRESENCE_DUR_1",   10.0)
+FAKE_PRESENCE_DUR_2   : float = _f("FAKE_PRESENCE_DUR_2",   25.0)
+FAKE_PRESENCE_SCORE_1 : float = _f("FAKE_PRESENCE_SCORE_1", 30.0)
+FAKE_PRESENCE_SCORE_2 : float = _f("FAKE_PRESENCE_SCORE_2", 60.0)
 
-# ── No person — nobody detected (non-decaying, duration-tiered) ───────────────
-NO_PERSON_DUR_1   : float =  5.0
-NO_PERSON_DUR_2   : float = 10.0
-NO_PERSON_SCORE_1 : float = 25.0
-NO_PERSON_SCORE_2 : float = 50.0
+# ── No person ──────────────────────────────────────────────────────────────────
+NO_PERSON_DUR_1   : float = _f("NO_PERSON_DUR_1",    5.0)
+NO_PERSON_DUR_2   : float = _f("NO_PERSON_DUR_2",   10.0)
+NO_PERSON_SCORE_1 : float = _f("NO_PERSON_SCORE_1", 25.0)
+NO_PERSON_SCORE_2 : float = _f("NO_PERSON_SCORE_2", 50.0)
 
 # ── Termination thresholds ─────────────────────────────────────────────────────
-# Exam is auto-terminated when a condition persists continuously this long.
-MULTI_PEOPLE_TERMINATE_S : float = 20.0
-NO_PERSON_TERMINATE_S    : float = 20.0
+MULTI_PEOPLE_TERMINATE_S : float = _f("MULTI_PEOPLE_TERMINATE_S", 20.0)
+NO_PERSON_TERMINATE_S    : float = _f("NO_PERSON_TERMINATE_S",    20.0)
 
 # ── Gaze aggregation bonus (decaying) ─────────────────────────────────────────
 # When multiple gaze events cluster within the window, an extra bonus is added.
@@ -160,8 +172,6 @@ GAZE_BONUS_SCORE      : float = 10.0   # bonus score (decaying)
 COMBO_DOWN_BOOK  : float = 15.0   # looking_down + book
 COMBO_PHONE_DOWN : float = 20.0   # phone + looking_down
 
-# ── Tab switch — exam page left / window hidden (non-decaying) ─────────────────
-# Every occurrence        → +TAB_SWITCH_SCORE pts fixed (alert) — no grace.
-# >= TERMINATE_COUNT      → exam auto-terminated immediately.
-TAB_SWITCH_SCORE           : float = 15.0   # score added on every occurrence
-TAB_SWITCH_TERMINATE_COUNT : int   = 3      # number of switches that trigger termination
+# ── Tab switch ────────────────────────────────────────────────────────────────
+TAB_SWITCH_SCORE           : float = _f("TAB_SWITCH_SCORE",             15.0)
+TAB_SWITCH_TERMINATE_COUNT : int   = _i("TAB_SWITCH_TERMINATE_COUNT",    3)

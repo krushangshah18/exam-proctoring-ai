@@ -1,0 +1,39 @@
+full setup is now complete. Here's what's working end-to-end:                                                           
+                                         
+  Infrastructure:                                                                                                             
+  - RDS (PostgreSQL) — both server and engine read/write to it                                                                
+  - S3 — engine uploads proof images/audio, backend serves presigned URLs                                                     
+  - EC2 engine with SSM agent registered in Fleet Manager                
+                                                                                                                              
+  Engine:                                                                                                                     
+  - Writes alerts/warnings directly to RDS at event time                                                                      
+  - Uploads proofs to S3, deletes local files                                                                                 
+  - All scoring constants read from .env at startup         
+                                                                                                                              
+  Backend:                                                                                                                    
+  - Queries RDS for alert history (no more engine HTTP polling)                                                               
+  - apply-settings pushes new .env via SSM + restarts containers                                                              
+  - Auto-updates container URLs if EC2 IP changes on restart    
+                                                                                                                              
+  Frontend:                                                                                                                   
+  - Engine Monitor page shows EC2 status per container                                                                        
+  - Start/Stop/Check Status buttons per container                                                                             
+  - Apply & Restart button pushes settings and restarts both containers
+                                                                                                                              
+  Workflow going forward when you need to change scoring values:
+  1. Change thresholds/scores on the sysadmin settings page                                                                   
+  2. Go to Engine Monitor → click Apply & Restart                                                                             
+  3. Both containers restart with new values — done                                                                           
+                                                                                                                              
+  Workflow when EC2 was stopped and restarted (IP changed):                                                                   
+  1. Go to Engine Monitor → click Apply & Restart                                                                             
+  2. It auto-detects the new IP, updates the DB, and pushes settings — done            
+
+
+
+  The correct workflow when EC2 is stopped:
+                                                                                                                              
+  1. Engine Monitor → container card → Start button (starts the EC2 instance)                                                 
+  2. Wait ~60 seconds for it to boot
+  3. Click Check Status to confirm it's running and see the new IP                                                            
+  4. Click Apply & Restart (pushes .env + restarts Docker containers + updates URL in DB)                                       

@@ -108,13 +108,16 @@ RISK_SESSION_DURATION_S  = 300   # 5 minutes max exam duration
 TIMER_FLICKER_GRACE_S    = 1.5
 
 # ── Session Report ────────────────────────────────────────────────────────────
-SAVE_REPORT = True
+# Set SAVE_REPORT=false in .env when using RDS — report data is written to DB directly.
+# Keep True only for local development without RDS.
+SAVE_REPORT = os.getenv("SAVE_REPORT", "true").lower() == "true"
 REPORT_DIR  = "reports"
 
 # ── Proof capture ─────────────────────────────────────────────────────────────
 # SAVE_PROOF = True  → single JPEG per alert, plus a WAV clip for speaker_audio.
-# SAVE_PROOF = False → no proof files written at all.
-SAVE_PROOF        = True
+# When S3_BUCKET is set, proof is uploaded to S3 and local file is deleted after upload.
+# Set SAVE_PROOF=false to skip all proof capture entirely.
+SAVE_PROOF        = os.getenv("SAVE_PROOF", "true").lower() == "true"
 PROOF_AUDIO_PRE_S = 5.0   # seconds of audio ring-buffer to capture before the alert
 
 # ── Inference device ──────────────────────────────────────────────────────────
