@@ -77,12 +77,21 @@ class ProctorSession:
         config: dict | None = None,
         use_webrtc_audio: bool = True,
         report_metadata: dict | None = None,
+        db_writer=None,
+        s3_uploader=None,
     ):
         self.session_id  = session_id
         self.session_dir = Path(session_dir)
         self.proof_dir   = self.session_dir / "proof"
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.report_metadata = report_metadata or {}
+
+        # Central storage — RDS writer and S3 uploader injected by coordinator.
+        # Both may be None if not configured; all write calls are no-ops in that case.
+        self._db_writer   = db_writer
+        self._s3_uploader = s3_uploader
+        # The DB session UUID passed in offer metadata — used as the FK for alert rows.
+        self._exam_session_id: str | None = (report_metadata or {}).get("external_exam_session_id")
 
         cfg = {**_DEFAULTS, **(config or {})}
         self._cfg = cfg
@@ -580,6 +589,16 @@ class ProctorSession:
         if self._cfg["SAVE_REPORT"]:
             self._save_report()
 
+        # Write final session summary to RDS
+        if self._db_writer and self._exam_session_id:
+            risk_summary = self.risk.get_summary()
+            self._db_writer.finalize_session(
+                session_id=self._exam_session_id,
+                final_score=risk_summary.get("final_score") or risk_summary.get("score", 0),
+                risk_state=risk_summary.get("state", "NORMAL"),
+                terminated=bool(self.risk.terminated),
+            )
+
         # Notify SSE subscribers that the session has ended
         risk_info = self.risk.get_display()
         self._push_sse({
@@ -602,7 +621,7 @@ class ProctorSession:
         m, s    = divmod(int(elapsed), 60)
         return round(elapsed, 1), f"{m:02d}:{s:02d}"
 
-    def _on_api_alert(self, message: str) -> None:
+    def _on_api_alert(self, message: str, alert_key: str = "", score_added: float = 0.0) -> None:
         elapsed, ts = self._elapsed()
         entry = {
             "time"     : ts,
@@ -615,6 +634,11 @@ class ProctorSession:
             _m.inc_alert()
         except Exception:
             pass
+        # Write to RDS — deferred until proof_url is known; called from _handle_event
+        self._pending_alert_key        = alert_key
+        self._pending_alert_score      = score_added
+        self._pending_alert_elapsed    = elapsed
+        self._pending_alert_ts         = ts
 
     def _on_warn_notice(self, message: str) -> None:
         elapsed, ts = self._elapsed()
@@ -629,6 +653,14 @@ class ProctorSession:
             _m.inc_warning()
         except Exception:
             pass
+        # Write to RDS
+        if self._db_writer and self._exam_session_id:
+            self._db_writer.write_warning(
+                session_id=self._exam_session_id,
+                message=message,
+                elapsed_s=elapsed,
+                time_str=ts,
+            )
         # Push warning to SSE subscribers immediately
         self._push_sse({
             "type"     : "warning",
@@ -646,6 +678,8 @@ class ProctorSession:
 
         # ── Proof capture ─────────────────────────────────────────────────────
         proof_url: str | None = None
+
+        proof_s3_key: str | None = None
 
         if self.proof_writer is not None:
             save = (rev.terminated and not self._termination_proved) or alert_was_logged
@@ -665,6 +699,32 @@ class ProctorSession:
                         self.alert_log[-1]["proof"] = path
                         if proof_url:
                             self.alert_log[-1]["proof_url"] = proof_url
+
+                    # Upload proof to S3 (fire-and-forget, never blocks)
+                    if self._s3_uploader and self._exam_session_id:
+                        ext = Path(path).suffix.lstrip(".")
+                        proof_s3_key = self._s3_uploader.upload_file(
+                            local_path=path,
+                            session_id=self._exam_session_id,
+                            alert_key=rev.key,
+                            extension=ext,
+                        )
+                        if proof_s3_key and alert_was_logged:
+                            self.alert_log[-1]["proof_s3_key"] = proof_s3_key
+
+        # Write alert to RDS now that we have the proof S3 key
+        if alert_was_logged and self._db_writer and self._exam_session_id:
+            proof_type = "audio" if rev.key == "speaker_audio" else "image"
+            self._db_writer.write_alert(
+                session_id=self._exam_session_id,
+                message=self.alert_log[-1]["message"],
+                alert_key=rev.key,
+                elapsed_s=getattr(self, "_pending_alert_elapsed", self.alert_log[-1].get("elapsed_s", 0)),
+                time_str=getattr(self, "_pending_alert_ts", self.alert_log[-1].get("time", "")),
+                score_added=round(rev.risk_added, 2),
+                proof_s3_key=proof_s3_key,
+                proof_type=proof_type if proof_s3_key else None,
+            )
 
         # ── Push alert to SSE subscribers ─────────────────────────────────────
         # Push when score was added, OR exactly once on termination.

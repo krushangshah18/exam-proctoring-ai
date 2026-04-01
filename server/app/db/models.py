@@ -157,6 +157,8 @@ class ExamSession(UUIDMixin, TimestampMixin, Base):
 
     devices = relationship("SessionDevice", back_populates="session", cascade="all, delete-orphan")
     resume_requests = relationship("ResumeRequest", back_populates="session", cascade="all, delete-orphan")
+    proctor_alerts = relationship("ProctorAlert", back_populates="session", cascade="all, delete-orphan", order_by="ProctorAlert.occurred_at")
+    proctor_warnings = relationship("ProctorWarning", back_populates="session", cascade="all, delete-orphan", order_by="ProctorWarning.occurred_at")
 
 
 class SessionDevice(UUIDMixin, TimestampMixin, Base):
@@ -321,6 +323,49 @@ class ExamEngineAssignment(UUIDMixin, TimestampMixin, Base):
     __table_args__ = (
         Index("idx_engine_assign_exam", "exam_id"),
         Index("idx_engine_assign_container", "container_id"),
+    )
+
+
+class ProctorAlert(UUIDMixin, Base):
+    """
+    One row per proctoring alert event, written by the engine directly to RDS.
+    Replaces polling engine's /session/{pc_id}/log and /report/{id} for alert history.
+    """
+    __tablename__ = "proctor_alerts"
+
+    session_id  = Column(UUID(as_uuid=True), ForeignKey("exam_sessions.id"), nullable=False, index=True)
+    message     = Column(String, nullable=False)
+    alert_key   = Column(String, nullable=True)          # e.g. "phone", "looking_away"
+    elapsed_s   = Column(Float, nullable=False, default=0.0)
+    time_str    = Column(String, nullable=True)          # "MM:SS" display string
+    score_added = Column(Float, nullable=False, default=0.0)
+    proof_s3_key = Column(String, nullable=True)         # S3 object key for proof image/audio
+    proof_type  = Column(String, nullable=True)          # "image" | "audio"
+    occurred_at = Column(DateTime, nullable=False, default=func.now())
+
+    session = relationship("ExamSession", back_populates="proctor_alerts")
+
+    __table_args__ = (
+        Index("idx_proctor_alert_session", "session_id"),
+    )
+
+
+class ProctorWarning(UUIDMixin, Base):
+    """
+    One row per proctoring warning event, written by the engine directly to RDS.
+    """
+    __tablename__ = "proctor_warnings"
+
+    session_id  = Column(UUID(as_uuid=True), ForeignKey("exam_sessions.id"), nullable=False, index=True)
+    message     = Column(String, nullable=False)
+    elapsed_s   = Column(Float, nullable=False, default=0.0)
+    time_str    = Column(String, nullable=True)
+    occurred_at = Column(DateTime, nullable=False, default=func.now())
+
+    session = relationship("ExamSession", back_populates="proctor_warnings")
+
+    __table_args__ = (
+        Index("idx_proctor_warning_session", "session_id"),
     )
 
 

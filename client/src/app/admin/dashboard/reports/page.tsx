@@ -7,6 +7,7 @@ import {
   ChevronRight, Search,
 } from 'lucide-react';
 import api from '@/lib/axios';
+import { TablePagination } from '@/components/common/TablePagination';
 
 interface ExamSummary {
   id: string;
@@ -37,6 +38,8 @@ export default function AdminReportsPage() {
   const [exams, setExams] = useState<ExamSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const fetchExams = useCallback(async () => {
     setLoading(true);
@@ -55,6 +58,16 @@ export default function AdminReportsPage() {
   const filtered = exams.filter(e =>
     e.title.toLowerCase().includes(search.toLowerCase())
   );
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pagedExams = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   return (
     <div className="space-y-6 pb-10 max-w-4xl">
@@ -104,8 +117,9 @@ export default function AdminReportsPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {filtered.map((exam) => {
+        <div className="space-y-4">
+          <div className="space-y-2">
+            {pagedExams.map((exam) => {
             const s = STATUS_STYLES[exam.status] ?? STATUS_STYLES.DRAFT;
             return (
               <div
@@ -152,7 +166,19 @@ export default function AdminReportsPage() {
                 </div>
               </div>
             );
-          })}
+            })}
+          </div>
+          <TablePagination
+            page={page}
+            pageCount={totalPages}
+            pageSize={pageSize}
+            totalItems={filtered.length}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+          />
         </div>
       )}
     </div>

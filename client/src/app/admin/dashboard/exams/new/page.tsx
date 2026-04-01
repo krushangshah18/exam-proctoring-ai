@@ -288,6 +288,7 @@ export default function CreateExamPage() {
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Exam Title</FormLabel>
                   <FormControl>
                     <input type="text" placeholder="e.g. CS401 Midterm Examination"
+                      {...field}
                       className={inputBase} style={inputStyle}
                       onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                   </FormControl>
@@ -297,7 +298,7 @@ export default function CreateExamPage() {
               <FormField control={form.control} name="exam_mode" render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Exam Mode</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                     <SelectContent>
                       <SelectItem value="FLEXIBLE">Flexible — anytime within window</SelectItem>
@@ -312,7 +313,7 @@ export default function CreateExamPage() {
                 <FormItem>
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Duration (Minutes)</FormLabel>
                   <FormControl>
-                    <input type="number" min={1} className={inputBase} style={inputStyle}
+                    <input type="number" min={1} {...field} className={inputBase} style={inputStyle}
                       onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                   </FormControl>
                   <FormMessage />
@@ -338,6 +339,7 @@ export default function CreateExamPage() {
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Start Window</FormLabel>
                   <FormControl>
                     <input type="datetime-local" min={minStartString}
+                      {...field}
                       className={inputBase} style={inputStyle}
                       onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                   </FormControl>
@@ -351,6 +353,7 @@ export default function CreateExamPage() {
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>End Window</FormLabel>
                   <FormControl>
                     <input type="datetime-local"
+                      {...field}
                       min={minEndString || minStartString}
                       disabled={examMode === 'FIXED'}
                       className={inputBase}
@@ -368,6 +371,7 @@ export default function CreateExamPage() {
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Hard Join Deadline</FormLabel>
                   <FormControl>
                     <input type="datetime-local"
+                      {...field}
                       min={startWindow || minStartString}
                       max={examMode === 'FLEXIBLE' ? endWindow || undefined : undefined}
                       disabled={examMode === 'FLEXIBLE'}
@@ -439,7 +443,7 @@ export default function CreateExamPage() {
                   <FormItem>
                     <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Max Late Join (Mins past start)</FormLabel>
                     <FormControl>
-                      <input type="number" min={1} className={inputBase} style={inputStyle}
+                      <input type="number" min={1} {...field} className={inputBase} style={inputStyle}
                         onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                     </FormControl>
                     <FormDescription>Absolute cutoff: this many minutes after exam start time.</FormDescription>

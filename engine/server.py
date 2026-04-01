@@ -34,6 +34,7 @@ _ICE_SERVERS = RTCConfiguration(iceServers=[
 from core.proctor_coordinator import ProctorCoordinator
 from core.proctor_session import ProctorSession
 from core.metrics import metrics as _metrics
+from storage import DBWriter, S3Uploader
 
 # Logging is set up in main.py via setup_logging().
 # Fall back to basicConfig so server.py also works when run directly.
@@ -44,6 +45,8 @@ logger = logging.getLogger("server")
 coordinator:     "ProctorCoordinator | None" = None
 _session_config: dict                        = {}
 MAX_CONNECTIONS: int                         = 40
+_db_writer:      "DBWriter | None"           = None
+_s3_uploader:    "S3Uploader | None"         = None
 
 
 def _build_config() -> dict:
@@ -53,9 +56,13 @@ def _build_config() -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global coordinator, _session_config, MAX_CONNECTIONS
+    global coordinator, _session_config, MAX_CONNECTIONS, _db_writer, _s3_uploader
     _session_config = _build_config()
     MAX_CONNECTIONS = _session_config.get("MAX_SESSIONS", 40)
+
+    # Initialize central storage (graceful no-ops if env vars not set)
+    _db_writer   = DBWriter()
+    _s3_uploader = S3Uploader()
     # CLI --half / --warmup override config.py values (set by main.py via env vars)
     _half    = os.getenv("PROCTOR_HALF")    == "1" if os.getenv("PROCTOR_HALF") else _session_config.get("YOLO_HALF",         True)
     _warmup  = int(os.getenv("PROCTOR_WARMUP")) if os.getenv("PROCTOR_WARMUP") else _session_config.get("YOLO_WARMUP_FRAMES", 3)
@@ -81,6 +88,8 @@ async def lifespan(app: FastAPI):
     yield
     if coordinator is not None:
         await coordinator.stop()
+    if _db_writer is not None:
+        _db_writer.close()
     _metrics.stop()
 
 
@@ -1024,6 +1033,8 @@ async def offer(request: Request):
             session_dir      = reports_dir,
             config           = session_cfg,
             report_metadata  = report_metadata,
+            db_writer        = _db_writer,
+            s3_uploader      = _s3_uploader,
         )
         coordinator.add_session(pc_id, session)
         logger.info("[%s] ProctorSession created (report_id=%s)", device_label, file_prefix)

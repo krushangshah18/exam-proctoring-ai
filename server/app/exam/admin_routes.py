@@ -1052,7 +1052,7 @@ def bulk_extend_time(
 
 
 @router.post("/{exam_id}/sessions/{session_id}/terminate")
-def terminate_session(
+async def terminate_session(
     exam_id: str,
     session_id: str,
     db: Session = Depends(get_db),
@@ -1060,7 +1060,6 @@ def terminate_session(
 ):
     """
     Admin manually terminates a student session.
-    Typically triggered when risk_score >= 100.
     Pushes a TERMINATED SSE event to the student's active page.
     """
     exam = (
@@ -1095,6 +1094,26 @@ def terminate_session(
         "terminated_by": "ADMIN",
         "terminated_reason": sess.terminated_reason,
     })
+
+    # Best-effort: pull final risk score and report ID from engine
+    if sess.proctor_pc_id and sess.proctor_engine_url:
+        from app.exam.proctor_proxy import fetch_session_log as _fetch_log
+        try:
+            log_data = await _fetch_log(sess.proctor_engine_url, sess.proctor_pc_id)
+            risk = log_data.get("risk", {})
+            final_score = risk.get("final_score") or risk.get("score") or log_data.get("final_score")
+            if final_score is not None:
+                sess.risk_score = int(final_score)
+            report_id = log_data.get("report_id") or log_data.get("session_id") or log_data.get("id")
+            if report_id:
+                sess.proctor_report_id = str(report_id)
+            db.commit()
+            log.info(
+                "Admin terminate: pulled engine report session=%s score=%s report_id=%s",
+                session_id, sess.risk_score, sess.proctor_report_id,
+            )
+        except Exception as _e:
+            log.warning("Admin terminate: could not pull engine report (session=%s): %s", session_id, _e)
 
     log.info(
         "Admin %s manually terminated session %s (exam %s, risk_score=%s)",
@@ -1169,8 +1188,49 @@ async def admin_live_stream(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # Wrap the engine SSE stream so we can intercept session_end and persist
+    # the report_id to the DB — this ensures alert-history works after the session ends.
+    engine_url_snap = session.proctor_engine_url
+    pc_id_snap = session.proctor_pc_id
+    session_id_snap = str(session.id)
+
+    async def _intercepting_stream():
+        import json as _json
+        from sqlalchemy.orm import Session as _DBSession
+        from app.db.session import SessionLocal as _SessionLocal
+
+        async for chunk in stream_engine_events(engine_url_snap, pc_id_snap):
+            yield chunk
+            # Check if this chunk contains a session_end event
+            if "session_end" in chunk:
+                try:
+                    # Extract the data line from the SSE chunk
+                    for line in chunk.split("\n"):
+                        if line.startswith("data:"):
+                            payload = _json.loads(line[5:].strip())
+                            if payload.get("type") == "session_end":
+                                report_id = payload.get("report_id")
+                                if report_id:
+                                    _db: _DBSession = _SessionLocal()
+                                    try:
+                                        _sess = _db.query(models.ExamSession).filter(
+                                            models.ExamSession.id == session_id_snap
+                                        ).first()
+                                        if _sess and not _sess.proctor_report_id:
+                                            _sess.proctor_report_id = str(report_id)
+                                            _db.commit()
+                                            log.info(
+                                                "live-stream: saved proctor_report_id=%s for session=%s",
+                                                report_id, session_id_snap,
+                                            )
+                                    finally:
+                                        _db.close()
+                            break
+                except Exception as _exc:
+                    log.warning("live-stream: session_end intercept error: %s", _exc)
+
     return _SR(
-        stream_engine_events(session.proctor_engine_url, session.proctor_pc_id),
+        _intercepting_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1184,11 +1244,12 @@ async def get_session_alert_history(
     current_admin=Depends(require_role("ADMIN")),
 ):
     """
-    Return the full alert + warning history for a session from the engine.
-    Used by the admin monitor to restore history when switching between students.
-    Returns empty lists if the engine session is no longer available.
+    Return the full alert + warning history for a session.
+
+    Primary source: proctor_alerts / proctor_warnings tables (written by engine directly to RDS).
+    Fallback: engine HTTP polling (for sessions that ran before the RDS integration was deployed).
     """
-    from app.exam.proctor_proxy import fetch_session_log
+    from app.core import log as _log
 
     session = db.query(models.ExamSession).filter(
         models.ExamSession.id == session_id,
@@ -1197,20 +1258,61 @@ async def get_session_alert_history(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # ── Primary path: query RDS directly ─────────────────────────────────────
+    db_alerts = (
+        db.query(models.ProctorAlert)
+        .filter(models.ProctorAlert.session_id == session_id)
+        .order_by(models.ProctorAlert.occurred_at.desc())
+        .all()
+    )
+    db_warnings = (
+        db.query(models.ProctorWarning)
+        .filter(models.ProctorWarning.session_id == session_id)
+        .order_by(models.ProctorWarning.occurred_at.desc())
+        .all()
+    )
+
+    if db_alerts or db_warnings:
+        alerts = [
+            {
+                "message"    : a.message,
+                "proof_url"  : None,            # presigned URL generated on demand via /proof endpoint
+                "proof_s3_key": a.proof_s3_key,
+                "proof_type" : a.proof_type or "image",
+                "score_added": a.score_added,
+                "elapsed_s"  : a.elapsed_s,
+                "time"       : a.time_str or "",
+            }
+            for a in db_alerts
+        ]
+        warnings = [
+            {
+                "message"  : w.message,
+                "elapsed_s": w.elapsed_s,
+                "time"     : w.time_str or "",
+            }
+            for w in db_warnings
+        ]
+        return {"alerts": alerts, "warnings": warnings}
+
+    # ── Fallback: engine HTTP polling (pre-RDS sessions) ─────────────────────
+    # This block can be removed once all sessions use the RDS path.
     if not session.proctor_pc_id or not session.proctor_engine_url:
         return {"alerts": [], "warnings": []}
 
-    from app.core import log as _log
+    from app.exam.proctor_proxy import fetch_session_log
+    import httpx as _httpx
 
-    def _parse_log(log_data: dict):
+    def _parse_engine_log(log_data: dict):
         alerts = [
             {
-                "message"   : e.get("message", "Alert"),
-                "proof_url" : e.get("proof_url"),
-                "proof_type": e.get("proof_type", "image"),
-                "score_added": 0,
-                "elapsed_s" : e.get("elapsed_s", 0),
-                "time"      : e.get("time", ""),
+                "message"    : e.get("message", "Alert"),
+                "proof_url"  : e.get("proof_url"),
+                "proof_s3_key": None,
+                "proof_type" : e.get("proof_type", "image"),
+                "score_added": e.get("score_added") or e.get("risk_delta") or 0,
+                "elapsed_s"  : e.get("elapsed_s", 0),
+                "time"       : e.get("time", ""),
             }
             for e in log_data.get("alert_log", [])
         ]
@@ -1224,36 +1326,80 @@ async def get_session_alert_history(
         ]
         return list(reversed(alerts)), list(reversed(warnings))
 
+    async def _fetch_engine_report(engine_url: str, rid: str) -> dict | None:
+        try:
+            async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=15.0, write=4.0, pool=4.0)) as client:
+                r = await client.get(f"{engine_url}/report/{rid}")
+                r.raise_for_status()
+                return r.json()
+        except Exception as exc:
+            _log.warning("alert-history[fallback] report fetch failed (rid=%s): %s", rid, exc)
+            return None
+
     # Try live session log first
     try:
         log_data = await fetch_session_log(session.proctor_engine_url, session.proctor_pc_id)
-        _log.info("alert-history session_log keys=%s alert_count=%d warning_count=%d",
-                  list(log_data.keys()),
-                  len(log_data.get("alert_log", [])),
-                  len(log_data.get("warning_log", [])))
-        alerts, warnings = _parse_log(log_data)
+        alerts, warnings = _parse_engine_log(log_data)
         if alerts or warnings:
             return {"alerts": alerts, "warnings": warnings}
     except Exception as e:
-        _log.warning("alert-history fetch_session_log failed (pc_id=%s): %s", session.proctor_pc_id, e)
+        _log.info("alert-history[fallback] session_log unavailable (pc_id=%s): %s", session.proctor_pc_id, e)
 
-    # Fall back to the persisted report (available for ENDED/TERMINATED sessions)
+    # Try known report_id
     if session.proctor_report_id:
-        try:
-            import httpx as _httpx
-            async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=15.0, write=4.0, pool=4.0)) as client:
-                r = await client.get(f"{session.proctor_engine_url}/report/{session.proctor_report_id}")
-                r.raise_for_status()
-                alerts, warnings = _parse_log(r.json())
-                _log.info("alert-history report fallback report_id=%s alerts=%d warnings=%d",
-                          session.proctor_report_id, len(alerts), len(warnings))
-                return {"alerts": alerts, "warnings": warnings}
-        except Exception as e:
-            _log.warning("alert-history report fallback failed (report_id=%s): %s", session.proctor_report_id, e)
+        data = await _fetch_engine_report(session.proctor_engine_url, session.proctor_report_id)
+        if data:
+            alerts, warnings = _parse_engine_log(data)
+            return {"alerts": alerts, "warnings": warnings}
 
-    _log.warning("alert-history returning empty for session=%s (pc_id=%s, report_id=%s)",
-                 session_id, session.proctor_pc_id, session.proctor_report_id)
+    _log.warning("alert-history: no data for session=%s (no RDS rows, engine unreachable)", session_id)
     return {"alerts": [], "warnings": []}
+
+
+@router.get("/{exam_id}/sessions/{session_id}/proof-url")
+async def get_proof_presigned_url(
+    exam_id: str,
+    session_id: str,
+    s3_key: str,
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role("ADMIN")),
+):
+    """
+    Generate a presigned S3 URL for a proof image or audio file.
+    The s3_key comes from proctor_alerts.proof_s3_key.
+    URL is valid for 1 hour.
+    """
+    import os
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    bucket = os.getenv("S3_BUCKET", "")
+    if not bucket:
+        raise HTTPException(status_code=503, detail="S3 not configured")
+
+    # Verify the alert belongs to this session (security check)
+    alert = db.query(models.ProctorAlert).filter(
+        models.ProctorAlert.session_id == session_id,
+        models.ProctorAlert.proof_s3_key == s3_key,
+    ).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Proof not found")
+
+    try:
+        s3 = boto3.client(
+            "s3",
+            region_name=os.getenv("AWS_REGION", "ap-south-1"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+        )
+        url = s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": s3_key},
+            ExpiresIn=3600,
+        )
+        return {"url": url, "expires_in": 3600}
+    except (BotoCoreError, ClientError) as e:
+        raise HTTPException(status_code=502, detail=f"S3 presigned URL failed: {e}")
 
 
 class DebugModeBody(BaseModel):
@@ -1410,60 +1556,92 @@ async def list_exam_reports(
 
         return next((s for s in sessions if s.proctor_report_id == rep.get("id")), None)
 
-    containers = (
-        db.query(models.EngineContainer)
-        .filter(models.EngineContainer.is_active == True)
-        .all()
-    )
+    # Determine which engine URLs to query:
+    # - Always include engine URLs from sessions in this exam (they actually ran there)
+    # - Also include active containers (may have new sessions not yet in DB)
+    # - Skip inactive containers that have no sessions in this exam (avoids hammering dead engines)
+    session_engine_urls = {sess.proctor_engine_url for sess in sessions if sess.proctor_engine_url}
+    active_container_urls = {
+        c.url for c in db.query(models.EngineContainer)
+        .filter(models.EngineContainer.is_active == True).all()
+    }
+    engine_urls_to_query = session_engine_urls | active_container_urls
 
     report_rows: list[dict] = []
     seen_report_keys: set[tuple[str | None, str]] = set()
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=4.0, read=8.0, write=4.0, pool=4.0)) as client:
-        for container in containers:
-            try:
-                r = await client.get(f"{container.url}/reports/meta")
-                r.raise_for_status()
-                engine_reports = r.json()
-            except Exception as exc:
-                log.warning("Could not fetch reports/meta from %s: %s", container.url, exc)
+    # Collect report_id updates to commit in a single batch after the loop
+    # (committing inside the loop causes SQLAlchemy expire_on_commit to expire
+    # all ORM objects, making subsequent attribute access fail with lazy-load errors)
+    pending_report_id_updates: list[tuple[models.ExamSession, str]] = []
+
+    import asyncio as _asyncio
+
+    async def _fetch_engine_reports(client: httpx.AsyncClient, engine_url: str) -> tuple[str, list]:
+        """Fetch /reports/meta from one engine URL, returning (url, reports) or (url, []) on error."""
+        try:
+            r = await client.get(f"{engine_url}/reports/meta")
+            r.raise_for_status()
+            return engine_url, r.json()
+        except Exception as exc:
+            log.warning("Could not fetch reports/meta from %s: %s", engine_url, exc)
+            return engine_url, []
+
+    # Fetch all engines concurrently — total wait = slowest single engine, not sum of all
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=3.0, read=8.0, write=4.0, pool=4.0)) as client:
+        results = await _asyncio.gather(
+            *[_fetch_engine_reports(client, url) for url in engine_urls_to_query]
+        )
+
+    for engine_url, engine_reports in results:
+        for rep in engine_reports:
+            rep = {**rep, "engine_url": engine_url}
+            sess = _match_exam_report(rep)
+            if sess is None or str(sess.exam_id) != exam_id:
                 continue
 
-            for rep in engine_reports:
-                rep = {**rep, "engine_url": container.url}
-                sess = _match_exam_report(rep)
-                if sess is None or str(sess.exam_id) != exam_id:
-                    continue
+            report_key = (rep.get("id"), engine_url)
+            if report_key in seen_report_keys:
+                continue
+            seen_report_keys.add(report_key)
 
-                report_key = (rep.get("id"), container.url)
-                if report_key in seen_report_keys:
-                    continue
-                seen_report_keys.add(report_key)
+            user = user_by_id.get(str(sess.user_id))
+            # Queue report_id save — will commit once after the loop
+            if not sess.proctor_report_id and rep.get("id"):
+                sess.proctor_report_id = str(rep.get("id"))
+                pending_report_id_updates.append((sess, str(rep.get("id"))))
+            report_rows.append({
+                "row_id": f"{sess.id}:{rep.get('id')}",
+                "session_id": str(sess.id),
+                "report_id": rep.get("id"),
+                "engine_url": engine_url,
+                "student_name": user.full_name if user else rep.get("external_student_name") or "Unknown",
+                "student_email": user.email if user else rep.get("external_student_email") or "",
+                "session_status": sess.status,
+                "terminated_by": sess.terminated_by,
+                "terminated_reason": sess.terminated_reason,
+                "risk_score": sess.risk_score or 0,
+                "start_time": sess.start_time.isoformat() if sess.start_time else None,
+                "end_time": sess.end_time.isoformat() if sess.end_time else None,
+                "report_start_time": rep.get("session_start"),
+                "report_end_time": rep.get("session_end"),
+                "risk_state": rep.get("risk_state"),
+                "final_score": rep.get("final_score"),
+                "alert_count": rep.get("alert_count"),
+                "warning_count": rep.get("warning_count"),
+                "size_kb": rep.get("size_kb"),
+                "proof_count": rep.get("proof_count"),
+                "duration_s": rep.get("duration_s"),
+                "terminated": rep.get("terminated"),
+            })
 
-                user = user_by_id.get(str(sess.user_id))
-                report_rows.append({
-                    "row_id": f"{sess.id}:{rep.get('id')}",
-                    "session_id": str(sess.id),
-                    "report_id": rep.get("id"),
-                    "engine_url": container.url,
-                    "student_name": user.full_name if user else rep.get("external_student_name") or "Unknown",
-                    "student_email": user.email if user else rep.get("external_student_email") or "",
-                    "session_status": sess.status,
-                    "terminated_by": sess.terminated_by,
-                    "terminated_reason": sess.terminated_reason,
-                    "risk_score": sess.risk_score or 0,
-                    "start_time": sess.start_time,
-                    "end_time": sess.end_time,
-                    "report_start_time": rep.get("session_start"),
-                    "report_end_time": rep.get("session_end"),
-                    "risk_state": rep.get("risk_state"),
-                    "final_score": rep.get("final_score"),
-                    "alert_count": rep.get("alert_count"),
-                    "warning_count": rep.get("warning_count"),
-                    "size_kb": rep.get("size_kb"),
-                    "proof_count": rep.get("proof_count"),
-                    "duration_s": rep.get("duration_s"),
-                    "terminated": rep.get("terminated"),
-                })
+    # Batch-commit any new proctor_report_id values discovered above
+    if pending_report_id_updates:
+        try:
+            db.commit()
+            log.info("list_exam_reports: saved proctor_report_id for %d sessions", len(pending_report_id_updates))
+        except Exception as exc:
+            log.warning("list_exam_reports: batch report_id commit failed: %s", exc)
+            db.rollback()
 
     sessions_with_reports = {row["session_id"] for row in report_rows}
     for sess in sessions:
@@ -1481,8 +1659,8 @@ async def list_exam_reports(
             "terminated_by": sess.terminated_by,
             "terminated_reason": sess.terminated_reason,
             "risk_score": sess.risk_score or 0,
-            "start_time": sess.start_time,
-            "end_time": sess.end_time,
+            "start_time": sess.start_time.isoformat() if sess.start_time else None,
+            "end_time": sess.end_time.isoformat() if sess.end_time else None,
             "report_start_time": None,
             "report_end_time": None,
             "risk_state": None,
@@ -1495,13 +1673,13 @@ async def list_exam_reports(
             "terminated": None,
         })
 
-    report_rows.sort(
-        key=lambda x: (
-            x["report_id"] is None,
-            x.get("report_end_time") or x.get("end_time") or "",
-        ),
-        reverse=True,
-    )
+    def _sort_key(x):
+        t = x.get("report_end_time") or x.get("end_time") or ""
+        if hasattr(t, "isoformat"):
+            t = t.isoformat()
+        return (x["report_id"] is None, str(t))
+
+    report_rows.sort(key=_sort_key, reverse=True)
     return report_rows
 
 

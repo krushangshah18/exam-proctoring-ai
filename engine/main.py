@@ -13,6 +13,14 @@ from pathlib import Path
 
 # ── Must be first — sets up root logger before any other import ───────────────
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+# Load .env before anything else so DATABASE_URL / S3_BUCKET are available
+try:
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except ImportError:
+    pass  # python-dotenv not installed — rely on environment variables set externally
+
 from utils.logging_config import setup_logging
 setup_logging()
 

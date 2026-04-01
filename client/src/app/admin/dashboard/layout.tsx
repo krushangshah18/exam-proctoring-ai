@@ -120,12 +120,30 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </button>
         <button
           onClick={handleLogout}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150"
-          style={{ color: 'rgba(239,68,68,0.7)' }}
-          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(239,68,68,0.08)'; (e.currentTarget as HTMLElement).style.color = '#EF4444'; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'rgba(239,68,68,0.7)'; }}
+          className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold transition-all duration-150 border"
+          style={{
+            color: '#FCA5A5',
+            borderColor: 'rgba(239,68,68,0.25)',
+            background: 'rgba(239,68,68,0.04)',
+          }}
+          onMouseEnter={e => {
+            (e.currentTarget as HTMLElement).style.background = 'rgba(239,68,68,0.12)';
+            (e.currentTarget as HTMLElement).style.borderColor = 'rgba(239,68,68,0.5)';
+            (e.currentTarget as HTMLElement).style.color = '#FECACA';
+          }}
+          onMouseLeave={e => {
+            (e.currentTarget as HTMLElement).style.background = 'rgba(239,68,68,0.04)';
+            (e.currentTarget as HTMLElement).style.borderColor = 'rgba(239,68,68,0.25)';
+            (e.currentTarget as HTMLElement).style.color = '#FCA5A5';
+          }}
         >
-          <LogOut className="h-3.5 w-3.5" /> Sign out
+          <span className="flex items-center gap-2.5">
+            <LogOut className="h-4 w-4" />
+            Sign out
+          </span>
+          <span className="text-[11px] font-medium" style={{ color: 'rgba(254,202,202,0.8)' }}>
+            End session
+          </span>
         </button>
       </div>
     </div>
@@ -133,7 +151,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   return (
     <RoleGuard allowedRoles={['ADMIN']}>
-      <div className="min-h-screen flex" style={{ background: '#F8FAFC', fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+      <div
+        className="flex h-screen overflow-hidden"
+        style={{ background: '#F8FAFC', fontFamily: "'Plus Jakarta Sans', sans-serif" }}
+      >
 
         {/* Mobile Header */}
         <div className="lg:hidden fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-4 h-13"
@@ -157,14 +178,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
         {/* Sidebar */}
         <aside
-          className={`fixed inset-y-0 left-0 z-40 w-64 transform transition-transform duration-200 ease-in-out lg:translate-x-0 lg:static lg:h-screen ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} mt-[52px] lg:mt-0`}
+          className={`fixed inset-y-0 left-0 z-40 w-64 transform transition-transform duration-200 ease-in-out lg:translate-x-0 lg:sticky lg:top-0 lg:h-screen ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} mt-[52px] lg:mt-0`}
           style={{ background: '#22577A' }}>
           <SidebarContent />
         </aside>
 
         {/* Main content */}
-        <main className="flex-1 overflow-y-auto p-6 lg:p-8 mt-[52px] lg:mt-0">
-          {children}
+        <main className="min-w-0 flex-1 mt-[52px] lg:mt-0 overflow-y-auto">
+          <div className="p-6 lg:p-8 min-h-full">
+            {children}
+          </div>
         </main>
       </div>
     </RoleGuard>

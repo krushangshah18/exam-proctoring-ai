@@ -9,7 +9,9 @@
       "Bash(python3 -c \"from app.exam.admin_routes import router; print\\(''OK''\\)\")",
       "Bash(ls:*)",
       "Bash(node_modules/.bin/tsc --noEmit)",
-      "Bash(node -e \"const l = require\\(''lucide-react''\\); console.log\\(l.BookOpen ? ''BookOpen OK'' : ''missing''\\)\")"
+      "Bash(node -e \"const l = require\\(''lucide-react''\\); console.log\\(l.BookOpen ? ''BookOpen OK'' : ''missing''\\)\")",
+      "Bash(python3 -c \":*)",
+      "Bash(alembic heads:*)"
     ]
   }
 }

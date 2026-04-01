@@ -252,6 +252,10 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
   const frameAbortRef = useRef<AbortController | null>(null);
   const prevFrameUrl = useRef<string | null>(null);
   const frameFetchingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const histLoadedRef = useRef(false);
+  const pendingSSEAlertsRef = useRef<AlertEntry[]>([]);
+  const pendingSSEWarningsRef = useRef<WarningEntry[]>([]);
 
   const fetchFrame = useCallback(async () => {
     if (frameFetchingRef.current) return;
@@ -268,6 +272,7 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
       const blob = await res.blob();
       if (!blob.size) return;
       const url = URL.createObjectURL(blob);
+      if (!mountedRef.current) { URL.revokeObjectURL(url); return; }
       const old = prevFrameUrl.current;
       prevFrameUrl.current = url;
       setFrameUrl(url);
@@ -277,33 +282,37 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
   }, [examId, session.session_id]);
 
   useEffect(() => {
+    histLoadedRef.current = false;
+    pendingSSEAlertsRef.current = [];
+    pendingSSEWarningsRef.current = [];
     api.get(`/admin/exams/${examId}/sessions/${session.session_id}/alert-history`)
       .then((res) => {
         const data = res.data;
         const now = Date.now();
-        if (data.alerts?.length) {
-          const histAlerts: AlertEntry[] = data.alerts.map((e: any) => ({
-            message: e.message, proof_url: e.proof_url ?? undefined,
-            proof_type: e.proof_type ?? 'image', score_added: e.score_added ?? 0,
-            ts: now - (e.elapsed_s ?? 0) * 1000,
-          }));
-          setAlerts(histAlerts);
-        }
-        if (data.warnings?.length) {
-          const histWarnings: WarningEntry[] = data.warnings.map((e: any) => ({
-            message: e.message, ts: now - (e.elapsed_s ?? 0) * 1000,
-          }));
-          setWarnings(histWarnings);
-        }
+        const histAlerts: AlertEntry[] = (data.alerts ?? []).map((e: any) => ({
+          message: e.message, proof_url: e.proof_url ?? undefined,
+          proof_type: e.proof_type ?? 'image', score_added: e.score_added ?? 0,
+          ts: now - (e.elapsed_s ?? 0) * 1000,
+        }));
+        const histWarnings: WarningEntry[] = (data.warnings ?? []).map((e: any) => ({
+          message: e.message, ts: now - (e.elapsed_s ?? 0) * 1000,
+        }));
+        // Prepend any SSE events that arrived before history loaded
+        histLoadedRef.current = true;
+        setAlerts([...pendingSSEAlertsRef.current, ...histAlerts]);
+        setWarnings([...pendingSSEWarningsRef.current, ...histWarnings]);
+        pendingSSEAlertsRef.current = [];
+        pendingSSEWarningsRef.current = [];
       })
-      .catch(() => {})
+      .catch(() => { histLoadedRef.current = true; })
       .finally(() => setHistoryLoaded(true));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examId, session.session_id]);
 
   useEffect(() => {
-    if (session.status !== 'ACTIVE') return;
+    if (session.status !== 'ACTIVE' && session.status !== 'DISCONNECTED') return;
 
+    mountedRef.current = true;
     let stopped = false;
     const loop = async () => {
       while (!stopped) {
@@ -332,13 +341,23 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
             onScoreUpdate(session.session_id, Math.round(risk.score));
           }
           if (d?.type === 'alert') {
-            setAlerts(prev => [{
+            const entry: AlertEntry = {
               message: d.message || d.key || 'Alert', key: d.key,
               score_added: d.score_added, proof_url: d.proof_url,
               proof_type: d.proof_type, ts: Date.now(),
-            }, ...prev].slice(0, 100));
+            };
+            if (!histLoadedRef.current) {
+              pendingSSEAlertsRef.current = [entry, ...pendingSSEAlertsRef.current];
+            } else {
+              setAlerts(prev => [entry, ...prev]);
+            }
           } else if (d?.type === 'warning') {
-            setWarnings(prev => [{ message: d.message || 'Warning', ts: Date.now() }, ...prev].slice(0, 100));
+            const entry: WarningEntry = { message: d.message || 'Warning', ts: Date.now() };
+            if (!histLoadedRef.current) {
+              pendingSSEWarningsRef.current = [entry, ...pendingSSEWarningsRef.current];
+            } else {
+              setWarnings(prev => [entry, ...prev]);
+            }
           } else if (d?.type === 'session_end') {
             onSessionTerminated();
           }
@@ -347,6 +366,7 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
     );
     return () => {
       stopped = true;
+      mountedRef.current = false;
       if (frameTimerRef.current) clearTimeout(frameTimerRef.current);
       frameAbortRef.current?.abort();
       sseCloseRef.current?.();
@@ -452,7 +472,7 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
               style={{ color: RISK_COLORS[liveRisk.state] ?? '#22c55e', letterSpacing: '-0.03em' }}>
               {Math.round(liveRisk.score)}
             </p>
-            <span className="text-xs mb-1.5" style={{ color: '#64748B' }}>/ 100</span>
+            <span className="text-xs mb-1.5" style={{ color: '#64748B' }}>pts</span>
           </div>
           <div className="h-2 rounded-full overflow-hidden" style={{ background: '#F1F5F9' }}>
             <div className="h-2 rounded-full transition-all duration-700"
@@ -532,18 +552,18 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
               alerts.length === 0
                 ? <p className="text-sm text-center py-6" style={{ color: '#64748B' }}>No alerts yet</p>
                 : alerts.map((a, i) => (
-                  <ExpandableAlertRow key={i} entry={a} index={alerts.length - 1 - i} engineUrl={session.proctor_engine_url} />
+                  <ExpandableAlertRow key={`${a.ts}-${a.message.slice(0,20)}`} entry={a} index={alerts.length - 1 - i} engineUrl={session.proctor_engine_url} />
                 ))
             ) : (
               warnings.length === 0
                 ? <p className="text-sm text-center py-6" style={{ color: '#64748B' }}>No warnings yet</p>
                 : warnings.map((w, i) => (
-                  <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-lg border text-xs"
+                  <div key={`${w.ts}-${w.message.slice(0,20)}`} className="flex items-start gap-2 px-3 py-2 rounded-lg border text-xs"
                     style={{ background: 'rgba(255,251,235,0.5)', borderColor: '#FDE68A' }}>
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" style={{ color: '#F59E0B' }} />
                     <div>
                       <p style={{ color: '#B45309' }}>{w.message}</p>
-                      <p className="mt-0.5" style={{ color: '#FDE68A' }}>{fmtTimeIST(new Date(w.ts).toISOString())}</p>
+                      <p className="mt-0.5" style={{ color: '#92400E' }}>{fmtTimeIST(new Date(w.ts).toISOString())}</p>
                     </div>
                   </div>
                 ))
@@ -598,7 +618,7 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
       {/* Admin termination */}
       {session.status === "ACTIVE" && (
         <div className="rounded-xl border-2 overflow-hidden transition-all duration-300"
-          style={liveRisk.score >= 100
+          style={liveRisk.score >= 70
             ? { borderColor: '#FCA5A5', background: 'rgba(254,242,242,0.3)' }
             : { borderColor: '#E2E8F0', background: '#fff' }
           }>
@@ -607,16 +627,17 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
               <Ban className="h-4 w-4" style={{ color: '#BE123C' }} />
               <span className="text-sm font-semibold" style={{ color: '#BE123C' }}>Terminate Session</span>
             </div>
-            {liveRisk.score < 100 && (
-              <span className="text-xs" style={{ color: '#64748B' }}>Available at risk ≥ 100</span>
-            )}
+            <span className="text-xs font-mono font-bold px-2 py-0.5 rounded"
+              style={{ background: liveRisk.score >= 70 ? '#FFF1F2' : '#F8FAFC', color: liveRisk.score >= 70 ? '#BE123C' : '#64748B' }}>
+              Score: {Math.round(liveRisk.score)}
+            </span>
           </div>
           <div className="p-4 space-y-3">
-            {liveRisk.score >= 100 ? (
+            {liveRisk.score >= 70 ? (
               <>
                 <p className="text-sm" style={{ color: '#BE123C' }}>
-                  Risk score has reached <strong>{Math.round(liveRisk.score)}</strong>. You may terminate
-                  this student's session. They will be notified and can submit an appeal.
+                  Risk score is <strong>{Math.round(liveRisk.score)}</strong>. Terminating will notify
+                  the student and allow them to submit an appeal.
                 </p>
                 <button
                   onClick={handleTerminate} disabled={terminating}
@@ -630,10 +651,19 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
                 </button>
               </>
             ) : (
-              <p className="text-sm" style={{ color: '#64748B' }}>
-                The terminate button unlocks when the student's risk score reaches 100.
-                Current score: <strong>{Math.round(liveRisk.score)}</strong>.
-              </p>
+              <div className="space-y-2">
+                <p className="text-sm" style={{ color: '#64748B' }}>
+                  Terminate button activates at risk ≥ 70. Current: <strong>{Math.round(liveRisk.score)}</strong>.
+                </p>
+                <button
+                  onClick={handleTerminate} disabled={terminating}
+                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-semibold border transition-all duration-150"
+                  style={{ borderColor: '#FECDD3', color: '#BE123C', background: '#fff', cursor: terminating ? 'not-allowed' : 'pointer' }}
+                >
+                  {terminating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Ban className="h-3 w-3" />}
+                  Force Terminate (Override)
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -883,9 +913,11 @@ export default function MonitoringDashboard() {
   }, [searchParams]);
 
   useEffect(() => {
-    if (!selectedSession) return;
-    const latest = sessions.find(s => s.session_id === selectedSession.session_id);
-    if (latest) setSelectedSession(latest);
+    setSelectedSession(prev => {
+      if (!prev) return prev;
+      const latest = sessions.find(s => s.session_id === prev.session_id);
+      return latest ?? prev;
+    });
   }, [sessions]);
 
   const handleScoreUpdate = useCallback((sessionId: string, score: number) => {
@@ -1162,7 +1194,7 @@ export default function MonitoringDashboard() {
                   examId={examId}
                   examMode={examMode}
                   onScoreUpdate={handleScoreUpdate}
-                  onSessionTerminated={() => { fetchSessions(); setSelectedSession(null); }}
+                  onSessionTerminated={() => fetchSessions()}
                 />
               </div>
             ) : (

@@ -37,6 +37,12 @@ function formatDatePreview(localString: string): string {
     hour12: true, timeZone: 'Asia/Kolkata',
   }) + ' IST';
 }
+
+function parseServerDate(value: string): Date {
+  if (!value) return new Date(NaN);
+  const hasTimezone = value.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(value);
+  return new Date(hasTimezone ? value : `${value}Z`);
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 const examSchema = z.object({
@@ -155,17 +161,18 @@ export default function EditExamPage() {
 
         if (data.status === 'ENDED')      { setLockReason('ended');     setIsLoading(false); return; }
         if (data.status === 'CANCELLED')  { setLockReason('cancelled'); setIsLoading(false); return; }
-        if (new Date(data.start_window).getTime() <= Date.now() + 10 * 60000) {
+        const startAt = parseServerDate(data.start_window);
+        if (startAt.getTime() <= Date.now() + 10 * 60000) {
           setLockReason('time'); setIsLoading(false); return;
         }
 
         form.reset({
           title: data.title, exam_mode: data.exam_mode,
-          start_window: toLocalInputString(new Date(data.start_window)),
-          end_window: toLocalInputString(new Date(data.end_window)),
+          start_window: toLocalInputString(startAt),
+          end_window: toLocalInputString(parseServerDate(data.end_window)),
           duration_minutes: data.duration_minutes,
           hard_join_deadline: data.hard_join_deadline
-            ? toLocalInputString(new Date(data.hard_join_deadline)) : '',
+            ? toLocalInputString(parseServerDate(data.hard_join_deadline)) : '',
           late_join_policy: data.late_join_policy,
           allow_late_extension: data.allow_late_extension,
           max_late_minutes: data.max_late_minutes || 0,
@@ -382,6 +389,7 @@ export default function EditExamPage() {
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Exam Title</FormLabel>
                   <FormControl>
                     <input type="text" placeholder="e.g. CS401 Midterm Examination"
+                      {...field}
                       className={inputBase} style={inputStyle}
                       onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                   </FormControl>
@@ -405,7 +413,7 @@ export default function EditExamPage() {
                 <FormItem>
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Duration (Minutes)</FormLabel>
                   <FormControl>
-                    <input type="number" min={1} className={inputBase} style={inputStyle}
+                    <input type="number" min={1} {...field} className={inputBase} style={inputStyle}
                       onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                   </FormControl>
                   <FormMessage />
@@ -431,6 +439,7 @@ export default function EditExamPage() {
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Start Window</FormLabel>
                   <FormControl>
                     <input type="datetime-local" min={minStartString}
+                      {...field}
                       className={inputBase} style={inputStyle}
                       onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                   </FormControl>
@@ -444,6 +453,7 @@ export default function EditExamPage() {
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>End Window</FormLabel>
                   <FormControl>
                     <input type="datetime-local"
+                      {...field}
                       min={minEndString || minStartString}
                       disabled={examMode === 'FIXED'}
                       className={inputBase}
@@ -461,6 +471,7 @@ export default function EditExamPage() {
                   <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Hard Join Deadline</FormLabel>
                   <FormControl>
                     <input type="datetime-local"
+                      {...field}
                       min={startWindow || minStartString}
                       max={examMode === 'FLEXIBLE' ? endWindow || undefined : undefined}
                       disabled={examMode === 'FLEXIBLE'}
@@ -532,7 +543,7 @@ export default function EditExamPage() {
                   <FormItem>
                     <FormLabel className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Max Late Join (Mins past start)</FormLabel>
                     <FormControl>
-                      <input type="number" min={1} className={inputBase} style={inputStyle}
+                      <input type="number" min={1} {...field} className={inputBase} style={inputStyle}
                         onFocus={inputFocus} onBlur={(e) => { field.onBlur(); inputBlur(e); }} />
                     </FormControl>
                     <FormDescription>Absolute cutoff: this many minutes after exam start time.</FormDescription>
