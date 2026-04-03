@@ -77,6 +77,7 @@ class DBWriter:
         score_added: float,
         proof_s3_key: str | None = None,
         proof_type: str | None = None,
+        proof_size_bytes: int | None = None,
     ) -> None:
         """Insert one row into proctor_alerts. Fire-and-forget, never raises."""
         if not self.enabled:
@@ -86,9 +87,9 @@ class DBWriter:
                 """
                 INSERT INTO proctor_alerts
                     (id, session_id, message, alert_key, elapsed_s, time_str,
-                     score_added, proof_s3_key, proof_type, occurred_at)
+                     score_added, proof_s3_key, proof_type, proof_size_bytes, occurred_at)
                 VALUES
-                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     str(uuid.uuid4()),
@@ -100,6 +101,7 @@ class DBWriter:
                     score_added,
                     proof_s3_key,
                     proof_type,
+                    proof_size_bytes,
                     datetime.now(timezone.utc),
                 ),
             )
@@ -182,8 +184,8 @@ class DBWriter:
         if self._pool is not None:
             try:
                 self._pool.closeall()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("DBWriter.close: closeall failed: %s", exc)
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -194,7 +196,8 @@ class DBWriter:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
             conn.commit()
-        except Exception:
+        except Exception as exc:
+            logger.debug("DBWriter._execute failed: %s", exc)
             conn.rollback()
             raise
         finally:

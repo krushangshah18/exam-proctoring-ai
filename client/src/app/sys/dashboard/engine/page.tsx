@@ -140,11 +140,63 @@ function EC2ConfigDialog({
   );
 }
 
+// ── Per-container start/stop controls ────────────────────────────────────────
+function ContainerControls({ container }: { container: ContainerInfo }) {
+  const [loading, setLoading] = useState<'start' | 'stop' | null>(null);
+
+  const act = async (action: 'start' | 'stop') => {
+    setLoading(action);
+    try {
+      const r = await api.post(`/admin/engine/containers/${container.id}/${action}`);
+      toast.success(r.data.message || `${action === 'start' ? 'Starting' : 'Stopping'} ${container.container_name}…`);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail || `Failed to ${action} container`);
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border"
+      style={{ background: '#fff', borderColor: '#E2E8F0' }}>
+      <div className="text-xs">
+        <span className="font-mono font-semibold" style={{ color: '#0F172A' }}>{container.container_name}</span>
+        <span className="ml-2 font-medium" style={{ color: '#94A3B8' }}>:{container.container_port}</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <button onClick={() => act('start')} disabled={!!loading}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-colors disabled:opacity-50"
+          style={{ borderColor: '#BBF7D0', color: '#15803D', background: '#ECFDF5' }}>
+          {loading === 'start' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+          Start
+        </button>
+        <button onClick={() => act('stop')} disabled={!!loading}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-colors disabled:opacity-50"
+          style={{ borderColor: '#FECDD3', color: '#BE123C', background: '#FFF1F2' }}>
+          {loading === 'stop' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
+          Stop
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── EC2 Instance Card (top-level, shared) ─────────────────────────────────────
 function EC2InstanceCard({ containers, onRefresh }: { containers: ContainerInfo[]; onRefresh: () => void }) {
   const ec2Container = containers.find(c => c.ec2_instance_id);
   const instanceId   = ec2Container?.ec2_instance_id;
   const region       = ec2Container?.ec2_region || 'ap-south-1';
+  const fallbackHost = (() => {
+    const firstUrl = containers[0]?.url;
+    if (!firstUrl) return null;
+    try {
+      return new URL(firstUrl).hostname;
+    } catch {
+      return null;
+    }
+  })();
+  const displayId = instanceId || fallbackHost;
+  const hasEc2Controls = !!instanceId;
 
   const [ec2State, setEc2State]         = useState<{ state: string; public_ip?: string } | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -229,8 +281,13 @@ function EC2InstanceCard({ containers, onRefresh }: { containers: ContainerInfo[
           <div>
             <p className="text-sm font-bold" style={{ color: '#0F172A' }}>EC2 Instance</p>
             <p className="text-xs font-mono mt-0.5" style={{ color: '#64748B' }}>
-              {instanceId || 'Not configured — use Configure on a container card'}
+              {displayId || 'Not configured — use Configure on a container card'}
             </p>
+            {!instanceId && fallbackHost && (
+              <p className="text-[11px] mt-1" style={{ color: '#94A3B8' }}>
+                Using container URL host as a stable Elastic IP display. AWS start/stop/status still require the EC2 instance ID.
+              </p>
+            )}
           </div>
         </div>
         {ec2State && (
@@ -241,7 +298,7 @@ function EC2InstanceCard({ containers, onRefresh }: { containers: ContainerInfo[
       </div>
 
       {/* Info row */}
-      {instanceId && (
+      {displayId && (
         <div className="grid grid-cols-3 gap-3 text-xs">
           <div className="rounded-lg border p-3" style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
             <p className="font-medium mb-0.5" style={{ color: '#94A3B8' }}>Region</p>
@@ -249,7 +306,7 @@ function EC2InstanceCard({ containers, onRefresh }: { containers: ContainerInfo[
           </div>
           <div className="rounded-lg border p-3" style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
             <p className="font-medium mb-0.5" style={{ color: '#94A3B8' }}>Public IP</p>
-            <p className="font-mono font-semibold" style={{ color: '#0F172A' }}>{ec2State?.public_ip || '—'}</p>
+            <p className="font-mono font-semibold" style={{ color: '#0F172A' }}>{ec2State?.public_ip || fallbackHost || '—'}</p>
           </div>
           <div className="rounded-lg border p-3" style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
             <p className="font-medium mb-0.5" style={{ color: '#94A3B8' }}>Containers</p>
@@ -258,21 +315,33 @@ function EC2InstanceCard({ containers, onRefresh }: { containers: ContainerInfo[
         </div>
       )}
 
+      {/* Per-container controls */}
+      {containers.filter(c => c.container_name).length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#94A3B8' }}>Docker Containers</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {containers.filter(c => c.container_name).map(c => (
+              <ContainerControls key={c.id} container={c} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Action buttons */}
       <div className="flex items-center gap-2 flex-wrap">
-        <button onClick={fetchStatus} disabled={!instanceId || statusLoading}
+        <button onClick={fetchStatus} disabled={!hasEc2Controls || statusLoading}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors disabled:opacity-50"
           style={{ borderColor: '#E2E8F0', color: '#475569', background: '#F8FAFC' }}>
           {statusLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}
           Check Status
         </button>
-        <button onClick={handleStart} disabled={!instanceId || !!actionLoading}
+        <button onClick={handleStart} disabled={!hasEc2Controls || !!actionLoading}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors disabled:opacity-50"
           style={{ borderColor: '#BBF7D0', color: '#15803D', background: '#ECFDF5' }}>
           {actionLoading === 'start' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
           Start Instance
         </button>
-        <button onClick={handleStop} disabled={!instanceId || !!actionLoading}
+        <button onClick={handleStop} disabled={!hasEc2Controls || !!actionLoading}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors disabled:opacity-50"
           style={{ borderColor: '#FECDD3', color: '#BE123C', background: '#FFF1F2' }}>
           {actionLoading === 'stop' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
@@ -537,7 +606,6 @@ export default function EngineMonitorPage() {
   const [metrics, setMetrics]       = useState<MetricsResult[]>([]);
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true);
@@ -548,14 +616,31 @@ export default function EngineMonitorPage() {
       ]);
       setContainers(cr.data);
       setMetrics(mr.data);
+      return true;
     } catch { if (!silent) toast.error('Failed to fetch engine data'); }
     finally { setLoading(false); setRefreshing(false); }
+    return false;
   }, []);
 
   useEffect(() => {
-    fetchAll();
-    intervalRef.current = setInterval(() => fetchAll(true), 10000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    let stopped = false;
+    let failureCount = 0;
+
+    const loop = async () => {
+      while (!stopped) {
+        const ok = document.hidden ? true : await fetchAll(failureCount > 0);
+        failureCount = ok ? 0 : failureCount + 1;
+        const delay = document.hidden
+          ? 30000
+          : ok
+            ? 10000
+            : Math.min(10000 * (2 ** Math.min(failureCount, 3)), 60000);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    };
+
+    void loop();
+    return () => { stopped = true; };
   }, [fetchAll]);
 
   const totalSlots = containers.reduce((s, c) => s + c.max_sessions, 0);

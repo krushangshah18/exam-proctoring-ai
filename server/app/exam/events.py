@@ -14,11 +14,34 @@ Queue lifecycle:
 """
 
 import asyncio
+import time
 from typing import Dict
+
+from app.core import log, system_logger
 
 # session_id (str) → asyncio.Queue
 _queues: Dict[str, asyncio.Queue] = {}
 _main_loop: asyncio.AbstractEventLoop | None = None
+
+# Rate-limit queue-full warnings to avoid log spam on bursty streams.
+_queue_full_last_log_at: float = 0.0
+_queue_full_drop_count: int = 0
+
+
+def _log_queue_full(session_id: str, event_type: str) -> None:
+    global _queue_full_last_log_at, _queue_full_drop_count
+    _queue_full_drop_count += 1
+    now = time.time()
+    if now - _queue_full_last_log_at >= 60:
+        # Emit at most once per minute.
+        system_logger.warning(
+            "SSE event queue full; dropping events session_id=%s event=%s dropped_count=%s",
+            session_id,
+            event_type,
+            _queue_full_drop_count,
+        )
+        _queue_full_last_log_at = now
+        _queue_full_drop_count = 0
 
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -45,7 +68,7 @@ async def push_event(session_id: str, event_type: str, data: dict) -> None:
         try:
             await _queues[session_id].put({"type": event_type, "data": data})
         except asyncio.QueueFull:
-            pass
+            _log_queue_full(session_id, event_type)
 
 
 def push_event_sync(session_id: str, event_type: str, data: dict) -> None:
@@ -54,14 +77,25 @@ def push_event_sync(session_id: str, event_type: str, data: dict) -> None:
     Uses the app's registered main event loop so threadpool handlers can
     still enqueue SSE events reliably.
     """
-    if session_id not in _queues or _main_loop is None:
+    if session_id not in _queues:
+        return
+    if _main_loop is None:
+        # If this happens, SSE push infrastructure isn't initialised correctly.
+        log.error("push_event_sync called before event loop initialised (session_id=%s, event=%s)", session_id, event_type)
         return
     try:
         _main_loop.call_soon_threadsafe(
             _queues[session_id].put_nowait,
             {"type": event_type, "data": data},
         )
-    except RuntimeError:
-        pass
+    except RuntimeError as e:
+        # Thread-safety / lifecycle issue; log for diagnostics.
+        log.warning(
+            "SSE push_event_sync runtime error (session_id=%s, event=%s): %s",
+            session_id,
+            event_type,
+            e,
+        )
+        return
     except asyncio.QueueFull:
-        pass
+        _log_queue_full(session_id, event_type)

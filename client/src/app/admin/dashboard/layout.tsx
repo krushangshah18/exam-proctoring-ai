@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  LayoutDashboard, Settings, LogOut, FileText, User, Menu, X, GraduationCap,
+  LayoutDashboard, Settings, LogOut, FileText, Menu, X, GraduationCap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import RoleGuard from '@/components/auth/role-guard';
@@ -14,12 +14,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const router = useRouter();
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<{ full_name?: string; email?: string; must_change_password?: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => { fetchUserProfile(); }, []);
-
-  const fetchUserProfile = async () => {
+  const fetchUserProfile = useCallback(async () => {
     try {
       const res = await api.get('/auth/me');
       if (res.data.must_change_password) {
@@ -33,7 +31,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     } finally {
       setLoading(false);
     }
-  };
+  }, [router]);
+
+  useEffect(() => { fetchUserProfile(); }, [fetchUserProfile]);
 
   const handleLogout = async () => {
     try {
@@ -120,30 +120,19 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </button>
         <button
           onClick={handleLogout}
-          className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold transition-all duration-150 border"
-          style={{
-            color: '#FCA5A5',
-            borderColor: 'rgba(239,68,68,0.25)',
-            background: 'rgba(239,68,68,0.04)',
-          }}
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-150"
+          style={{ color: 'rgba(255,255,255,0.45)' }}
           onMouseEnter={e => {
-            (e.currentTarget as HTMLElement).style.background = 'rgba(239,68,68,0.12)';
-            (e.currentTarget as HTMLElement).style.borderColor = 'rgba(239,68,68,0.5)';
-            (e.currentTarget as HTMLElement).style.color = '#FECACA';
+            (e.currentTarget as HTMLElement).style.color = '#fca5a5';
+            (e.currentTarget as HTMLElement).style.background = 'rgba(239,68,68,0.1)';
           }}
           onMouseLeave={e => {
-            (e.currentTarget as HTMLElement).style.background = 'rgba(239,68,68,0.04)';
-            (e.currentTarget as HTMLElement).style.borderColor = 'rgba(239,68,68,0.25)';
-            (e.currentTarget as HTMLElement).style.color = '#FCA5A5';
+            (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.45)';
+            (e.currentTarget as HTMLElement).style.background = 'transparent';
           }}
         >
-          <span className="flex items-center gap-2.5">
-            <LogOut className="h-4 w-4" />
-            Sign out
-          </span>
-          <span className="text-[11px] font-medium" style={{ color: 'rgba(254,202,202,0.8)' }}>
-            End session
-          </span>
+          <LogOut className="h-3.5 w-3.5 shrink-0" />
+          Sign out
         </button>
       </div>
     </div>

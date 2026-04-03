@@ -76,26 +76,26 @@ class S3Uploader:
         session_id: str,
         alert_key: str,
         extension: str,
-    ) -> str | None:
+    ) -> tuple[str | None, int | None]:
         """
         Upload a local file to S3.
 
-        Returns the S3 object key (e.g. "proofs/session-uuid/phone_120345.jpg")
-        or None on failure.
+        Returns `(s3_key, size_bytes)` or `(None, None)` on failure.
 
         The local file is NOT deleted after upload — call cleanup_local() separately
         if you want to remove it.
         """
         if not self.enabled:
-            return None
+            return None, None
         try:
             path = Path(local_path)
             if not path.exists():
                 logger.warning("S3Uploader.upload_file: file not found: %s", local_path)
-                return None
+                return None, None
 
             s3_key = f"proofs/{session_id}/{path.name}"
             content_type = "image/jpeg" if extension in ("jpg", "jpeg") else "audio/wav"
+            size_bytes = path.stat().st_size
 
             self._client.upload_file(
                 str(path),
@@ -104,14 +104,14 @@ class S3Uploader:
                 ExtraArgs={"ContentType": content_type},
             )
             logger.debug("S3Uploader: uploaded %s → s3://%s/%s", local_path, self._bucket, s3_key)
-            return s3_key
+            return s3_key, size_bytes
 
         except (BotoCoreError, ClientError) as exc:
             logger.error("S3Uploader.upload_file failed: %s", exc)
-            return None
+            return None, None
         except Exception as exc:
             logger.error("S3Uploader.upload_file unexpected error: %s", exc)
-            return None
+            return None, None
 
     def upload_bytes(
         self,

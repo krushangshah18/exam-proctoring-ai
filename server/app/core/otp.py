@@ -3,7 +3,7 @@ import json
 import hashlib
 from datetime import timedelta
 
-from app.core import settings
+from app.core import settings, log
 from app.core.redis import redis_client
 
 
@@ -53,11 +53,21 @@ def store_otp(
         "attempts": 0
     }
 
-    redis_client.setex(
-        key,
-        OTP_TTL,
-        json.dumps(data)
-    )
+    try:
+        redis_client.setex(
+            key,
+            OTP_TTL,
+            json.dumps(data),
+        )
+    except Exception as e:
+        log.exception(
+            "Failed to store OTP scope=%s user_id=%s fingerprint=%s: %s",
+            scope,
+            user_id,
+            fingerprint,
+            e,
+        )
+        raise
 
 
 # -------------------------
@@ -73,7 +83,17 @@ def verify_otp(
 
     key = _key(scope, user_id, fingerprint)
 
-    raw = redis_client.get(key)
+    try:
+        raw = redis_client.get(key)
+    except Exception as e:
+        log.exception(
+            "Failed to verify OTP (redis get) scope=%s user_id=%s fingerprint=%s: %s",
+            scope,
+            user_id,
+            fingerprint,
+            e,
+        )
+        return False
 
     if not raw:
         return False
@@ -82,22 +102,50 @@ def verify_otp(
 
     # Too many attempts
     if data["attempts"] >= MAX_ATTEMPTS:
-        redis_client.delete(key)
+        try:
+            redis_client.delete(key)
+        except Exception as e:
+            log.exception(
+                "Failed to delete expired/blocked OTP scope=%s user_id=%s fingerprint=%s: %s",
+                scope,
+                user_id,
+                fingerprint,
+                e,
+            )
         return False
 
     # Verify hash
     if _hash_otp(otp) == data["otp"]:
-        redis_client.delete(key)
+        try:
+            redis_client.delete(key)
+        except Exception as e:
+            log.exception(
+                "Failed to delete verified OTP scope=%s user_id=%s fingerprint=%s: %s",
+                scope,
+                user_id,
+                fingerprint,
+                e,
+            )
         return True
 
     # Failed
     data["attempts"] += 1
 
-    redis_client.setex(
-        key,
-        OTP_TTL,
-        json.dumps(data)
-    )
+    try:
+        redis_client.setex(
+            key,
+            OTP_TTL,
+            json.dumps(data),
+        )
+    except Exception as e:
+        log.exception(
+            "Failed to update OTP attempts scope=%s user_id=%s fingerprint=%s: %s",
+            scope,
+            user_id,
+            fingerprint,
+            e,
+        )
+        return False
 
     return False
 
@@ -112,6 +160,15 @@ def clear_otp(
     fingerprint: str | None = None
 ):
 
-    redis_client.delete(
-        _key(scope, user_id, fingerprint)
-    )
+    try:
+        redis_client.delete(
+            _key(scope, user_id, fingerprint)
+        )
+    except Exception as e:
+        log.exception(
+            "Failed to clear OTP scope=%s user_id=%s fingerprint=%s: %s",
+            scope,
+            user_id,
+            fingerprint,
+            e,
+        )

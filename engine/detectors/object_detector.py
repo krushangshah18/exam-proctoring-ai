@@ -9,6 +9,8 @@ from ultralytics import YOLO
 
 logger = logging.getLogger(__name__)
 
+_YOLO_LATENCY_METRICS_LAST_LOG_AT: float = 0.0
+
 
 # ── IoU / merge helpers ───────────────────────────────────────────────────────
 
@@ -51,7 +53,7 @@ def merge_by_class(detections, classes, iou_threshold=0.5):
             for jdx, other in items:
                 if jdx in used:
                     continue
-                if compute_iou(det["bbox"], other["bbox"]) >= iou_threshold:
+                if any(compute_iou(c["bbox"], other["bbox"]) >= iou_threshold for c in cluster):
                     cluster.append(other)
                     used.add(jdx)
             clusters.append(cluster)
@@ -160,6 +162,31 @@ class ObjectDetector:
         if warmup_frames > 0:
             self._schedule_warmup(warmup_frames)
 
+    def update_thresholds(
+        self,
+        phone_conf:  float | None = None,
+        book_conf:   float | None = None,
+        audio_conf:  float | None = None,
+        person_conf: float | None = None,
+    ) -> None:
+        """Update per-class confidence thresholds at runtime (no model reload required)."""
+        if phone_conf is not None:
+            self.class_thresholds["cell_phone"] = float(phone_conf)
+        if book_conf is not None:
+            self.class_thresholds["book"] = float(book_conf)
+        if audio_conf is not None:
+            self.class_thresholds["headphone"] = float(audio_conf)
+            self.class_thresholds["earbud"]    = float(audio_conf)
+        if person_conf is not None:
+            self.person_conf = float(person_conf)
+        logger.info(
+            "ObjectDetector thresholds updated → phone=%.2f  book=%.2f  audio=%.2f  person=%.2f",
+            self.class_thresholds.get("cell_phone", self.default_conf),
+            self.class_thresholds.get("book",       self.default_conf),
+            self.class_thresholds.get("headphone",  self.default_conf),
+            self.person_conf,
+        )
+
     def _warmup(self, n: int) -> None:
         """Run N dummy inference passes. Called in a background thread."""
         logger.info("ObjectDetector: warmup starting (%d pass(es))…", n)
@@ -264,7 +291,11 @@ class ObjectDetector:
         try:
             from core.metrics import metrics as _m
             _m.record_yolo_latency(elapsed_ms)
-        except Exception:
-            pass
+        except Exception as exc:
+            global _YOLO_LATENCY_METRICS_LAST_LOG_AT
+            now = time.time()
+            if now - _YOLO_LATENCY_METRICS_LAST_LOG_AT >= 60:
+                _YOLO_LATENCY_METRICS_LAST_LOG_AT = now
+                logger.debug("ObjectDetector: record_yolo_latency failed: %s", exc)
 
         return out

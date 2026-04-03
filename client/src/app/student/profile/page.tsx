@@ -190,9 +190,9 @@ export default function StudentProfile() {
                     boxShadow: '0 4px 14px rgba(34,87,122,0.2)',
                     background: '#22577A',
                   }}>
-                    {user?.profile_image_path ? (
+                    {user?.profile_image_url ? (
                       <img
-                        src={`${apiBase}/${user.profile_image_path}?v=${user.last_profile_image_update || Date.now()}`}
+                        src={user.profile_image_url}
                         alt="Profile"
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         onError={e => { (e.currentTarget as HTMLElement).style.display = 'none'; }}

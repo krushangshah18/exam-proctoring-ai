@@ -5,7 +5,6 @@ from datetime import datetime, UTC, timedelta
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from app.core import log, settings
 from app.auth.routes import router as auth_router
@@ -170,6 +169,7 @@ async def _exam_status_scheduler():
                     sess.terminated_by = "SYSTEM_DISCONNECT"
                     sess.terminated_reason = "Session auto-terminated: student disconnected for over 5 minutes"
                     sess.terminated_at = now
+                    sess.end_time = sess.end_time or sess.terminated_at
                     push_event_sync(str(sess.id), "TERMINATED", {
                         "terminated_by": "SYSTEM_DISCONNECT",
                         "terminated_reason": sess.terminated_reason,
@@ -246,7 +246,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Exam Proctoring AI Backend", version="0.1.0", lifespan=lifespan)
-app.mount("/storage", StaticFiles(directory="storage"), name="storage")
 
 app.add_middleware(
     CORSMiddleware,

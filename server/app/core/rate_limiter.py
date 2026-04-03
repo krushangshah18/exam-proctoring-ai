@@ -70,7 +70,14 @@ def rate_limit(name, limit, window, by = "ip"):  # ip | user | both
                         detail=f"Too many requests. Try again in {time_str}"
                     )
 
-            except HTTPException:
+            except HTTPException as e:
+                # Avoid noise for the expected 429 case; we already log the rate-limit hit.
+                if getattr(e, "status_code", None) != status.HTTP_429_TOO_MANY_REQUESTS:
+                    log.warning(
+                        "Rate limiter HTTPException status=%s detail=%s",
+                        getattr(e, "status_code", None),
+                        getattr(e, "detail", None),
+                    )
                 raise
 
             except Exception as e:

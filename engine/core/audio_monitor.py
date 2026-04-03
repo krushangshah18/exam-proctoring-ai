@@ -10,6 +10,8 @@ from silero_vad import load_silero_vad
 
 logger = logging.getLogger(__name__)
 
+_AUDIO_LATENCY_METRICS_LAST_LOG_AT: float = 0.0
+
 
 class AudioMonitor:
     def __init__(
@@ -72,13 +74,13 @@ class AudioMonitor:
             try:
                 self._stream.stop_stream()
                 self._stream.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("AudioMonitor: stop stream failed: %s", exc)
         if self._pa is not None:
             try:
                 self._pa.terminate()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("AudioMonitor: stop pyaudio failed: %s", exc)
 
     def speech_active(self) -> bool:
         with self._lock:
@@ -118,7 +120,13 @@ class AudioMonitor:
                 try:
                     from core.metrics import metrics as _m
                     _m.record_audio_latency(vad_ms)
-                except Exception:
+                except Exception as exc:
+                    global _AUDIO_LATENCY_METRICS_LAST_LOG_AT
+                    now = _time.time()
+                    if now - _AUDIO_LATENCY_METRICS_LAST_LOG_AT >= 300:
+                        _AUDIO_LATENCY_METRICS_LAST_LOG_AT = now
+                        logger.debug("AudioMonitor: record_audio_latency failed: %s", exc)
+                        # Throttled to avoid log spam in the VAD loop.
                     pass
                 with self._lock:
                     self._speech_detected = prob >= self.speech_threshold
@@ -182,7 +190,13 @@ class AudioMonitor:
                             try:
                                 from core.metrics import metrics as _m
                                 _m.record_audio_latency(vad_ms)
-                            except Exception:
+                            except Exception as exc:
+                                global _AUDIO_LATENCY_METRICS_LAST_LOG_AT
+                                now = _time.time()
+                                if now - _AUDIO_LATENCY_METRICS_LAST_LOG_AT >= 300:
+                                    _AUDIO_LATENCY_METRICS_LAST_LOG_AT = now
+                                    logger.debug("AudioMonitor: record_audio_latency (vad_only) failed: %s", exc)
+                                # Throttled to avoid log spam.
                                 pass
                             with self._lock:
                                 self._speech_detected = prob >= self.speech_threshold

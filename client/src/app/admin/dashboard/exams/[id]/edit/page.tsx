@@ -84,6 +84,22 @@ const examSchema = z.object({
   return d >= new Date(data.start_window) && d <= new Date(data.end_window);
 }, { message: 'Join deadline must be between the start and end windows', path: ['hard_join_deadline'] });
 
+type ExamFormValues = z.infer<typeof examSchema>;
+type InviteRow = { student_email: string };
+type ApiError = { response?: { data?: { detail?: string } } };
+type DetectionFieldKey =
+  | 'DETECT_LOOKING_AWAY'
+  | 'DETECT_LOOKING_DOWN'
+  | 'DETECT_LOOKING_UP'
+  | 'DETECT_LOOKING_SIDE'
+  | 'DETECT_FAKE_PRESENCE'
+  | 'DETECT_SPEAKER_AUDIO'
+  | 'DETECT_PHONE'
+  | 'DETECT_BOOK'
+  | 'DETECT_HEADPHONE'
+  | 'DETECT_EARBUD'
+  | 'DETECT_MULTIPLE_PEOPLE';
+
 const PRESETS = {
   STRICT: {
     config: { eye_gaze: true, looking_away: true, static_photo: true, phone_detected: true, book_detected: true, earphones: true, audio_analysis: true, multiple_person: true, tab_switching: true },
@@ -136,9 +152,10 @@ export default function EditExamPage() {
   const [lockReason,   setLockReason]   = useState<LockReason>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [emails,       setEmails]       = useState<string[]>([]);
+  const [examTitle,    setExamTitle]    = useState('');
   const csvInputRef = useRef<HTMLInputElement>(null);
 
-  const form = useForm({
+  const form = useForm<ExamFormValues>({
     resolver: zodResolver(examSchema),
     defaultValues: {
       title: '', exam_mode: 'FLEXIBLE',
@@ -149,7 +166,7 @@ export default function EditExamPage() {
       config: PRESETS.MEDIUM.config,
       detection_config: PRESETS.MEDIUM.detection,
       invites_text: '',
-    } as any,
+    },
   });
 
   useEffect(() => {
@@ -158,6 +175,8 @@ export default function EditExamPage() {
       try {
         const res  = await api.get(`/admin/exams/${examId}`);
         const data = res.data;
+        setExamTitle(data.title);
+        setEmails(data.invites.map((i: InviteRow) => i.student_email));
 
         if (data.status === 'ENDED')      { setLockReason('ended');     setIsLoading(false); return; }
         if (data.status === 'CANCELLED')  { setLockReason('cancelled'); setIsLoading(false); return; }
@@ -191,7 +210,6 @@ export default function EditExamPage() {
           },
           invites_text: '',
         });
-        setEmails(data.invites.map((i: any) => i.student_email));
         setIsLoading(false);
       } catch {
         toast.error('Failed to load exam details');
@@ -216,14 +234,6 @@ export default function EditExamPage() {
     const s = new Date(startWindow);
     if (!isNaN(s.getTime()))
       minEndString = toLocalInputString(new Date(s.getTime() + Number(durationMinutes) * 60000));
-  }
-
-  let maxHardJoin = '';
-  if (examMode === 'FIXED' && startWindow) {
-    const s = new Date(startWindow);
-    if (!isNaN(s.getTime())) maxHardJoin = toLocalInputString(new Date(s.getTime() + 5 * 60000));
-  } else if (examMode === 'FLEXIBLE' && endWindow) {
-    maxHardJoin = endWindow;
   }
 
   // FIXED: lock end_window = start + duration, force no extensions
@@ -258,7 +268,7 @@ export default function EditExamPage() {
   };
 
   const handlePresetChange = (val: string) => {
-    form.setValue('preset', val as any);
+    form.setValue('preset', val as ExamFormValues['preset']);
     if (val !== 'CUSTOM') {
       const p = PRESETS[val as keyof typeof PRESETS];
       form.setValue('config', p.config);
@@ -292,7 +302,7 @@ export default function EditExamPage() {
 
   const removeEmail = (email: string) => setEmails(emails.filter(e => e !== email));
 
-  async function onSubmit(values: any) {
+  async function onSubmit(values: ExamFormValues) {
     if (emails.length === 0) { toast.error('Please assign at least one student.'); return; }
     setIsSubmitting(true);
     try {
@@ -308,8 +318,25 @@ export default function EditExamPage() {
       });
       toast.success('Exam updated successfully. Changes are being dispatched.');
       router.push(`/admin/dashboard/exams/${examId}`);
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to update exam');
+    } catch (error: unknown) {
+      toast.error((error as ApiError).response?.data?.detail || 'Failed to update exam');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleAddStudentsOnly() {
+    if (emails.length === 0) {
+      toast.error('Please assign at least one student.');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const res = await api.post(`/admin/exams/${examId}/students`, { invites: emails });
+      toast.success(res.data?.message || 'Students added successfully. Invite emails are being sent.');
+      router.push(`/admin/dashboard/exams/${examId}`);
+    } catch (error: unknown) {
+      toast.error((error as ApiError).response?.data?.detail || 'Failed to add students');
     } finally {
       setIsSubmitting(false);
     }
@@ -326,11 +353,125 @@ export default function EditExamPage() {
 
   if (lockReason) {
     const lockMessages: Record<NonNullable<LockReason>, { title: string; body: string }> = {
-      time:      { title: 'Exam Locked',    body: 'This exam starts in less than 10 minutes. Edits are no longer permitted to maintain exam integrity.' },
+      time:      { title: 'Exam Locked',    body: 'Core exam settings are locked now, but you can still add missing students and the normal invite email flow will still be sent.' },
       ended:     { title: 'Exam Completed', body: 'This exam has ended. Completed exam records cannot be modified.' },
       cancelled: { title: 'Exam Cancelled', body: 'This exam has been cancelled and cannot be edited.' },
     };
     const msg = lockMessages[lockReason];
+    if (lockReason === 'time') {
+      return (
+        <div className="max-w-4xl mx-auto space-y-6 pb-20">
+          <div className="rounded-2xl border p-5 flex gap-4" style={{ background: '#FFFBEB', borderColor: '#FDE68A' }}>
+            <div className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0" style={{ background: '#FEF3C7' }}>
+              <ShieldAlert className="h-6 w-6" style={{ color: '#B45309' }} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold" style={{ color: '#0F172A' }}>{msg.title}</h2>
+              <p className="mt-1 text-sm leading-6" style={{ color: '#64748B' }}>{msg.body}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 pb-4" style={{ borderBottom: '1px solid #E2E8F0' }}>
+            <button
+              type="button"
+              onClick={() => router.back()}
+              className="h-9 w-9 flex items-center justify-center rounded-lg border transition-all duration-150"
+              style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <div>
+              <h1 className="text-2xl font-bold" style={{ color: '#0F172A', letterSpacing: '-0.025em' }}>Add Students</h1>
+              <p className="text-sm mt-0.5" style={{ color: '#94A3B8' }}>{examTitle || 'Exam'} · schedule and proctoring rules are locked</p>
+            </div>
+          </div>
+
+          <FormSection
+            icon={<div className="h-8 w-8 rounded-lg flex items-center justify-center" style={{ background: '#EFF6FF' }}><Users className="h-4 w-4" style={{ color: '#22577A' }} /></div>}
+            title="Authorized Students"
+          >
+            <div className="space-y-4">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-sm font-medium" style={{ color: '#475569' }}>Paste emails or upload a CSV</p>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded-full"
+                    style={{ background: '#EFF6FF', color: '#22577A', border: '1px solid #BFDBFE' }}>
+                    {emails.length} assigned
+                  </span>
+                </div>
+              </div>
+
+              <Textarea
+                placeholder="Paste emails here — comma, newline, or space separated..."
+                className="min-h-[120px]"
+                value={form.watch('invites_text')}
+                onChange={e => form.setValue('invites_text', e.target.value)}
+              />
+
+              <div className="flex gap-2 justify-end">
+                <input ref={csvInputRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleCSVUpload} />
+                <button
+                  type="button"
+                  onClick={() => csvInputRef.current?.click()}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-150"
+                  style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+                >
+                  <Upload className="h-4 w-4" /> Upload CSV
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExtract}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-white transition-all duration-150"
+                  style={{ background: '#22577A' }}
+                >
+                  Extract Emails
+                </button>
+              </div>
+
+              {emails.length > 0 && (
+                <div className="rounded-xl border p-4 max-h-60 overflow-y-auto"
+                  style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
+                  <div className="flex flex-wrap gap-2">
+                    {emails.map(email => (
+                      <span key={email} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium border"
+                        style={{ background: '#fff', borderColor: '#E2E8F0', color: '#475569', boxShadow: '0 1px 2px rgba(15,23,42,0.04)' }}>
+                        {email}
+                        <button type="button" onClick={() => removeEmail(email)}
+                          className="transition-colors"
+                          style={{ color: '#CBD5E1' }}>
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => router.back()}
+                  className="px-4 py-2.5 rounded-lg text-sm font-medium border transition-all duration-150"
+                  style={{ borderColor: '#E2E8F0', color: '#475569', background: '#fff' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleAddStudentsOnly()}
+                  disabled={isSubmitting}
+                  className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold text-white transition-all duration-150"
+                  style={{ background: isSubmitting ? '#94A3B8' : '#22577A', cursor: isSubmitting ? 'not-allowed' : 'pointer' }}
+                >
+                  {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Add Students & Send Invites
+                </button>
+              </div>
+            </div>
+          </FormSection>
+        </div>
+      );
+    }
     return (
       <div className="p-24 max-w-xl mx-auto text-center space-y-4">
         <div className="h-20 w-20 rounded-full flex items-center justify-center mx-auto"
@@ -605,8 +746,8 @@ export default function EditExamPage() {
                     { id: 'DETECT_HEADPHONE', label: 'Headphone Detection' },
                     { id: 'DETECT_EARBUD', label: 'Earbud Detection' },
                     { id: 'DETECT_MULTIPLE_PEOPLE', label: 'Multiple People' },
-                  ].map(item => (
-                    <FormField key={item.id} control={form.control} name={`detection_config.${item.id}` as any} render={({ field }) => (
+                  ].map((item: { id: DetectionFieldKey; label: string }) => (
+                    <FormField key={item.id} control={form.control} name={`detection_config.${item.id}`} render={({ field }) => (
                       <FormItem className="flex items-center gap-3 space-y-0">
                         <FormControl>
                           <Switch checked={field.value} onCheckedChange={field.onChange} disabled={preset !== 'CUSTOM'} />

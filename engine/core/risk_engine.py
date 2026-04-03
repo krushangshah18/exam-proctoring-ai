@@ -55,7 +55,7 @@ _GAZE_EVENTS = {"looking_away", "looking_down", "looking_up", "looking_side"}
 
 class RiskEngine:
 
-    def __init__(self, flicker_grace_s: float = 1.5):
+    def __init__(self, flicker_grace_s: float = 1.5, exam_duration_minutes: float | None = None):
         # Two-bucket score
         self._fixed_score:    float = 0.0   # non-decaying
         self._decaying_score: float = 0.0   # decays every interval
@@ -64,10 +64,13 @@ class RiskEngine:
         self.terminated          = False
         self._termination_reason = ""
 
-        # Decay config — fixed 5-minute interval (backend scheduler owns time limits)
-        self._decay_interval     = 300.0
+        # Decay config — quiet interval per session:
+        # max(5 minutes, exam_duration / 12)
+        exam_duration_s = (exam_duration_minutes or 0.0) * 60.0
+        self._decay_interval     = max(300.0, exam_duration_s / 12.0) if exam_duration_s > 0 else 300.0
         self._creation_time      = time.time()
         self._last_decay_time    = time.time()
+        self._last_score_increase_time = self._creation_time
 
         # Decay audit log: each tick recorded for the report
         self.decay_log: list[dict] = []
@@ -236,7 +239,7 @@ class RiskEngine:
                 self._gaze_timestamps.popleft()
             if (len(self._gaze_timestamps) >= S.GAZE_BONUS_MIN_EVENTS
                     and now - self._last_gaze_bonus_time > S.GAZE_WINDOW_S):
-                self._add(S.GAZE_BONUS_SCORE, decaying=True)
+                self._add(S.GAZE_BONUS_SCORE, decaying=True, now=now)
                 self._last_gaze_bonus_time = now
 
         # ── Combo bonuses ──────────────────────────────────────────────────────
@@ -281,7 +284,7 @@ class RiskEngine:
                              occurrence_count=occ)
 
         # Every tab switch adds fixed (non-decaying) points immediately — no grace.
-        risk_added = self._add(S.TAB_SWITCH_SCORE, decaying=False)
+        risk_added = self._add(S.TAB_SWITCH_SCORE, decaying=False, now=now)
 
         self._update_state()
         return RiskEvent(
@@ -328,19 +331,43 @@ class RiskEngine:
             "occurrences"         : dict(self._occurrences),
             "terminated"          : self.terminated,
             "termination_reason"  : self._termination_reason,
+            "decay_interval_s"    : round(self._decay_interval, 1),
             "decay_ticks"         : len(self.decay_log),
             "decay_log"           : self.decay_log,
         }
 
+    def get_debug_state(self, key: str, now: float | None = None) -> dict:
+        if now is None:
+            now = time.time()
+
+        cooldown_until = self._score_cooldown_until.get(key, 0.0)
+        active_since   = self._active_since.get(key)
+        if key == "multiple_people":
+            active_duration = self.continuous_duration(key)
+        elif key == "no_person":
+            active_duration = self.continuous_duration(key)
+        else:
+            active_duration = (now - active_since) if active_since else 0.0
+
+        return {
+            "occurrence_count": int(self._occurrences.get(key, 0)),
+            "score_cooldown_remaining_s": round(max(0.0, cooldown_until - now), 2),
+            "active_duration_s": round(active_duration, 2),
+            "decay_interval_s": round(self._decay_interval, 2),
+            "quiet_for_s": round(max(0.0, now - self._last_score_increase_time), 2),
+        }
+
     # ── Internal helpers ──────────────────────────────────────────────────────
 
-    def _add(self, amount: float, decaying: bool) -> float:
+    def _add(self, amount: float, decaying: bool, now: float = 0.0) -> float:
         """Add to the appropriate bucket. Returns amount added."""
         amount = max(0.0, amount)
         if decaying:
             self._decaying_score = min(S.DECAY_BUCKET_CAP, self._decaying_score + amount)
         else:
             self._fixed_score = min(S.DECAY_BUCKET_CAP, self._fixed_score + amount)
+        if amount > 0:
+            self._last_score_increase_time = now if now > 0 else time.time()
         return amount
 
     def _in_cooldown(self, key: str, now: float) -> bool:
@@ -368,9 +395,9 @@ class RiskEngine:
             if occ <= grace:
                 self._arm_cooldown(key, now)   # grace: arm cooldown, no score
             elif occ == grace + 1:
-                added = self._add(S.PHONE_SCORE_2ND * confidence, decaying=False)
+                added = self._add(S.PHONE_SCORE_2ND * confidence, decaying=False, now=now)
             else:
-                added = self._add(S.PHONE_SCORE_3RD * confidence, decaying=False)
+                added = self._add(S.PHONE_SCORE_3RD * confidence, decaying=False, now=now)
 
         # ── Headphone / earbud ────────────────────────────────────────────────
         elif key == "headphone":
@@ -378,13 +405,13 @@ class RiskEngine:
             if occ <= grace:
                 self._arm_cooldown(key, now)   # grace: arm cooldown, no score
             else:
-                added = self._add(S.HEADPHONE_SCORE * confidence, decaying=True)
+                added = self._add(S.HEADPHONE_SCORE * confidence, decaying=True, now=now)
         elif key == "earbud":
             grace = S.GRACE_OCCURRENCES.get("earbud", 1)
             if occ <= grace:
                 self._arm_cooldown(key, now)   # grace: arm cooldown, no score
             else:
-                added = self._add(S.EARBUD_SCORE * confidence, decaying=True)
+                added = self._add(S.EARBUD_SCORE * confidence, decaying=True, now=now)
 
         # ── Multiple people ───────────────────────────────────────────────────
         elif key == "multiple_people":
@@ -392,45 +419,45 @@ class RiskEngine:
             if occ <= grace:
                 self._arm_cooldown(key, now)   # grace: arm cooldown, no score
             elif occ == grace + 1:
-                added = self._add(S.MULTI_PEOPLE_SCORE_2ND * confidence, decaying=False)
+                added = self._add(S.MULTI_PEOPLE_SCORE_2ND * confidence, decaying=False, now=now)
             else:
-                added = self._add(S.MULTI_PEOPLE_SCORE_3RD * confidence, decaying=False)
+                added = self._add(S.MULTI_PEOPLE_SCORE_3RD * confidence, decaying=False, now=now)
 
         # ── Book ──────────────────────────────────────────────────────────────
         elif key == "book":
-            added = self._add(S.BOOK_SCORE * confidence, decaying=True)
+            added = self._add(S.BOOK_SCORE * confidence, decaying=True, now=now)
 
         # ── Fake presence (duration-tiered) ───────────────────────────────────
         elif key == "fake_presence":
             if duration >= S.FAKE_PRESENCE_DUR_2:
-                added = self._add(S.FAKE_PRESENCE_SCORE_2 * confidence, decaying=False)
+                added = self._add(S.FAKE_PRESENCE_SCORE_2 * confidence, decaying=False, now=now)
             elif duration >= S.FAKE_PRESENCE_DUR_1:
-                added = self._add(S.FAKE_PRESENCE_SCORE_1 * confidence, decaying=False)
+                added = self._add(S.FAKE_PRESENCE_SCORE_1 * confidence, decaying=False, now=now)
             # < DUR_1: warning only
 
         # ── Face hidden (duration-tiered) ─────────────────────────────────────
         elif key == "face_hidden":
             if duration >= S.FACE_HIDDEN_DUR_2:
-                added = self._add(S.FACE_HIDDEN_SCORE_2 * confidence, decaying=True)
+                added = self._add(S.FACE_HIDDEN_SCORE_2 * confidence, decaying=True, now=now)
             elif duration >= S.FACE_HIDDEN_DUR_1:
-                added = self._add(S.FACE_HIDDEN_SCORE_1 * confidence, decaying=True)
+                added = self._add(S.FACE_HIDDEN_SCORE_1 * confidence, decaying=True, now=now)
             # < DUR_1: warning only
 
         # ── Gaze events ────────────────────────────────────────────────────────
         elif key in _GAZE_EVENTS:
-            added = self._add(S.GAZE_SCORE * confidence, decaying=True)
+            added = self._add(S.GAZE_SCORE * confidence, decaying=True, now=now)
 
         # ── Partial face ──────────────────────────────────────────────────────
         elif key == "partial_face":
             if duration >= S.PARTIAL_FACE_DURATION_GATE:
-                added = self._add(S.PARTIAL_FACE_SCORE * confidence, decaying=True)
+                added = self._add(S.PARTIAL_FACE_SCORE * confidence, decaying=True, now=now)
 
         # ── Exit fullscreen ───────────────────────────────────────────────────
         elif key == "exit_fullscreen":
             if occ == 1:
                 pass  # warning only
             elif duration >= 2:
-                added = self._add(5.0 * confidence, decaying=True)
+                added = self._add(5.0 * confidence, decaying=True, now=now)
 
         if added > 0:
             self._arm_cooldown(key, now)
@@ -466,10 +493,10 @@ class RiskEngine:
                     return RiskEvent(key=key, terminated=True,
                                      termination_reason=self._termination_reason)
                 elif dur >= S.NO_PERSON_DUR_2 and not self._in_cooldown("_no_person_t2", now):
-                    no_person_added = self._add(S.NO_PERSON_SCORE_2, decaying=False)
+                    no_person_added = self._add(S.NO_PERSON_SCORE_2, decaying=False, now=now)
                     self._arm_cooldown("_no_person_t2", now, override_cd=15)
                 elif dur >= S.NO_PERSON_DUR_1 and not self._in_cooldown("_no_person_t1", now):
-                    no_person_added = self._add(S.NO_PERSON_SCORE_1, decaying=False)
+                    no_person_added = self._add(S.NO_PERSON_SCORE_1, decaying=False, now=now)
                     self._arm_cooldown("_no_person_t1", now, override_cd=15)
             return RiskEvent(key=key, active=True, is_new_occurrence=(occ == 1 and duration < 1),
                              occurrence_count=occ, duration=duration,
@@ -494,12 +521,12 @@ class RiskEngine:
             if dur >= warn_s:
                 if not self._in_cooldown("_speaker_t1", now):
                     # One-time score at end of grace window
-                    speaker_added = self._add(score_1, decaying=decaying1)
+                    speaker_added = self._add(score_1, decaying=decaying1, now=now)
                     self._arm_cooldown("_speaker_t1",    now, override_cd=999999)
                     self._arm_cooldown("_speaker_repeat", now, override_cd=S.SPEAKER_REPEAT_INTERVAL)
                 elif not self._in_cooldown("_speaker_repeat", now):
                     # Repeating tail score every REPEAT_INTERVAL
-                    speaker_added = self._add(repeat, decaying=False)
+                    speaker_added = self._add(repeat, decaying=False, now=now)
                     self._arm_cooldown("_speaker_repeat", now, override_cd=S.SPEAKER_REPEAT_INTERVAL)
 
             return RiskEvent(key=key, active=True, is_new_occurrence=(dur < 1),
@@ -517,11 +544,14 @@ class RiskEngine:
             if key in combo_set and combo_set.issubset(self._active_set):
                 if now >= self._combo_cooldowns.get(cd_key, 0.0):
                     eff_conf = max(confidence, S.MIN_CONF)
-                    self._add(bonus * eff_conf, decaying=True)
+                    self._add(bonus * eff_conf, decaying=True, now=now)
                     self._combo_cooldowns[cd_key] = now + 60.0
 
     def _apply_decay(self, now: float) -> None:
-        """Decay only the decaying bucket. Records every tick in decay_log."""
+        """Decay only after a quiet interval with no score increase."""
+        if now - self._last_score_increase_time < self._decay_interval:
+            return
+
         if now - self._last_decay_time >= self._decay_interval:
             before  = self._decaying_score
             self._decaying_score = max(0.0, self._decaying_score - S.DECAY_AMOUNT)
@@ -534,6 +564,7 @@ class RiskEngine:
                 "decayed_amount"   : round(before - after, 2),
                 "decaying_before"  : round(before, 2),
                 "decaying_after"   : round(after, 2),
+                "quiet_for_s"      : round(now - self._last_score_increase_time, 1),
                 "total_score_after": round(self._fixed_score + after, 2),
             })
             self._last_decay_time = now

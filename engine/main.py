@@ -19,7 +19,8 @@ try:
     from dotenv import load_dotenv
     load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 except ImportError:
-    pass  # python-dotenv not installed — rely on environment variables set externally
+    import logging as _logging
+    _logging.getLogger("main").debug("python-dotenv not installed — relying on external env vars")
 
 from utils.logging_config import setup_logging
 setup_logging()
@@ -35,7 +36,7 @@ try:
     uvloop.install()
     logging.getLogger("main").info("uvloop installed — using libuv event loop")
 except ImportError:
-    pass
+    logging.getLogger("main").debug("uvloop not installed — using default asyncio event loop")
 
 logger = logging.getLogger("main")
 

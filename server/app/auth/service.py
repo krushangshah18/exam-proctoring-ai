@@ -6,8 +6,7 @@ from datetime import datetime, timedelta, UTC
 from sqlalchemy.orm import Session
 
 from app.db import models
-from app.core import settings
-from app.core import send_email
+from app.core import settings, send_email, log
 
 
 
@@ -29,8 +28,13 @@ def create_reset_token(db: Session, user: models.User):
         expires_at=expires
     )
 
-    db.add(record)
-    db.commit()
+    try:
+        db.add(record)
+        db.commit()
+    except Exception as e:
+        log.exception("Failed to create password reset token user_id=%s: %s", user.id, e)
+        db.rollback()
+        raise
 
     return raw_token
 

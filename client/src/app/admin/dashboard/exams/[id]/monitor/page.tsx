@@ -245,20 +245,19 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
     return { score: s, fixed: s, state };
   });
   const [alertTab, setAlertTab] = useState<'alerts' | 'warnings'>('alerts');
-  const [debugMode, setDebugMode] = useState(false);
-  const [togglingDebug, setTogglingDebug] = useState(false);
   const sseCloseRef = useRef<(() => void) | null>(null);
   const frameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameAbortRef = useRef<AbortController | null>(null);
   const prevFrameUrl = useRef<string | null>(null);
   const frameFetchingRef = useRef(false);
+  const frameFailureCountRef = useRef(0);
   const mountedRef = useRef(true);
   const histLoadedRef = useRef(false);
   const pendingSSEAlertsRef = useRef<AlertEntry[]>([]);
   const pendingSSEWarningsRef = useRef<WarningEntry[]>([]);
 
   const fetchFrame = useCallback(async () => {
-    if (frameFetchingRef.current) return;
+    if (frameFetchingRef.current || document.hidden) return 'skipped';
     frameFetchingRef.current = true;
     frameAbortRef.current = new AbortController();
     const token = localStorage.getItem('access_token') || '';
@@ -268,17 +267,21 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
         `${base}/admin/exams/${examId}/sessions/${session.session_id}/live-frame`,
         { headers: { Authorization: `Bearer ${token}` }, signal: frameAbortRef.current.signal }
       );
-      if (res.status === 204 || !res.ok) return;
+      if (res.status === 204) return 'empty';
+      if (!res.ok) return 'error';
       const blob = await res.blob();
-      if (!blob.size) return;
+      if (!blob.size) return 'empty';
       const url = URL.createObjectURL(blob);
       if (!mountedRef.current) { URL.revokeObjectURL(url); return; }
       const old = prevFrameUrl.current;
       prevFrameUrl.current = url;
       setFrameUrl(url);
       if (old) URL.revokeObjectURL(old);
-    } catch {}
-    finally { frameFetchingRef.current = false; }
+      frameFailureCountRef.current = 0;
+      return 'success';
+    } catch {
+      return 'error';
+    } finally { frameFetchingRef.current = false; }
   }, [examId, session.session_id]);
 
   useEffect(() => {
@@ -316,8 +319,16 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
     let stopped = false;
     const loop = async () => {
       while (!stopped) {
-        await fetchFrame();
-        await new Promise(r => { frameTimerRef.current = setTimeout(r, 800); });
+        const result = await fetchFrame();
+        if (result === 'empty' || result === 'error') {
+          frameFailureCountRef.current += 1;
+        }
+        const delay = document.hidden
+          ? 5000
+          : result === 'success'
+            ? 500
+            : Math.min(500 * (2 ** Math.min(frameFailureCountRef.current, 4)), 10000);
+        await new Promise(r => { frameTimerRef.current = setTimeout(r, delay); });
       }
     };
     loop();
@@ -387,16 +398,6 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
     } finally { setExtending(false); }
   };
 
-  const handleDebugToggle = async () => {
-    setTogglingDebug(true);
-    try {
-      await api.post(`/admin/exams/${examId}/sessions/${session.session_id}/debug-mode`, { enabled: !debugMode });
-      setDebugMode(d => !d);
-      toast.success(`Debug overlay ${!debugMode ? 'enabled' : 'disabled'}`);
-    } catch { toast.error('Failed to toggle debug mode'); }
-    finally { setTogglingDebug(false); }
-  };
-
   const handleTerminate = async () => {
     if (!confirm(`Terminate ${session.student_name}'s session? This cannot be undone.`)) return;
     setTerminating(true);
@@ -424,19 +425,6 @@ function LiveMonitorPanel({ session, examId, examMode, onScoreUpdate, onSessionT
               </span>
             )}
           </div>
-          {session.status === 'ACTIVE' && (
-            <button
-              onClick={handleDebugToggle}
-              disabled={togglingDebug}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-150"
-              style={debugMode
-                ? { background: 'rgba(99,102,241,0.2)', color: '#A5B4FC', border: '1px solid rgba(99,102,241,0.3)' }
-                : { background: 'rgba(255,255,255,0.06)', color: '#64748B', border: '1px solid rgba(255,255,255,0.1)' }
-              }
-            >
-              {togglingDebug ? <Loader2 className="h-3 w-3 animate-spin" /> : debugMode ? 'Debug: ON' : 'Debug: OFF'}
-            </button>
-          )}
         </div>
         <div className="p-3">
           {frameUrl ? (
@@ -932,16 +920,38 @@ export default function MonitoringDashboard() {
     try {
       const res = await api.get(`/admin/exams/${examId}/sessions`);
       setSessions(res.data);
-    } catch { }
-    finally { setLoading(false); }
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setLoading(false);
+    }
   }, [examId]);
 
   const hasActive = sessions.some(s => s.status === 'ACTIVE' || s.status === 'DISCONNECTED');
   useEffect(() => {
-    fetchSessions();
-    const interval = hasActive ? 5000 : 20000;
-    const id = setInterval(fetchSessions, interval);
-    return () => clearInterval(id);
+    let stopped = false;
+    let failureCount = 0;
+
+    const loop = async () => {
+      while (!stopped) {
+        const ok = document.hidden ? true : await fetchSessions();
+        failureCount = ok ? 0 : failureCount + 1;
+        const baseDelay = hasActive ? 5000 : 20000;
+        const delay = document.hidden
+          ? 30000
+          : ok
+            ? baseDelay
+            : Math.min(baseDelay * (2 ** Math.min(failureCount, 3)), 60000);
+        await new Promise((resolve) => {
+          const id = setTimeout(resolve, delay);
+          return () => clearTimeout(id);
+        });
+      }
+    };
+
+    void loop();
+    return () => { stopped = true; };
   }, [fetchSessions, hasActive]);
 
   const handleBulkExtend = async () => {

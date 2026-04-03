@@ -168,11 +168,15 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
   const [liveRisk, setLiveRisk]   = useState<RiskInfo>({ score: session.risk_score, fixed: 0, state: 'NORMAL' });
   const [alertTab, setAlertTab]   = useState<'alerts' | 'warnings'>('alerts');
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
+  const [togglingDebug, setTogglingDebug] = useState(false);
   const sseRef   = useRef<(() => void) | null>(null);
   const frameRef = useRef<NodeJS.Timeout | null>(null);
   const prevFrameUrl = useRef<string | null>(null);
   const alertsRef    = useRef(alerts);
   const warningsRef  = useRef(warnings);
+  const frameFetchingRef = useRef(false);
+  const frameFailureCountRef = useRef(0);
 
   useEffect(() => { alertsRef.current = alerts;   saveAlerts(session.session_id, alerts);   }, [alerts, session.session_id]);
   useEffect(() => { warningsRef.current = warnings; saveWarnings(session.session_id, warnings); }, [warnings, session.session_id]);
@@ -213,6 +217,8 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
   }, [session.session_id]);
 
   const fetchFrame = useCallback(async () => {
+    if (frameFetchingRef.current || document.hidden) return 'skipped';
+    frameFetchingRef.current = true;
     const token = localStorage.getItem('access_token') || '';
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     try {
@@ -220,22 +226,47 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
         `${base}/admin/sessions/${session.session_id}/live-frame`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      if (res.status === 204 || !res.ok) return;
+      if (res.status === 204) return 'empty';
+      if (!res.ok) return 'error';
       const blob = await res.blob();
-      if (!blob.size) return;
+      if (!blob.size) return 'empty';
       const url = URL.createObjectURL(blob);
       const old = prevFrameUrl.current;
       prevFrameUrl.current = url;
       setFrameUrl(url);
       if (old) setTimeout(() => URL.revokeObjectURL(old), 500);
-    } catch {}
+      frameFailureCountRef.current = 0;
+      return 'success';
+    } catch {
+      return 'error';
+    } finally {
+      frameFetchingRef.current = false;
+    }
   }, [session.session_id]);
 
   useEffect(() => {
     if (session.status !== 'ACTIVE') return;
 
-    const initialFrameTimer = setTimeout(() => { void fetchFrame(); }, 0);
-    frameRef.current = setInterval(fetchFrame, 1500);
+    let stopped = false;
+    const initialFrameTimer = setTimeout(() => {
+      const loop = async () => {
+        while (!stopped) {
+          const result = await fetchFrame();
+          if (result === 'empty' || result === 'error') {
+            frameFailureCountRef.current += 1;
+          }
+          const delay = document.hidden
+            ? 5000
+            : result === 'success'
+              ? 500
+              : Math.min(500 * (2 ** Math.min(frameFailureCountRef.current, 4)), 10000);
+          await new Promise((resolve) => {
+            frameRef.current = setTimeout(resolve, delay);
+          });
+        }
+      };
+      void loop();
+    }, 0);
 
     const token = localStorage.getItem('access_token') || '';
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -268,14 +299,28 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
     );
 
     return () => {
+      stopped = true;
       clearTimeout(initialFrameTimer);
-      if (frameRef.current) clearInterval(frameRef.current);
+      if (frameRef.current) clearTimeout(frameRef.current);
       sseRef.current?.();
       if (prevFrameUrl.current) URL.revokeObjectURL(prevFrameUrl.current);
     };
   }, [session.session_id, session.status]);
 
   const scoreColor = RISK_COLORS[liveRisk.state] ?? '#22c55e';
+
+  const handleDebugToggle = async () => {
+    setTogglingDebug(true);
+    try {
+      await api.post(`/admin/sessions/${session.session_id}/debug-mode`, { enabled: !debugMode });
+      setDebugMode((value) => !value);
+      toast.success(`Debug overlay ${!debugMode ? 'enabled' : 'disabled'}`);
+    } catch {
+      toast.error('Failed to toggle debug mode');
+    } finally {
+      setTogglingDebug(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -286,9 +331,22 @@ function SessionDetailPanel({ session, onScoreUpdate }: {
           <p className="text-sm font-semibold" style={{ color: '#94A3B8' }}>
             AI Feed — {session.student_name}
           </p>
-          <span className="ml-auto flex items-center gap-1.5">
+          <span className="ml-auto flex items-center gap-2">
             <span className="h-1.5 w-1.5 rounded-full animate-pulse" style={{ background: '#22c55e' }} />
             <span className="text-xs" style={{ color: '#64748B' }}>LIVE</span>
+            {session.status === 'ACTIVE' && (
+              <button
+                onClick={handleDebugToggle}
+                disabled={togglingDebug}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 disabled:opacity-60"
+                style={debugMode
+                  ? { background: 'rgba(56,163,165,0.2)', color: '#7BDFF2', border: '1px solid rgba(56,163,165,0.35)' }
+                  : { background: 'rgba(255,255,255,0.06)', color: '#94A3B8', border: '1px solid rgba(255,255,255,0.1)' }
+                }
+              >
+                {togglingDebug ? <Loader2 className="h-3 w-3 animate-spin" /> : debugMode ? 'Debug: ON' : 'Debug: OFF'}
+              </button>
+            )}
           </span>
         </div>
         <div className="p-4">
@@ -447,23 +505,39 @@ export default function SessionsMonitorPage() {
   const [loading, setLoading]     = useState(true);
   const [selected, setSelected]   = useState<LiveSession | null>(null);
   const [search, setSearch]       = useState('');
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchSessions = useCallback(async (silent = false) => {
     try {
       const res = await api.get('/admin/sessions');
       setSessions(res.data);
+      return true;
     } catch {
       if (!silent) toast.error('Failed to load sessions');
     } finally {
       setLoading(false);
     }
+    return false;
   }, []);
 
   useEffect(() => {
-    fetchSessions();
-    intervalRef.current = setInterval(() => fetchSessions(true), 10000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    let stopped = false;
+    let failureCount = 0;
+
+    const loop = async () => {
+      while (!stopped) {
+        const ok = document.hidden ? true : await fetchSessions(failureCount > 0);
+        failureCount = ok ? 0 : failureCount + 1;
+        const delay = document.hidden
+          ? 30000
+          : ok
+            ? 10000
+            : Math.min(10000 * (2 ** Math.min(failureCount, 3)), 60000);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    };
+
+    void loop();
+    return () => { stopped = true; };
   }, [fetchSessions]);
 
   useEffect(() => {

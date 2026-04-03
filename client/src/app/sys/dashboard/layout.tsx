@@ -17,6 +17,7 @@ const NAV = [
   { name: 'Applications',     href: '/sys/dashboard/applications',    icon: FileText        },
   { name: 'Users',            href: '/sys/dashboard/users',           icon: Users           },
   { name: 'Engine Monitor',   href: '/sys/dashboard/engine',          icon: Cpu             },
+  { name: 'Model Tuning',     href: '/sys/dashboard/model-tuning',    icon: SlidersHorizontal },
   { name: 'Live Sessions',    href: '/sys/dashboard/sessions',        icon: Activity        },
   { name: 'Reports',          href: '/sys/dashboard/reports',         icon: BarChart2       },
   { name: 'Engine Settings',  href: '/sys/dashboard/system-settings', icon: SlidersHorizontal },

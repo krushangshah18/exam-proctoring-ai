@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import math
+import logging
 import sys
 import threading
 import time
@@ -31,6 +32,10 @@ import psutil
 import torch
 
 _PROC = psutil.Process()
+
+logger = logging.getLogger(__name__)
+
+_METRICS_SAMPLER_LAST_LOG_AT: float = 0.0
 
 
 class MetricsCollector:
@@ -225,6 +230,8 @@ class MetricsCollector:
         # Prime psutil — first call always returns 0.0
         psutil.cpu_percent(interval=None)
 
+        global _METRICS_SAMPLER_LAST_LOG_AT
+
         while not self._stop_event.wait(interval):
             try:
                 cpu = psutil.cpu_percent(interval=None)
@@ -246,7 +253,11 @@ class MetricsCollector:
                         h        = pynvml.nvmlDeviceGetHandleByIndex(0)
                         util_obj = pynvml.nvmlDeviceGetUtilizationRates(h)
                         gpu_util = float(util_obj.gpu)
-                    except Exception:
+                    except Exception as exc:
+                        now = time.time()
+                        if now - _METRICS_SAMPLER_LAST_LOG_AT >= 60:
+                            _METRICS_SAMPLER_LAST_LOG_AT = now
+                            logger.debug("MetricsCollector: pynvml query failed: %s", exc)
                         gpu_util = 0.0
 
                 with self._lock:
@@ -256,8 +267,12 @@ class MetricsCollector:
                     self._gpu_mem_used_mb  = gpu_used
                     self._gpu_mem_total_mb = gpu_total
 
-            except Exception:
-                pass
+            except Exception as exc:
+                now = time.time()
+                if now - _METRICS_SAMPLER_LAST_LOG_AT >= 60:
+                    _METRICS_SAMPLER_LAST_LOG_AT = now
+                    logger.warning("MetricsCollector: resource sampler failed: %s", exc)
+                # Continue sampling on failure.
 
 
 # ── Small math helpers ────────────────────────────────────────────────────────

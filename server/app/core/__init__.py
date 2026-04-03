@@ -3,7 +3,7 @@ from .config import settings
 from .email import send_email
 from .face_utils import load_image, detect_faces, validate_single_face, can_update_profile_image, verify_same_person
 from .embedding import generate_embedding
-from .storage import save_profile_image
+from .storage import save_profile_image, get_profile_image_url
 from .redis import redis_client
 from .rate_limiter import rate_limit
 from .device import generate_fingerprint
@@ -18,6 +18,7 @@ __all__ = ["log",
            "validate_single_face", 
            "generate_embedding",
            "save_profile_image",
+           "get_profile_image_url",
            "can_update_profile_image", 
            "verify_same_person",
            "redis_client",

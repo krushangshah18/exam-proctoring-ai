@@ -148,6 +148,20 @@ class ExamUpdateRequest(BaseModel):
         return v
 
 
+class ExamInviteAddRequest(BaseModel):
+    invites: List[EmailStr] = Field(default_factory=list)
+
+    @validator("invites", each_item=True)
+    def lowercase_emails(cls, v):
+        return v.lower()
+
+    @validator("invites")
+    def at_least_one_invite(cls, v):
+        if len(v) < 1:
+            raise ValueError("At least one student must be invited")
+        return v
+
+
 class ExamListResponse(BaseModel):
     id: str
     title: str

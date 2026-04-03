@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import collections
 import json
 import logging
@@ -7,6 +8,7 @@ import platform
 import shutil
 import sys
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +19,7 @@ import av
 import cv2
 import numpy as np
 import psutil
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -47,11 +49,116 @@ _session_config: dict                        = {}
 MAX_CONNECTIONS: int                         = 40
 _db_writer:      "DBWriter | None"           = None
 _s3_uploader:    "S3Uploader | None"         = None
+_calibration_sessions: dict                  = {}
+_calibration_active:   bool                  = False
+
+_CALIBRATION_CLOSE_LAST_LOG_AT: float = 0.0
+_STREAM_TIMEOUT_LAST_LOG_AT: float = 0.0
+_PLI_FAIL_LAST_LOG_AT: float = 0.0
 
 
 def _build_config() -> dict:
     import config as _cfg_module
     return {k: getattr(_cfg_module, k) for k in dir(_cfg_module) if k.isupper()}
+
+
+def _cleanup_calibration_sessions(max_idle_s: float = 1800.0) -> None:
+    global _calibration_active
+    now = time.time()
+    stale_ids = [
+        calibration_id
+        for calibration_id, state in list(_calibration_sessions.items())
+        if now - state.get("updated_at", now) > max_idle_s
+    ]
+    for calibration_id in stale_ids:
+        state = _calibration_sessions.pop(calibration_id, None)
+        if not state:
+            continue
+        try:
+            state["session"].close()
+        except Exception as exc:
+            global _CALIBRATION_CLOSE_LAST_LOG_AT
+            _t = time.time()
+            if _t - _CALIBRATION_CLOSE_LAST_LOG_AT >= 60:
+                _CALIBRATION_CLOSE_LAST_LOG_AT = _t
+                logger.debug("cleanup_calibration_sessions: session.close failed: %s", exc)
+    if not _calibration_sessions:
+        _calibration_active = False
+
+
+def _apply_calibration_overrides(session: ProctorSession, flat_config: dict | None) -> None:
+    import settings.scoring as S
+    import settings.alerts as A
+
+    if not flat_config:
+        return
+
+    detect_keys = {
+        "DETECT_LOOKING_AWAY", "DETECT_LOOKING_DOWN", "DETECT_LOOKING_UP",
+        "DETECT_LOOKING_SIDE", "DETECT_FACE_HIDDEN", "DETECT_PARTIAL_FACE",
+        "DETECT_FAKE_PRESENCE", "DETECT_SPEAKER_AUDIO", "DETECT_PHONE",
+        "DETECT_BOOK", "DETECT_HEADPHONE", "DETECT_EARBUD", "DETECT_MULTIPLE_PEOPLE",
+    }
+    session._exam_config.update({k: bool(v) for k, v in flat_config.items() if k in detect_keys})
+
+    for k, v in flat_config.items():
+        if k in detect_keys or k in {"SCORE_COOLDOWNS", "WARN_COOLDOWNS", "API_COOLDOWNS"}:
+            continue
+        session._cfg[k] = v
+
+    head_attr_keys = {
+        "MIN_FACE_WIDTH", "MIN_FACE_HEIGHT", "LOOK_AWAY_YAW", "LOOK_DOWN_PITCH",
+        "LOOK_UP_PITCH", "GAZE_LEFT", "GAZE_RIGHT", "EAR_THRESHOLD",
+        "BLINK_MIN_DURATION_S", "BLINK_MAX_DURATION_S",
+    }
+    for key, value in flat_config.items():
+        if key in head_attr_keys and hasattr(session.head_detector, key):
+            setattr(session.head_detector, key, float(value))
+
+    if "LOOKING_AWAY_THRESHOLD" in flat_config:
+        session.head_tracker.threshold = float(flat_config["LOOKING_AWAY_THRESHOLD"])
+    if "GAZE_THRESHOLD" in flat_config:
+        session._cfg["GAZE_THRESHOLD"] = float(flat_config["GAZE_THRESHOLD"])
+    if "FACE_HIDDEN_RECENCY_S" in flat_config:
+        session._face_hidden_recency_s = float(flat_config["FACE_HIDDEN_RECENCY_S"])
+    if "FAKE_WINDOW" in flat_config:
+        session.liveness.window = float(flat_config["FAKE_WINDOW"])
+
+    score_float_keys = {
+        "STATE_WARNING", "STATE_HIGH_RISK", "STATE_ADMIN", "DECAY_AMOUNT",
+        "TAB_SWITCH_SCORE", "GAZE_SCORE", "PHONE_SCORE_2ND", "PHONE_SCORE_3RD",
+        "BOOK_SCORE", "HEADPHONE_SCORE", "EARBUD_SCORE", "MULTI_PEOPLE_SCORE_2ND",
+        "MULTI_PEOPLE_SCORE_3RD", "NO_PERSON_SCORE_1", "NO_PERSON_SCORE_2",
+        "NO_PERSON_DUR_1", "NO_PERSON_DUR_2", "MULTI_PEOPLE_TERMINATE_S",
+        "NO_PERSON_TERMINATE_S", "FAKE_PRESENCE_SCORE_1", "FAKE_PRESENCE_SCORE_2",
+        "FAKE_PRESENCE_DUR_1", "FAKE_PRESENCE_DUR_2", "PARTIAL_FACE_SCORE",
+        "PARTIAL_FACE_DURATION_GATE", "FACE_HIDDEN_SCORE_1", "FACE_HIDDEN_SCORE_2",
+        "FACE_HIDDEN_DUR_1", "FACE_HIDDEN_DUR_2", "SPEAKER_WARN_COOLDOWN",
+        "SPEAKER_ALERT_COOLDOWN", "SPEAKER_OCC1_WARN_S", "SPEAKER_OCC1_SCORE",
+        "SPEAKER_OCC1_REPEAT", "SPEAKER_OCC2_WARN_S", "SPEAKER_OCC2_SCORE",
+        "SPEAKER_OCC2_REPEAT", "SPEAKER_REPEAT_INTERVAL",
+    }
+    score_int_keys = {"TAB_SWITCH_TERMINATE_COUNT"}
+    for key, value in flat_config.items():
+        if key in score_float_keys and hasattr(S, key):
+            setattr(S, key, float(value))
+        elif key in score_int_keys and hasattr(S, key):
+            setattr(S, key, int(value))
+
+    if isinstance(flat_config.get("SCORE_COOLDOWNS"), dict):
+        S.SCORE_COOLDOWNS.update({k: float(v) for k, v in flat_config["SCORE_COOLDOWNS"].items()})
+    if isinstance(flat_config.get("WARN_COOLDOWNS"), dict):
+        A.WARN_COOLDOWNS.update({k: float(v) for k, v in flat_config["WARN_COOLDOWNS"].items()})
+    if isinstance(flat_config.get("API_COOLDOWNS"), dict):
+        A.API_COOLDOWNS.update({k: float(v) for k, v in flat_config["API_COOLDOWNS"].items()})
+
+    if coordinator is not None and coordinator.detector is not None:
+        coordinator.detector.update_thresholds(
+            phone_conf=flat_config.get("YOLO_PHONE_CONF"),
+            book_conf=flat_config.get("YOLO_BOOK_CONF"),
+            audio_conf=flat_config.get("YOLO_AUDIO_CONF"),
+            person_conf=flat_config.get("YOLO_PERSON_CONF"),
+        )
 
 
 @asynccontextmanager
@@ -351,6 +458,156 @@ async def toggle_debug(pc_id: str, request: Request):
     coordinator.sessions[pc_id].set_debug(enabled)
     return JSONResponse({"ok": True, "debug": enabled})
 
+
+@app.post("/calibration/session")
+async def create_calibration_session(request: Request):
+    global _calibration_active
+    if coordinator is None:
+        raise HTTPException(status_code=503, detail="Coordinator unavailable")
+
+    _cleanup_calibration_sessions()
+
+    # Reject if any live exam sessions are active
+    if coordinator.sessions:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot start calibration: exam sessions are currently active. Wait for all sessions to end.",
+        )
+
+    body = await request.json()
+    flat_config = body.get("config") or {}
+    calibration_id = uuid.uuid4().hex
+
+    session_cfg = {
+        **_session_config,
+        **coordinator.runtime_settings,
+        **flat_config,
+        "SAVE_PROOF": False,
+        "SAVE_REPORT": False,
+    }
+    session_dir = Path("reports") / f"calibration_{calibration_id}"
+    session = ProctorSession(
+        session_id=calibration_id,
+        session_dir=session_dir,
+        config=session_cfg,
+        use_webrtc_audio=True,
+        report_metadata={"mode": "calibration"},
+        db_writer=None,
+        s3_uploader=None,
+    )
+    session.set_debug(True)
+    _apply_calibration_overrides(session, flat_config)
+
+    _calibration_sessions[calibration_id] = {
+        "session": session,
+        "updated_at": time.time(),
+        "created_at": time.time(),
+    }
+    _calibration_active = True
+    return JSONResponse({
+        "session_id": calibration_id,
+        "tick_rate_hz": _session_config.get("TICK_RATE", 10),
+        "object_window_frames": session._cfg.get("OBJECT_WINDOW"),
+        "object_vote_targets": {
+            "phone": session._cfg.get("PHONE_MIN_VOTES"),
+            "book": session._cfg.get("BOOK_MIN_VOTES"),
+            "headphone": session._cfg.get("HEADPHONE_MIN_VOTES"),
+            "earbud": session._cfg.get("EARBUD_MIN_VOTES"),
+            "default": session._cfg.get("OBJECT_MIN_VOTES"),
+        },
+    })
+
+
+@app.post("/calibration/{calibration_id}/frame")
+async def calibration_frame(
+    calibration_id: str,
+    frame: UploadFile = File(...),
+    config_json: str = Form("{}"),
+):
+    if coordinator is None:
+        raise HTTPException(status_code=503, detail="Coordinator unavailable")
+
+    _cleanup_calibration_sessions()
+    state = _calibration_sessions.get(calibration_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Calibration session not found")
+
+    try:
+        flat_config = json.loads(config_json or "{}")
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "calibration_frame invalid config JSON calibration_id=%s error=%s",
+            calibration_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=f"Invalid config JSON: {exc}")
+
+    session: ProctorSession = state["session"]
+    _apply_calibration_overrides(session, flat_config)
+
+    content = await frame.read()
+    np_buf = np.frombuffer(content, dtype=np.uint8)
+    img = cv2.imdecode(np_buf, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="Invalid frame image")
+
+    state["updated_at"] = time.time()
+    session.latest_frame = img
+    session.observed_fps = float(_session_config.get("TICK_RATE", 10))
+
+    loop = asyncio.get_running_loop()
+    started = time.perf_counter()
+    from detectors.object_detector import merge_by_class
+
+    batch_detections, mp_result = await asyncio.gather(
+        loop.run_in_executor(None, coordinator.detector.detect_batch, [img]),
+        loop.run_in_executor(None, session.run_mediapipe, img),
+    )
+    raw_dets = batch_detections[0] if batch_detections else []
+    detections = (
+        merge_by_class(raw_dets, ["person", "earbud"], iou_threshold=0.5)
+        if len(raw_dets) > 1
+        else raw_dets
+    )
+    now = time.time()
+    session.update(detections, mp_result, img, now, session.observed_fps)
+
+    debug_frame = session.get_debug_frame()
+    if debug_frame is None:
+        debug_frame = img
+
+    ok, buf = cv2.imencode(".jpg", debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode debug frame")
+
+    telemetry = session.get_tuning_snapshot()
+    telemetry["processing_ms"] = round((time.perf_counter() - started) * 1000, 1)
+    return JSONResponse({
+        "image_base64": base64.b64encode(buf.tobytes()).decode("ascii"),
+        "telemetry": telemetry,
+    })
+
+
+@app.delete("/calibration/{calibration_id}")
+async def delete_calibration_session(calibration_id: str):
+    global _calibration_active
+    state = _calibration_sessions.pop(calibration_id, None)
+    if not state:
+        if not _calibration_sessions:
+            _calibration_active = False
+        return JSONResponse({"ok": True})
+    try:
+        state["session"].close()
+    except Exception as exc:
+        global _CALIBRATION_CLOSE_LAST_LOG_AT
+        _t = time.time()
+        if _t - _CALIBRATION_CLOSE_LAST_LOG_AT >= 60:
+            _CALIBRATION_CLOSE_LAST_LOG_AT = _t
+            logger.debug("delete_calibration_session: session.close failed: %s", exc)
+    if not _calibration_sessions:
+        _calibration_active = False
+    return JSONResponse({"ok": True})
+
 @app.get("/risk/{pc_id}")
 async def get_risk(pc_id: str):
     if coordinator is None or pc_id not in coordinator.sessions:
@@ -541,6 +798,15 @@ async def stream_alerts(pc_id: str):
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=25.0)
                 except asyncio.TimeoutError:
+                    global _STREAM_TIMEOUT_LAST_LOG_AT
+                    now = time.time()
+                    if now - _STREAM_TIMEOUT_LAST_LOG_AT >= 300:
+                        _STREAM_TIMEOUT_LAST_LOG_AT = now
+                        logger.debug(
+                            "stream_alerts heartbeat timeout (no events ~%ss) pc_id=%s",
+                            25.0,
+                            pc_id,
+                        )
                     yield ": heartbeat\n\n"
                     continue
 
@@ -634,7 +900,11 @@ async def list_reports_meta():
                 "proof_count": proof_count,
             })
         except Exception:
-            pass
+            global _CALIBRATION_CLOSE_LAST_LOG_AT
+            now = time.time()
+            if now - _CALIBRATION_CLOSE_LAST_LOG_AT >= 60:
+                _CALIBRATION_CLOSE_LAST_LOG_AT = now
+                logger.debug("list_reports_meta: skipping corrupted report meta dir=%s", d.name)
     return JSONResponse(result)
 
 @app.get("/report/{report_id}")
@@ -850,11 +1120,20 @@ async def post_admin_settings(request: Request):
                     session._face_hidden_recency_s = v
         changed["thresholds"] = {k: float(v) for k, v in body["thresholds"].items()}
 
-    # ── Object settings (new sessions only — obj_tracker built at session init) ─
+    # ── Object settings — persist for new sessions AND push live to running detector ─
     if "objects" in body and coordinator is not None:
         for k, v in body["objects"].items():
             coordinator.runtime_settings[k] = v
         changed["objects"] = {k: v for k, v in body["objects"].items()}
+        # Live-push to the shared ObjectDetector so running sessions pick up
+        # the new thresholds immediately (no session restart required).
+        if coordinator.detector is not None:
+            coordinator.detector.update_thresholds(
+                phone_conf  = body["objects"].get("YOLO_PHONE_CONF"),
+                book_conf   = body["objects"].get("YOLO_BOOK_CONF"),
+                audio_conf  = body["objects"].get("YOLO_AUDIO_CONF"),
+                person_conf = body["objects"].get("YOLO_PERSON_CONF"),
+            )
 
     # ── Scoring constants (immediate via module mutation) ─────────────────────
     _SCORE_FLOATS = {
@@ -993,6 +1272,13 @@ async def add_ice_candidate(pc_id: str, request: Request):
 
 @app.post("/offer")
 async def offer(request: Request):
+    if _calibration_active:
+        return JSONResponse(
+            {"error": "MODEL_CALIBRATION_ACTIVE",
+             "detail": "The proctoring engine is currently in calibration mode. Please wait."},
+            status_code=503,
+        )
+
     if len(pcs) >= MAX_CONNECTIONS:
         return JSONResponse(
             {"error": f"Server at capacity ({MAX_CONNECTIONS} sessions)."},
@@ -1013,6 +1299,71 @@ async def offer(request: Request):
     # Per-session detection overrides (from exam-level config set by admin)
     detection_override = params.get("detection_config", {})
     report_metadata = params.get("metadata", {})
+
+    # ── Apply scoring settings from backend DB → S.* module vars ────────────────
+    # The backend reads EngineSettings from RDS and passes all scoring values in
+    # detection_config. We apply them here so every new session uses the DB values
+    # rather than the stale env-var defaults that were set at engine startup.
+    # This is the same mutation that /admin/settings POST does — just triggered
+    # per-session instead of manually, making DB the single source of truth.
+    import settings.scoring as _S_mod
+    import settings.alerts  as _A_mod
+
+    _SCORE_FLOAT_KEYS = {
+        "STATE_WARNING", "STATE_HIGH_RISK", "STATE_ADMIN", "DECAY_AMOUNT",
+        "TAB_SWITCH_SCORE", "GAZE_SCORE",
+        "PHONE_SCORE_2ND", "PHONE_SCORE_3RD",
+        "BOOK_SCORE", "HEADPHONE_SCORE", "EARBUD_SCORE",
+        "MULTI_PEOPLE_SCORE_2ND", "MULTI_PEOPLE_SCORE_3RD",
+        "NO_PERSON_SCORE_1", "NO_PERSON_SCORE_2",
+        "NO_PERSON_DUR_1", "NO_PERSON_DUR_2",
+        "MULTI_PEOPLE_TERMINATE_S", "NO_PERSON_TERMINATE_S",
+        "FAKE_PRESENCE_SCORE_1", "FAKE_PRESENCE_SCORE_2",
+        "FAKE_PRESENCE_DUR_1", "FAKE_PRESENCE_DUR_2",
+        "PARTIAL_FACE_SCORE", "PARTIAL_FACE_DURATION_GATE",
+        "FACE_HIDDEN_SCORE_1", "FACE_HIDDEN_SCORE_2",
+        "FACE_HIDDEN_DUR_1", "FACE_HIDDEN_DUR_2",
+        "SPEAKER_WARN_COOLDOWN", "SPEAKER_ALERT_COOLDOWN",
+        "SPEAKER_OCC1_WARN_S", "SPEAKER_OCC1_SCORE", "SPEAKER_OCC1_REPEAT",
+        "SPEAKER_OCC2_WARN_S", "SPEAKER_OCC2_SCORE", "SPEAKER_OCC2_REPEAT",
+        "SPEAKER_REPEAT_INTERVAL",
+    }
+    _SCORE_INT_KEYS = {"TAB_SWITCH_TERMINATE_COUNT"}
+
+    for _k, _v in detection_override.items():
+        if _k in _SCORE_FLOAT_KEYS and hasattr(_S_mod, _k):
+            setattr(_S_mod, _k, float(_v))
+        elif _k in _SCORE_INT_KEYS and hasattr(_S_mod, _k):
+            setattr(_S_mod, _k, int(_v))
+
+    # Apply score cooldowns if provided as a nested dict
+    if isinstance(detection_override.get("SCORE_COOLDOWNS"), dict):
+        _S_mod.SCORE_COOLDOWNS.update(
+            {k: float(v) for k, v in detection_override["SCORE_COOLDOWNS"].items()}
+        )
+
+    # Apply YOLO confidence overrides to the shared detector so the new session
+    # (and all running sessions) immediately use the DB-configured thresholds.
+    if coordinator is not None and coordinator.detector is not None:
+        coordinator.detector.update_thresholds(
+            phone_conf  = detection_override.get("YOLO_PHONE_CONF"),
+            book_conf   = detection_override.get("YOLO_BOOK_CONF"),
+            audio_conf  = detection_override.get("YOLO_AUDIO_CONF"),
+            person_conf = detection_override.get("YOLO_PERSON_CONF"),
+        )
+
+    # Apply system-level detection toggles (DETECT_PHONE etc.) to coordinator
+    # so running sessions respect the DB setting immediately.
+    _DETECT_KEYS = {
+        "DETECT_LOOKING_AWAY", "DETECT_LOOKING_DOWN", "DETECT_LOOKING_UP",
+        "DETECT_LOOKING_SIDE", "DETECT_FACE_HIDDEN", "DETECT_PARTIAL_FACE",
+        "DETECT_FAKE_PRESENCE", "DETECT_SPEAKER_AUDIO",
+        "DETECT_PHONE", "DETECT_BOOK", "DETECT_HEADPHONE",
+        "DETECT_EARBUD", "DETECT_MULTIPLE_PEOPLE",
+    }
+    _detect_updates = {k: v for k, v in detection_override.items() if k in _DETECT_KEYS}
+    if _detect_updates and coordinator is not None:
+        coordinator.update_exam_config(_detect_updates)
 
     pc    = RTCPeerConnection(configuration=_ICE_SERVERS)
     pc_id = str(id(pc))
@@ -1097,8 +1448,12 @@ async def offer(request: Request):
                                             or getattr(_r, "send_pli", None)
                                     if _pfn:
                                         asyncio.ensure_future(_pfn())
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            global _PLI_FAIL_LAST_LOG_AT
+                            now = time.time()
+                            if now - _PLI_FAIL_LAST_LOG_AT >= 60:
+                                _PLI_FAIL_LAST_LOG_AT = now
+                                logger.debug("PLI send failed device_label=%s error=%s", device_label, exc)
                         # Keep waiting on the same recv_task — do NOT cancel it
 
                 logger.info("[%s] _video_loop exited", device_label)

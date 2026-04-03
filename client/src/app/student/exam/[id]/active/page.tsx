@@ -87,8 +87,16 @@ export default function ActiveExamPage() {
   const [fullscreenExited, setFullscreenExited] = useState(false);
   const [tabSwitchCount, setTabSwitchCount]     = useState(0);
   const [alerts, setAlerts]               = useState<ExamAlert[]>([]);
+  // 'connecting' while waiting for engine, 'connected' once ready, 'failed' after retries exhausted
+  const [proctorStatus, setProctorStatus] = useState<'connecting' | 'connected' | 'failed'>('connecting');
+  const [proctorAttempt, setProctorAttempt] = useState(1);
+  const [identityPrompt, setIdentityPrompt] = useState(false);
+  const identityPromptTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [calibrationBlocked, setCalibrationBlocked] = useState(false);
 
-  const tabThreshold = exam?.config?.tab_switching ? (exam?.flag_threshold || 3) : Infinity;
+  const tabThreshold = exam?.config?.tab_switching ? (exam?.tab_switch_terminate_count || 3) : Infinity;
+  const tabThresholdRef = useRef<number>(Infinity);
+  useEffect(() => { tabThresholdRef.current = tabThreshold; }, [tabThreshold]);
 
   /* in-exam alerts — stacked, deduped, auto-dismissed */
   const pushAlert = useCallback((kind: AlertKind, message: string) => {
@@ -165,12 +173,43 @@ export default function ActiveExamPage() {
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
         router.replace(`/student/exam/${examId}/terminated`);
       },
+      IDENTITY_PROMPT: () => {
+        setIdentityPrompt(true);
+        // Auto-dismiss after 30s as safety net (server will clear on success)
+        if (identityPromptTimerRef.current) clearTimeout(identityPromptTimerRef.current);
+        identityPromptTimerRef.current = setTimeout(() => setIdentityPrompt(false), 30000);
+      },
+      IDENTITY_PROMPT_CLEAR: () => {
+        setIdentityPrompt(false);
+        if (identityPromptTimerRef.current) clearTimeout(identityPromptTimerRef.current);
+      },
     });
   }, [examId, pushAlert]);
 
-  const setupProctor = useCallback(async () => {
-    if (!streamRef.current) return;
+  const setupProctor = useCallback(async (): Promise<boolean> => {
+    if (!streamRef.current) return false;
     try {
+      // Verify all tracks are live — they may be ended after multi-page setup flow
+      // (device → environment → system → active). Re-acquire camera if needed.
+      const hasEndedTracks = streamRef.current.getTracks().some(t => t.readyState !== 'live');
+      if (hasEndedTracks || streamRef.current.getTracks().length === 0) {
+        const camId = localStorage.getItem(`exam_cam_${examId}`);
+        const micId = localStorage.getItem(`exam_mic_${examId}`);
+        try {
+          const freshStream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: camId ? { exact: camId } : undefined },
+            audio: { deviceId: micId ? { exact: micId } : undefined },
+          });
+          streamRef.current.getTracks().forEach(t => t.stop());
+          streamRef.current = freshStream;
+          if (videoRef.current) videoRef.current.srcObject = freshStream;
+        } catch {
+          return false;
+        }
+      }
+
+      // Close any previous peer connection before creating a new one
+      pcRef.current?.close();
       const pc = new RTCPeerConnection({ iceServers: [] });
       pcRef.current = pc;
       streamRef.current.getTracks().forEach(t => pc.addTrack(t, streamRef.current!));
@@ -192,6 +231,30 @@ export default function ActiveExamPage() {
       const res = await api.post(`/exam/${examId}/proctor-connect`, { sdp: pc.localDescription!.sdp, type: pc.localDescription!.type });
       proctorPcIdRef.current = res.data.pc_id ?? res.data.device_id;
       await pc.setRemoteDescription(new RTCSessionDescription({ sdp: res.data.sdp, type: res.data.type }));
+
+      // Wait for ICE connection to be established (confirms media is flowing to engine)
+      // Timeout after 8s — if still not connected, treat as failure so retry can run
+      const iceConnected = await new Promise<boolean>(resolve => {
+        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+          resolve(true);
+          return;
+        }
+        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+          resolve(false);
+          return;
+        }
+        const timeout = setTimeout(() => resolve(false), 8000);
+        pc.oniceconnectionstatechange = () => {
+          const s = pc.iceConnectionState;
+          if (s === 'connected' || s === 'completed') { clearTimeout(timeout); resolve(true); }
+          else if (s === 'failed' || s === 'closed') { clearTimeout(timeout); resolve(false); }
+        };
+      });
+      if (!iceConnected) {
+        proctorPcIdRef.current = null;  // clear stale pc_id so ICE handlers don't fire on retry
+        return false;
+      }
+
       const token   = localStorage.getItem('access_token') || '';
       const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
       proctorSseCloseRef.current = openSSE(`${baseUrl}/exam/${examId}/proctor-events`, token, {
@@ -206,11 +269,38 @@ export default function ActiveExamPage() {
           }
         },
       });
+      return true;
     } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      if (detail) pushAlert('critical', `Proctor engine: ${detail}`);
+      if (err?.response?.status === 503 && err?.response?.data?.detail === 'MODEL_CALIBRATION_ACTIVE') {
+        setCalibrationBlocked(true);
+      }
+      return false;
     }
   }, [examId, pushAlert]);
+
+  const connectProctorWithRetry = useCallback(async () => {
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY_MS = 3000;
+    setProctorStatus('connecting');
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      setProctorAttempt(attempt + 1);
+      const ok = await setupProctor();
+      if (ok) {
+        setProctorStatus('connected');
+        // Enter fullscreen if not already (e.g. reconnect scenario)
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        }
+        return;
+      }
+      // Stop retrying if engine is in calibration — no point retrying until calibration ends
+      if (calibrationBlocked) break;
+      if (attempt < MAX_RETRIES) {
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+      }
+    }
+    setProctorStatus('failed');
+  }, [setupProctor, calibrationBlocked]);
 
   /* init */
   useEffect(() => {
@@ -233,7 +323,7 @@ export default function ActiveExamPage() {
         setLoading(false);
         startTimer(remaining);
         setupSSE(sessionData.session_id);
-        setupProctor();
+        connectProctorWithRetry();
         if (sessionData.status === 'TERMINATED') {
           if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
           router.replace(`/student/exam/${examId}/terminated`);
@@ -305,22 +395,57 @@ export default function ActiveExamPage() {
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, [loading, terminated, submitting, examId]);
 
-  /* tab switch guard */
+  /* tab switch guard — handles: tab switch, Alt+Tab, Ctrl+R/F5 */
+  const tabSwitchCountRef = useRef(0);
+  const lastSwitchRef     = useRef(0);
+
+  const reportSwitch = useCallback(async () => {
+    // Debounce: two events within 300 ms count as one (e.g. visibilitychange + blur together)
+    const now = Date.now();
+    if (now - lastSwitchRef.current < 300) return;
+    lastSwitchRef.current = now;
+
+    tabSwitchCountRef.current += 1;
+    const next  = tabSwitchCountRef.current;
+    const limit = tabThresholdRef.current;
+    setTabSwitchCount(next);
+    pushAlert('critical', `Tab switch detected (${next}/${limit === Infinity ? '∞' : limit} allowed)`);
+    try {
+      const res = await api.post(`/exam/${examId}/proctor-violation`, { reason: 'tab_switch' });
+      if (res.data?.risk?.terminated) {
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        router.replace(`/student/exam/${examId}/terminated`);
+      }
+    } catch {}
+  }, [examId, pushAlert, router]);
+
   useEffect(() => {
     if (loading || !exam?.config?.tab_switching) return;
-    const onVisibility = async () => {
-      if (!document.hidden) return;
-      const next = tabSwitchCount + 1;
-      setTabSwitchCount(next);
-      pushAlert('critical', `Tab switch detected (${next}/3 allowed)`);
-      try {
-        const res = await api.post(`/exam/${examId}/proctor-violation`, { reason: 'tab_switch' });
-        if (res.data?.risk?.terminated) { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); router.replace(`/student/exam/${examId}/terminated`); }
-      } catch {}
+
+    // Tab switch: fires when the tab is hidden (Ctrl+Tab, click other tab)
+    const onVisibility = () => { if (document.hidden) reportSwitch(); };
+
+    // Window blur: fires on Alt+Tab / switching to another app — only when tab is still visible
+    const onBlur = () => { if (!document.hidden) reportSwitch(); };
+
+    // Ctrl+R / F5: intercept page refresh during exam
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey && e.key.toLowerCase() === 'r') || e.key === 'F5') {
+        e.preventDefault();
+        e.stopPropagation();
+        reportSwitch();
+      }
     };
+
     document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [loading, exam, tabSwitchCount, pushAlert]);
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [loading, exam, reportSwitch]);
 
   /* unload beacon */
   useEffect(() => {
@@ -422,6 +547,44 @@ export default function ActiveExamPage() {
         @keyframes slide-alert { from { opacity: 0; transform: translateY(-8px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
       `}</style>
 
+      {/* ── PROCTOR ENGINE CONNECTING / FAILED OVERLAY ───────────────────── */}
+      {(proctorStatus === 'connecting' || proctorStatus === 'failed') && !terminated && (
+        <div style={{ position: 'absolute', inset: 0, zIndex: 400, background: 'rgba(15,23,42,0.9)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{
+            background: '#fff', border: `2px solid ${proctorStatus === 'failed' ? '#EF4444' : '#22577A'}`, borderRadius: '20px',
+            padding: '40px', maxWidth: '400px', width: '100%', textAlign: 'center',
+            boxShadow: '0 32px 80px rgba(15,23,42,0.3)',
+          }}>
+            <div style={{ width: '64px', height: '64px', borderRadius: '16px', background: proctorStatus === 'failed' ? 'rgba(239,68,68,0.1)' : 'rgba(34,87,122,0.1)', border: `2px solid ${proctorStatus === 'failed' ? 'rgba(239,68,68,0.25)' : 'rgba(34,87,122,0.25)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
+              {proctorStatus === 'connecting'
+                ? <Loader2 style={{ width: '28px', height: '28px', color: '#22577A', animation: 'spin 1s linear infinite' }} />
+                : <ShieldAlert style={{ width: '28px', height: '28px', color: '#EF4444' }} />}
+            </div>
+            <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A', marginBottom: '8px', letterSpacing: '-0.02em' }}>
+              {proctorStatus === 'connecting' ? 'Connecting to Proctoring Engine…' : 'Proctoring Engine Unavailable'}
+            </h2>
+            <p style={{ fontSize: '13.5px', color: '#64748B', marginBottom: proctorStatus === 'failed' ? '24px' : '0', lineHeight: 1.65, fontWeight: 500 }}>
+              {proctorStatus === 'connecting'
+                ? `Establishing secure proctoring session. Please wait… (attempt ${proctorAttempt}/4)`
+                : 'Could not connect to the proctoring engine after multiple attempts. Please retry or contact your exam admin.'}
+            </p>
+            {proctorStatus === 'failed' && (
+              <button
+                onClick={() => connectProctorWithRetry()}
+                style={{
+                  width: '100%', padding: '13px', borderRadius: '10px', border: 'none', cursor: 'pointer',
+                  background: '#22577A', color: '#fff', fontSize: '14px', fontWeight: 800,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                  fontFamily: "'Plus Jakarta Sans', sans-serif", letterSpacing: '-0.01em',
+                }}
+              >
+                <Shield style={{ width: '16px', height: '16px' }} /> Retry Connection
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── FULLSCREEN EXIT OVERLAY ────────────────────────────────────────── */}
       {fullscreenExited && !terminated && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 300, background: 'rgba(15,23,42,0.85)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -449,6 +612,40 @@ export default function ActiveExamPage() {
               <Maximize2 style={{ width: '16px', height: '16px' }} /> Return to Fullscreen
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ── CALIBRATION BLOCKED OVERLAY ──────────────────────────────────── */}
+      {calibrationBlocked && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 500,
+          background: 'rgba(15,23,42,0.85)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          gap: '16px',
+        }}>
+          <Loader2 style={{ width: '44px', height: '44px', color: '#60A5FA', animation: 'spin 1s linear infinite' }} />
+          <div style={{ textAlign: 'center', color: '#fff', maxWidth: '380px' }}>
+            <div style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px' }}>Model Calibration in Progress</div>
+            <div style={{ fontSize: '14px', color: '#94A3B8', lineHeight: 1.5 }}>
+              The proctoring engine is currently being calibrated by an administrator. Your exam session is preserved — please wait and try again shortly.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── IDENTITY PROMPT BANNER ────────────────────────────────────────── */}
+      {identityPrompt && (
+        <div style={{
+          position: 'fixed', top: '64px', left: '50%', transform: 'translateX(-50%)',
+          zIndex: 400, display: 'flex', alignItems: 'center', gap: '10px',
+          background: '#1E3A5F', color: '#fff', borderRadius: '10px',
+          padding: '12px 18px', boxShadow: '0 8px 32px rgba(15,23,42,0.25)',
+          border: '1px solid rgba(255,255,255,0.12)', maxWidth: '480px', width: 'max-content',
+        }}>
+          <Eye style={{ width: '18px', height: '18px', color: '#93C5FD', flexShrink: 0 }} />
+          <span style={{ fontSize: '13.5px', fontWeight: 600, letterSpacing: '-0.01em' }}>
+            Please look directly into the camera for a moment.
+          </span>
         </div>
       )}
 

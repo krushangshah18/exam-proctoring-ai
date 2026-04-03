@@ -34,6 +34,8 @@ _NULL_MP   = (_NULL_HEAD, _LipState(face_detected=False))
 
 logger = logging.getLogger("coordinator")
 
+_COORDINATOR_METRICS_LAST_LOG_AT: float = 0.0
+
 # Target processing rate (ticks per second).
 # Actual rate is bounded by YOLO batch latency — if inference takes longer
 # than 1/TICK_RATE the loop simply runs as fast as it can.
@@ -192,8 +194,12 @@ class ProctorCoordinator:
             try:
                 from core.metrics import metrics as _m
                 _m.record_tick_latency(self._last_tick_ms)
-            except Exception:
-                pass
+            except Exception as exc:
+                global _COORDINATOR_METRICS_LAST_LOG_AT
+                now = time.time()
+                if now - _COORDINATOR_METRICS_LAST_LOG_AT >= 60:
+                    _COORDINATOR_METRICS_LAST_LOG_AT = now
+                    logger.debug("ProctorCoordinator: record_tick_latency failed: %s", exc)
 
             sleep = max(0.0, interval - elapsed)
             await asyncio.sleep(sleep)
@@ -255,8 +261,12 @@ class ProctorCoordinator:
             try:
                 from core.metrics import metrics as _m
                 _m.record_mediapipe_latency(mp_elapsed_ms)
-            except Exception:
-                pass
+            except Exception as exc:
+                global _COORDINATOR_METRICS_LAST_LOG_AT
+                now = time.time()
+                if now - _COORDINATOR_METRICS_LAST_LOG_AT >= 60:
+                    _COORDINATOR_METRICS_LAST_LOG_AT = now
+                    logger.debug("ProctorCoordinator: record_mediapipe_latency failed: %s", exc)
 
         # ── 3. Per-session state update — sequential (fast CPU work) ──────────
         for session, raw_dets, mp_result, frame, fps in zip(

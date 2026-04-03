@@ -10,6 +10,7 @@ No drawing, no video recording. Output is data only:
 from __future__ import annotations
 
 import asyncio
+import logging
 import json
 import time
 from datetime import datetime
@@ -52,8 +53,14 @@ _DEFAULTS = {
     "AUDIO_CHUNK_SAMPLES"    : 512,
     "AUDIO_SPEECH_THRESH"    : 0.5,
     "SPEAKER_HOLD_S"         : 0.3,
+    "TICK_RATE"              : 10,
     "OBJECT_WINDOW"          : 15,
     "OBJECT_WINDOW_S"        : 1.5,
+    "PHONE_MIN_VOTES"        : 9,
+    "BOOK_MIN_VOTES"         : 10,
+    "HEADPHONE_MIN_VOTES"    : 9,
+    "EARBUD_MIN_VOTES"       : 9,
+    "OBJECT_MIN_VOTES"       : 5,
     "VOTE_RATIOS"            : {
         "book":       0.65,
         "phone":      0.55,
@@ -66,6 +73,14 @@ _DEFAULTS = {
     "SAVE_REPORT"             : True,
     "PROOF_AUDIO_PRE_S"       : 5.0,
 }
+
+logger = logging.getLogger("proctor.session")
+
+_PS_META_LAST_LOG_AT: float = 0.0
+_PS_METRICS_INC_LAST_LOG_AT: float = 0.0
+_PS_SSE_QUEUE_FULL_LAST_LOG_AT: float = 0.0
+_PS_PROOF_URL_LAST_LOG_AT: float = 0.0
+_PS_UNLINK_LAST_LOG_AT: float = 0.0
 
 
 class ProctorSession:
@@ -159,7 +174,8 @@ class ProctorSession:
 
         # ── State machines ────────────────────────────────────────────────────
         window_frames = float(cfg["OBJECT_WINDOW"])
-        window_s      = window_frames / 15.0
+        tick_rate     = float(cfg.get("TICK_RATE", 10))
+        window_s      = window_frames / tick_rate
         vote_ratios   = {
             "phone"    : float(cfg["PHONE_MIN_VOTES"])  / window_frames,
             "book"     : float(cfg["BOOK_MIN_VOTES"])   / window_frames,
@@ -171,6 +187,21 @@ class ProctorSession:
         self.obj_tracker  = ObjectTemporalTracker(window_s=window_s, vote_ratios=vote_ratios)
         self.alert_engine = AlertEngine()
         self.head_tracker = HeadTracker(self._states, cfg["LOOKING_AWAY_THRESHOLD"], debug=False)
+        exam_duration_minutes = (report_metadata or {}).get("exam_duration_minutes")
+        try:
+            exam_duration_minutes = float(exam_duration_minutes) if exam_duration_minutes is not None else None
+        except (TypeError, ValueError) as exc:
+            global _PS_META_LAST_LOG_AT
+            now = time.time()
+            if now - _PS_META_LAST_LOG_AT >= 60:
+                _PS_META_LAST_LOG_AT = now
+                logger.debug(
+                    "ProctorSession: invalid exam_duration_minutes metadata session_id=%s raw=%r error=%s",
+                    session_id,
+                    exam_duration_minutes,
+                    exc,
+                )
+            exam_duration_minutes = None
         self.liveness     = LivenessDetector(
             cfg["FAKE_WINDOW"], cfg["SAMPLE_INTERVAL"],
             cfg["MIN_VARIANCE"], cfg["NO_BLINK_TIMEOUT"],
@@ -179,6 +210,7 @@ class ProctorSession:
         self.speaker_audio = SpeakerAudioDetector(hold_s=cfg["SPEAKER_HOLD_S"])
         self.risk = RiskEngine(
             flicker_grace_s = cfg["TIMER_FLICKER_GRACE_S"],
+            exam_duration_minutes = exam_duration_minutes,
         )
 
         self.audio_monitor = AudioMonitor(
@@ -204,6 +236,7 @@ class ProctorSession:
         self.debug_mode: bool           = False
         self._last_mp_result: tuple | None = None
         self._last_detections: list      = []
+        self._last_telemetry: dict       = {}
 
         # Tracks the last wall-clock time face landmarks were actively detected.
         # Used to gate face_hidden: only fires within FACE_HIDDEN_RECENCY_S after
@@ -242,14 +275,27 @@ class ProctorSession:
         try:
             self._sse_queues.remove(queue)
         except ValueError:
-            pass
+            global _PS_SSE_QUEUE_FULL_LAST_LOG_AT
+            now = time.time()
+            if now - _PS_SSE_QUEUE_FULL_LAST_LOG_AT >= 60:
+                _PS_SSE_QUEUE_FULL_LAST_LOG_AT = now
+                logger.debug("ProctorSession.unsubscribe_sse: queue not found session_id=%s", self.session_id)
 
     def _push_sse(self, event: dict) -> None:
         for q in self._sse_queues:
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
-                pass   # slow subscriber — drop event
+                global _PS_SSE_QUEUE_FULL_LAST_LOG_AT
+                now = time.time()
+                if now - _PS_SSE_QUEUE_FULL_LAST_LOG_AT >= 60:
+                    _PS_SSE_QUEUE_FULL_LAST_LOG_AT = now
+                    logger.warning(
+                        "ProctorSession: SSE queue full; dropping event session_id=%s event_type=%s",
+                        self.session_id,
+                        event.get("type"),
+                    )
+                # slow subscriber — drop event
 
     # ── Tab switch (discrete event from frontend) ─────────────────────────────
 
@@ -321,6 +367,152 @@ class ProctorSession:
         self._draw_risk_panel(canvas)
 
         return canvas
+
+    def get_tuning_snapshot(self) -> dict:
+        if self._last_telemetry:
+            return self._last_telemetry
+        return {
+            "session_id": self.session_id,
+            "tick_rate_hz": round(self._tick_fps, 2),
+            "risk": self.risk.get_display(),
+            "signals": [],
+            "summary": {},
+        }
+
+    def _signal_thresholds(self, key: str) -> dict:
+        import settings.scoring as S
+
+        if key in {"looking_away", "looking_down", "looking_up"}:
+            return {"activate_s": float(self.head_tracker.threshold)}
+        if key == "looking_side":
+            return {"activate_s": float(self._cfg.get("GAZE_THRESHOLD", self.head_tracker.threshold))}
+        if key == "partial_face":
+            return {
+                "activate_s": float(self.head_tracker.threshold),
+                "score_s": float(S.PARTIAL_FACE_DURATION_GATE),
+            }
+        if key == "face_hidden":
+            return {
+                "activate_s": float(self.head_tracker.threshold),
+                "tier_1_s": float(S.FACE_HIDDEN_DUR_1),
+                "tier_2_s": float(S.FACE_HIDDEN_DUR_2),
+            }
+        if key == "fake_presence":
+            return {
+                "activate_s": float(self.head_tracker.threshold),
+                "tier_1_s": float(S.FAKE_PRESENCE_DUR_1),
+                "tier_2_s": float(S.FAKE_PRESENCE_DUR_2),
+            }
+        if key == "no_person":
+            return {
+                "tier_1_s": float(S.NO_PERSON_DUR_1),
+                "tier_2_s": float(S.NO_PERSON_DUR_2),
+                "terminate_s": float(S.NO_PERSON_TERMINATE_S),
+            }
+        if key == "multiple_people":
+            return {"terminate_s": float(S.MULTI_PEOPLE_TERMINATE_S)}
+        if key == "speaker_audio":
+            is_first = getattr(self.risk, "_speaker_occ", 0) == 0
+            return {
+                "warn_s": float(S.SPEAKER_OCC1_WARN_S if is_first else S.SPEAKER_OCC2_WARN_S),
+                "repeat_interval_s": float(S.SPEAKER_REPEAT_INTERVAL),
+                "episode": 1 if is_first else 2,
+            }
+        return {}
+
+    def _signal_stage(self, key: str, enabled: bool, condition: bool, active: bool, duration_s: float, risk_added: float, thresholds: dict, risk_debug: dict, extra: dict) -> str:
+        if not enabled:
+            return "disabled"
+        if risk_debug.get("score_cooldown_remaining_s", 0.0) > 0 and active:
+            return "score-cooldown"
+        if risk_added > 0:
+            return "scored"
+        if key in {"phone", "book", "headphone", "earbud"}:
+            tracker = extra.get("tracker", {})
+            if not condition:
+                return "idle"
+            if not active:
+                return "accumulating"
+            grace = 1 if key in {"phone", "headphone", "earbud"} else 0
+            if risk_debug.get("occurrence_count", 0) <= grace:
+                return "grace-warning"
+            return "warning"
+        if key == "multiple_people":
+            if not condition:
+                return "idle"
+            if duration_s >= thresholds.get("terminate_s", float("inf")):
+                return "terminate-ready"
+            return "warning"
+        if key == "no_person":
+            if not condition:
+                return "idle"
+            if duration_s >= thresholds.get("terminate_s", float("inf")):
+                return "terminate-ready"
+            if duration_s >= thresholds.get("tier_2_s", float("inf")):
+                return "tier-2"
+            if duration_s >= thresholds.get("tier_1_s", float("inf")):
+                return "tier-1"
+            return "warning"
+        if key == "face_hidden":
+            if not condition:
+                return "idle"
+            if duration_s >= thresholds.get("tier_2_s", float("inf")):
+                return "tier-2"
+            if duration_s >= thresholds.get("tier_1_s", float("inf")):
+                return "tier-1"
+            if active:
+                return "warning"
+            return "accumulating"
+        if key == "fake_presence":
+            if not condition:
+                return "idle"
+            if duration_s >= thresholds.get("tier_2_s", float("inf")):
+                return "tier-2"
+            if duration_s >= thresholds.get("tier_1_s", float("inf")):
+                return "tier-1"
+            if active:
+                return "warning"
+            return "accumulating"
+        if key == "partial_face":
+            if not condition:
+                return "idle"
+            if duration_s >= thresholds.get("score_s", float("inf")):
+                return "score-ready"
+            if active:
+                return "warning"
+            return "accumulating"
+        if key == "speaker_audio":
+            if not condition:
+                return "idle"
+            if duration_s >= thresholds.get("warn_s", float("inf")):
+                return "score-window"
+            return "warning"
+        if not condition:
+            return "idle"
+        if active:
+            return "warning"
+        return "accumulating"
+
+    def _build_signal_telemetry(self, key: str, label: str, category: str, enabled: bool, condition: bool, active: bool, duration_s: float, risk_added: float, now: float, extra: dict | None = None) -> dict:
+        extra = extra or {}
+        thresholds  = self._signal_thresholds(key)
+        risk_debug  = self.risk.get_debug_state(key, now)
+        alert_debug = self.alert_engine.get_debug_state(key, now)
+        return {
+            "key": key,
+            "label": label,
+            "category": category,
+            "enabled": enabled,
+            "condition_active": bool(condition),
+            "active": bool(active),
+            "duration_s": round(duration_s, 2),
+            "risk_added": round(risk_added, 2),
+            "thresholds": thresholds,
+            "risk_debug": risk_debug,
+            "alert_debug": alert_debug,
+            "stage": self._signal_stage(key, enabled, condition, active, duration_s, risk_added, thresholds, risk_debug, extra),
+            "details": extra,
+        }
 
     _STATE_COLORS = {
         "NORMAL"      : (0,   200,  0),
@@ -505,6 +697,7 @@ class ProctorSession:
             elif cls == "earbud"    : earbud    = True; eb_conf    = conf
 
         landmarks_active = bool(yaw or pitch or gaze)
+        signal_debug: dict[str, dict] = {}
 
         # Update last-seen timestamp whenever face landmarks are actively detected.
         if landmarks_active:
@@ -544,11 +737,33 @@ class ProctorSession:
 
         for key, (cond, enabled) in head_conditions.items():
             if not enabled:
+                signal_debug[key] = self._build_signal_telemetry(
+                    key=key,
+                    label=key.replace("_", " ").title(),
+                    category="vision",
+                    enabled=False,
+                    condition=cond,
+                    active=False,
+                    duration_s=0.0,
+                    risk_added=0.0,
+                    now=now,
+                )
                 continue
             threshold = self._cfg["GAZE_THRESHOLD"] if key == "looking_side" else None
             triggered, dur = self.head_tracker.process(frame, key, cond, threshold=threshold)
             rev = self.risk.process_event(key, triggered, confidence=1.0, duration=dur, now=now)
             self._handle_event(rev, frame, now)
+            signal_debug[key] = self._build_signal_telemetry(
+                key=key,
+                label=key.replace("_", " ").title(),
+                category="vision",
+                enabled=enabled,
+                condition=cond,
+                active=triggered,
+                duration_s=dur,
+                risk_added=rev.risk_added,
+                now=now,
+            )
 
         object_flags: dict[str, tuple[bool, bool, float]] = {
             "phone"    : (phone,     self._detect("DETECT_PHONE"),     phone_conf),
@@ -558,21 +773,147 @@ class ProctorSession:
         }
         for key, (present, enabled, conf) in object_flags.items():
             if not enabled:
+                signal_debug[key] = self._build_signal_telemetry(
+                    key=key,
+                    label=key.replace("_", " ").title(),
+                    category="object",
+                    enabled=False,
+                    condition=present,
+                    active=False,
+                    duration_s=0.0,
+                    risk_added=0.0,
+                    now=now,
+                    extra={"confidence": round(conf, 3)},
+                )
                 continue
             stable = self.obj_tracker.update(key, present, fps=self._tick_fps)
             rev    = self.risk.process_event(key, stable, confidence=conf, now=now)
             self._handle_event(rev, frame, now)
+            signal_debug[key] = self._build_signal_telemetry(
+                key=key,
+                label=key.replace("_", " ").title(),
+                category="object",
+                enabled=enabled,
+                condition=present,
+                active=stable,
+                duration_s=0.0,
+                risk_added=rev.risk_added,
+                now=now,
+                extra={
+                    "confidence": round(conf, 3),
+                    "tracker": self.obj_tracker.debug_state(key, fps=self._tick_fps),
+                },
+            )
 
         if self._detect("DETECT_MULTIPLE_PEOPLE"):
             rev = self.risk.process_event("multiple_people", people_count > 1, now=now)
             self._handle_event(rev, frame, now)
+            signal_debug["multiple_people"] = self._build_signal_telemetry(
+                key="multiple_people",
+                label="Multiple People",
+                category="people",
+                enabled=True,
+                condition=people_count > 1,
+                active=rev.active,
+                duration_s=rev.duration,
+                risk_added=rev.risk_added,
+                now=now,
+                extra={"people_count": people_count},
+            )
+        else:
+            signal_debug["multiple_people"] = self._build_signal_telemetry(
+                key="multiple_people",
+                label="Multiple People",
+                category="people",
+                enabled=False,
+                condition=people_count > 1,
+                active=False,
+                duration_s=0.0,
+                risk_added=0.0,
+                now=now,
+                extra={"people_count": people_count},
+            )
 
         rev = self.risk.process_event("no_person", no_person_cond, now=now)
         self._handle_event(rev, frame, now)
+        signal_debug["no_person"] = self._build_signal_telemetry(
+            key="no_person",
+            label="No Person",
+            category="people",
+            enabled=True,
+            condition=no_person_cond,
+            active=rev.active,
+            duration_s=rev.duration,
+            risk_added=rev.risk_added,
+            now=now,
+            extra={"people_count": people_count},
+        )
 
         if self._detect("DETECT_SPEAKER_AUDIO"):
             rev = self.risk.process_event("speaker_audio", speaker_flagged, now=now)
             self._handle_event(rev, frame, now)
+            signal_debug["speaker_audio"] = self._build_signal_telemetry(
+                key="speaker_audio",
+                label="Speaker Audio",
+                category="audio",
+                enabled=True,
+                condition=speaker_flagged,
+                active=rev.active,
+                duration_s=rev.duration,
+                risk_added=rev.risk_added,
+                now=now,
+                extra={
+                    "speech_active": speech_active,
+                    "lip_speaking": lip_result.is_speaking,
+                    "face_detected": lip_result.face_detected,
+                },
+            )
+        else:
+            signal_debug["speaker_audio"] = self._build_signal_telemetry(
+                key="speaker_audio",
+                label="Speaker Audio",
+                category="audio",
+                enabled=False,
+                condition=speaker_flagged,
+                active=False,
+                duration_s=0.0,
+                risk_added=0.0,
+                now=now,
+                extra={
+                    "speech_active": speech_active,
+                    "lip_speaking": lip_result.is_speaking,
+                    "face_detected": lip_result.face_detected,
+                },
+            )
+
+        self._last_telemetry = {
+            "session_id": self.session_id,
+            "tick_rate_hz": round(self._tick_fps, 2),
+            "risk": {
+                **self.risk.get_display(),
+                "decay_interval_s": round(getattr(self.risk, "_decay_interval", 0.0), 2),
+                "quiet_for_s": round(max(0.0, now - getattr(self.risk, "_last_score_increase_time", now)), 2),
+            },
+            "summary": {
+                "people_count": people_count,
+                "landmarks_active": landmarks_active,
+                "speech_active": bool(speech_active),
+                "lip_speaking": bool(lip_result.is_speaking),
+                "lip_mar": round(float(getattr(lip_result, "mar", 0.0)), 3),
+                "face_detected": bool(lip_result.face_detected),
+                "pose": {
+                    "yaw": round(float(yaw), 3),
+                    "pitch": round(float(pitch), 3),
+                    "gaze": round(float(gaze), 3),
+                    "ear": round(float(head_result[9]), 3),
+                    "blinked": bool(blinked),
+                    "total_blinks": int(head_result[11]),
+                },
+                "active_warnings": self._alert_manager.get_active_warnings(),
+                "active_alerts": self._alert_manager.get_active_alerts(),
+            },
+            "signals": [signal_debug[key] for key in sorted(signal_debug.keys())],
+        }
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
 
@@ -612,7 +953,11 @@ class ProctorSession:
             try:
                 q.put_nowait(None)
             except asyncio.QueueFull:
-                pass
+                global _PS_SSE_QUEUE_FULL_LAST_LOG_AT
+                now = time.time()
+                if now - _PS_SSE_QUEUE_FULL_LAST_LOG_AT >= 60:
+                    _PS_SSE_QUEUE_FULL_LAST_LOG_AT = now
+                    logger.debug("ProctorSession.close: SSE sentinel queue full session_id=%s", self.session_id)
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -632,8 +977,12 @@ class ProctorSession:
         try:
             from core.metrics import metrics as _m
             _m.inc_alert()
-        except Exception:
-            pass
+        except Exception as exc:
+            global _PS_METRICS_INC_LAST_LOG_AT
+            now = time.time()
+            if now - _PS_METRICS_INC_LAST_LOG_AT >= 60:
+                _PS_METRICS_INC_LAST_LOG_AT = now
+                logger.debug("ProctorSession: inc_alert failed session_id=%s error=%s", self.session_id, exc)
         # Write to RDS — deferred until proof_url is known; called from _handle_event
         self._pending_alert_key        = alert_key
         self._pending_alert_score      = score_added
@@ -651,8 +1000,12 @@ class ProctorSession:
         try:
             from core.metrics import metrics as _m
             _m.inc_warning()
-        except Exception:
-            pass
+        except Exception as exc:
+            global _PS_METRICS_INC_LAST_LOG_AT
+            now = time.time()
+            if now - _PS_METRICS_INC_LAST_LOG_AT >= 60:
+                _PS_METRICS_INC_LAST_LOG_AT = now
+                logger.debug("ProctorSession: inc_warning failed session_id=%s error=%s", self.session_id, exc)
         # Write to RDS
         if self._db_writer and self._exam_session_id:
             self._db_writer.write_warning(
@@ -680,6 +1033,7 @@ class ProctorSession:
         proof_url: str | None = None
 
         proof_s3_key: str | None = None
+        proof_size_bytes: int | None = None
 
         if self.proof_writer is not None:
             save = (rev.terminated and not self._termination_proved) or alert_was_logged
@@ -693,7 +1047,17 @@ class ProctorSession:
                     try:
                         rel = Path(path).relative_to("reports")
                         proof_url = f"/proof/{rel.as_posix()}"
-                    except ValueError:
+                    except ValueError as exc:
+                        global _PS_PROOF_URL_LAST_LOG_AT
+                        _t = time.time()
+                        if _t - _PS_PROOF_URL_LAST_LOG_AT >= 60:
+                            _PS_PROOF_URL_LAST_LOG_AT = _t
+                            logger.debug(
+                                "ProctorSession: proof_url relative_to failed session_id=%s path=%r error=%s",
+                                self.session_id,
+                                path,
+                                exc,
+                            )
                         proof_url = None
                     if alert_was_logged:
                         self.alert_log[-1]["proof"] = path
@@ -703,7 +1067,7 @@ class ProctorSession:
                     # Upload proof to S3 then delete local file (prevents disk fill-up)
                     if self._s3_uploader and self._exam_session_id:
                         ext = Path(path).suffix.lstrip(".")
-                        proof_s3_key = self._s3_uploader.upload_file(
+                        proof_s3_key, proof_size_bytes = self._s3_uploader.upload_file(
                             local_path=path,
                             session_id=self._exam_session_id,
                             alert_key=rev.key,
@@ -715,8 +1079,17 @@ class ProctorSession:
                             # Delete local file — S3 is the source of truth
                             try:
                                 Path(path).unlink(missing_ok=True)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                global _PS_UNLINK_LAST_LOG_AT
+                                _t = time.time()
+                                if _t - _PS_UNLINK_LAST_LOG_AT >= 60:
+                                    _PS_UNLINK_LAST_LOG_AT = _t
+                                    logger.debug(
+                                        "ProctorSession: unlink proof local file failed session_id=%s path=%r error=%s",
+                                        self.session_id,
+                                        path,
+                                        exc,
+                                    )
 
         # Write alert to RDS now that we have the proof S3 key
         if alert_was_logged and self._db_writer and self._exam_session_id:
@@ -730,6 +1103,7 @@ class ProctorSession:
                 score_added=round(rev.risk_added, 2),
                 proof_s3_key=proof_s3_key,
                 proof_type=proof_type if proof_s3_key else None,
+                proof_size_bytes=proof_size_bytes,
             )
 
         # ── Push alert to SSE subscribers ─────────────────────────────────────
@@ -776,7 +1150,7 @@ class ProctorSession:
             "report_id"       : self.session_dir.name,
             "session_start"   : datetime.fromtimestamp(self.session_start).strftime("%Y-%m-%d %H:%M:%S"),
             "session_end"     : datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S"),
-            "duration_s"      : round(end_time - self.session_start, 1),
+            "duration_s"      : max(0, int(round(end_time - self.session_start))),
             "total_api_alerts": len(self.alert_log),
             "total_warnings"  : len(self.warning_log),
             "alert_summary"   : alert_summary,

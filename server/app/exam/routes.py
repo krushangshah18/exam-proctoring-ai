@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import os
+import time
 from datetime import datetime, UTC, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
@@ -14,13 +15,16 @@ from pydantic import BaseModel
 
 from app.db import models, get_db
 from app.db.enums import SessionStatus, ResumeStatus, LateJoinPolicy, ExamStatus
-from app.core import log, validate_single_face, generate_embedding, verify_same_person
+from app.core import log, system_logger, validate_single_face, generate_embedding, verify_same_person
 from app.auth.dependencies import get_current_user
 from app.exam.exam_guard import exam_guard
 from app.exam.events import get_queue, remove_queue
 
 # ── Object detection model (lazy-loaded singleton) ────────────────────────────
 _object_model = None
+
+# Rate-limit SSE idle warnings (global across all connections).
+_sse_idle_last_warn_at: float = 0.0
 
 def _get_object_model():
     global _object_model
@@ -34,6 +38,10 @@ def _get_object_model():
 _OBJ_LABELS = {0: "person", 1: "book", 2: "cell phone", 3: "headphone", 4: "earbud"}
 _PROHIBITED  = {1, 2, 3, 4}   # everything except person
 
+# Fallback tab-switch counter — used when the engine is not connected so tab
+# switches still trigger termination without an engine session.
+# Keyed by str(session.id). Reset on termination or session end.
+_tab_switch_fallback: dict[str, int] = {}
 
 router = APIRouter(prefix="/exam", tags=["Exam"])
 
@@ -66,7 +74,21 @@ def get_resume_state(session, db) -> str | None:
     )
 
     if not latest_rr:
-        return "CAN_APPLY"
+        # Check if any sibling session (same user+exam) had an approved appeal.
+        # This handles Fix-B: new session created on appeal approval has no RR of
+        # its own, but the student has already used their one appeal chance.
+        prior_approved = (
+            db.query(models.ResumeRequest)
+            .join(models.ExamSession, models.ExamSession.id == models.ResumeRequest.session_id)
+            .filter(
+                models.ExamSession.user_id == session.user_id,
+                models.ExamSession.exam_id == session.exam_id,
+                models.ExamSession.id != session.id,
+                models.ResumeRequest.status == ResumeStatus.APPROVED.value,
+            )
+            .first()
+        )
+        return "AGAIN" if prior_approved else "CAN_APPLY"
 
     status = latest_rr.status
     if status == ResumeStatus.APPROVED.value:
@@ -162,11 +184,11 @@ def get_exam_history(
 
     result = []
     for invite, exam in invites:
-        # Find session for this exam
+        # Find session for this exam — newest first (multiple sessions exist after Fix-B appeal flow)
         session = db.query(models.ExamSession).filter(
             models.ExamSession.user_id == current_user.id,
             models.ExamSession.exam_id == exam.id,
-        ).first()
+        ).order_by(models.ExamSession.created_at.desc()).first()
 
         session_status = session.status if session else None
         is_history = (
@@ -238,7 +260,7 @@ def get_exam_status(
     session = db.query(models.ExamSession).filter(
         models.ExamSession.user_id == current_user.id,
         models.ExamSession.exam_id == exam_id
-    ).first()
+    ).order_by(models.ExamSession.created_at.desc()).first()
 
     session_status = session.status if session else None
 
@@ -301,7 +323,7 @@ def get_session_active(
     session = db.query(models.ExamSession).filter(
         models.ExamSession.user_id == current_user.id,
         models.ExamSession.exam_id == exam_id,
-    ).first()
+    ).order_by(models.ExamSession.created_at.desc()).first()
 
     if not session:
         raise HTTPException(status_code=404, detail="No session found for this exam")
@@ -331,6 +353,7 @@ def get_session_active(
         "title": exam.title,
         "exam_mode": exam.exam_mode,
         "flag_threshold": exam.flag_threshold,
+        "tab_switch_terminate_count": getattr(db.query(models.EngineSettings).first(), "tab_switch_terminate_count", 3),
         "config": exam.config,
         "active_resume_request": {
             "status": latest_rr.status,
@@ -352,7 +375,7 @@ def get_session_summary(
     session = db.query(models.ExamSession).filter(
         models.ExamSession.user_id == current_user.id,
         models.ExamSession.exam_id == exam_id,
-    ).first()
+    ).order_by(models.ExamSession.created_at.desc()).first()
 
     if not session:
         raise HTTPException(status_code=404, detail="No session found")
@@ -398,7 +421,7 @@ async def session_events(
     session = db.query(models.ExamSession).filter(
         models.ExamSession.user_id == current_user.id,
         models.ExamSession.exam_id == exam_id,
-    ).first()
+    ).order_by(models.ExamSession.created_at.desc()).first()
 
     if not session:
         raise HTTPException(status_code=404, detail="No session found for this exam")
@@ -407,14 +430,30 @@ async def session_events(
 
     async def event_generator():
         queue = get_queue(session_id)
+        timeouts_in_row = 0
         try:
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=25)
                     payload = json.dumps(event["data"])
+                    timeouts_in_row = 0
                     yield f"event: {event['type']}\ndata: {payload}\n\n"
                 except asyncio.TimeoutError:
                     # Keep-alive ping
+                    timeouts_in_row += 1
+                    # If the queue has been idle for a while, emit a single diagnostic
+                    # so we can detect stuck event delivery pipelines.
+                    if timeouts_in_row == 10:
+                        global _sse_idle_last_warn_at
+                        now = time.time()
+                        if now - _sse_idle_last_warn_at >= 300:
+                            _sse_idle_last_warn_at = now
+                            system_logger.warning(
+                                "session_events idle: no events for ~%ss session_id=%s exam_id=%s",
+                                timeouts_in_row * 25,
+                                session_id,
+                                exam_id,
+                            )
                     yield "event: ping\ndata: {}\n\n"
         except asyncio.CancelledError:
             pass
@@ -590,7 +629,9 @@ async def check_objects(
             "issues": issues,
         }
 
-    except HTTPException:
+    except HTTPException as e:
+        # Expected validation failures; keep at debug to avoid log noise.
+        log.debug("check_objects re-raising HTTPException status=%s detail=%s", e.status_code, e.detail)
         raise
     except Exception as e:
         log.exception("Object check failed for user %s: %s", current_user.id, e)
@@ -620,7 +661,7 @@ def submit_appeal(
     session = db.query(models.ExamSession).filter(
         models.ExamSession.user_id == current_user.id,
         models.ExamSession.exam_id == exam_id
-    ).first()
+    ).order_by(models.ExamSession.created_at.desc()).first()
 
     if not session:
         # Create a placeholder session for late-join scenario
@@ -637,6 +678,9 @@ def submit_appeal(
     else:
         if session.status == SessionStatus.ACTIVE.value:
             raise HTTPException(status_code=400, detail="Cannot appeal while session is active")
+        # CREATED means appeal was already approved and student hasn't re-joined yet
+        if session.status == SessionStatus.CREATED.value:
+            raise HTTPException(status_code=400, detail="Your appeal has already been approved. Proceed to rejoin.")
         # Type 1 & 2: student submitted or timer expired — no appeal allowed
         if session.status == SessionStatus.ENDED.value:
             raise HTTPException(status_code=403, detail="This exam has already been submitted. No appeal is allowed.")
@@ -656,7 +700,23 @@ def submit_appeal(
         if any_rr.status == ResumeStatus.APPROVED.value:
             raise HTTPException(status_code=400, detail="Your appeal has already been approved. Proceed to rejoin.")
         # NOT_APPLIED means they previously dismissed — allow re-appeal as long as they can still appeal
-        # (AGAIN state is blocked above via TERMINATED + APPROVED latest RR)
+
+    # Fix B: cross-session AGAIN check — a sibling session for this user+exam already
+    # has an APPROVED appeal, meaning the student has used their one appeal chance.
+    if not any_rr and session.status == SessionStatus.TERMINATED.value:
+        prior_approved = (
+            db.query(models.ResumeRequest)
+            .join(models.ExamSession, models.ExamSession.id == models.ResumeRequest.session_id)
+            .filter(
+                models.ExamSession.user_id == current_user.id,
+                models.ExamSession.exam_id == exam_id,
+                models.ExamSession.id != session.id,
+                models.ResumeRequest.status == ResumeStatus.APPROVED.value,
+            )
+            .first()
+        )
+        if prior_approved:
+            raise HTTPException(status_code=403, detail="No further appeals are allowed. You have already used your one appeal.")
 
     rr = models.ResumeRequest(
         session_id=session.id,
@@ -685,7 +745,7 @@ def dismiss_appeal(
     session = db.query(models.ExamSession).filter(
         models.ExamSession.user_id == current_user.id,
         models.ExamSession.exam_id == exam_id,
-    ).first()
+    ).order_by(models.ExamSession.created_at.desc()).first()
 
     if not session:
         raise HTTPException(status_code=404, detail="No session found for this exam")
@@ -731,7 +791,7 @@ def start_exam(
     active = db.query(models.ExamSession).filter(
         models.ExamSession.user_id == current_user.id,
         models.ExamSession.exam_id == exam_id
-    ).first()
+    ).order_by(models.ExamSession.created_at.desc()).first()
 
     if active:
         if active.status == SessionStatus.ACTIVE.value:
@@ -767,7 +827,22 @@ def start_exam(
     # Reconnecting from DISCONNECTED — skip late/appeal checks (session already valid)
     is_reconnect = active and active.status == SessionStatus.DISCONNECTED.value
 
-    if not is_reconnect:
+    # CREATED from appeal approval — skip late/appeal checks (Fix B: new session after termination)
+    # This CREATED session was born from review_resume_request, not a fresh late join.
+    is_appeal_resume = False
+    if active and active.status == SessionStatus.CREATED.value:
+        is_appeal_resume = bool(
+            db.query(models.ResumeRequest)
+            .join(models.ExamSession, models.ExamSession.id == models.ResumeRequest.session_id)
+            .filter(
+                models.ExamSession.user_id == current_user.id,
+                models.ExamSession.exam_id == exam_id,
+                models.ResumeRequest.status == ResumeStatus.APPROVED.value,
+            )
+            .first()
+        )
+
+    if not is_reconnect and not is_appeal_resume:
         is_late = hard_deadline and now > hard_deadline and (
             not active or active.status == SessionStatus.CREATED.value
         )
@@ -945,6 +1020,10 @@ def end_exam(
     session.status = SessionStatus.ENDED.value
     session.end_time = datetime.now(UTC)
 
+    # Cancel any pending identity checks for this session
+    from app.exam.identity_check import cancel_identity_checks
+    cancel_identity_checks(str(session.id))
+
     invite = db.query(models.ExamInvite).filter(
         func.lower(models.ExamInvite.student_email) == session.user.email.lower(),
         models.ExamInvite.exam_id == session.exam_id,
@@ -1120,9 +1199,23 @@ async def proctor_connect(
                 "external_user_id": str(current_user.id),
                 "external_student_name": current_user.full_name,
                 "external_student_email": current_user.email,
+                "exam_duration_minutes": exam.duration_minutes,
             },
         )
     except Exception as e:
+        import httpx as _httpx
+        if isinstance(e, _httpx.HTTPStatusError) and e.response.status_code == 503:
+            try:
+                err_body = e.response.json()
+                if err_body.get("error") == "MODEL_CALIBRATION_ACTIVE":
+                    raise HTTPException(
+                        status_code=503,
+                        detail="MODEL_CALIBRATION_ACTIVE",
+                    )
+            except HTTPException:
+                raise
+            except Exception:
+                pass
         log.error("Engine /offer failed (url=%s exam=%s): %s", engine_url, exam_id, e)
         raise HTTPException(status_code=503, detail="Proctoring engine is unreachable. Exam cannot start.")
 
@@ -1136,6 +1229,22 @@ async def proctor_connect(
 
     log.info("Proctor session created: exam=%s user=%s pc_id=%s engine=%s",
              exam_id, current_user.id, pc_id, engine_url)
+
+    # ── Schedule in-exam identity checks ────────────────────────────────────
+    if current_user.face_embedding and engine_settings and session.start_time:
+        from app.exam.identity_check import schedule_identity_checks
+        schedule_identity_checks(
+            session_id=str(session.id),
+            user_face_embedding=current_user.face_embedding,
+            start_time=session.start_time,
+            duration_minutes=exam.duration_minutes,
+            extension_seconds=session.time_extension_seconds or 0,
+            proctor_engine_url=engine_url,
+            proctor_pc_id=pc_id,
+            check_count=engine_settings.identity_check_count,
+            retry_count=engine_settings.identity_check_retries,
+            retry_delay_s=engine_settings.identity_check_retry_delay,
+        )
 
     return {**answer, "engine_url": engine_url}
 
@@ -1186,9 +1295,40 @@ async def proctor_violation(
         models.ExamSession.exam_id == exam_id,
         models.ExamSession.status == SessionStatus.ACTIVE.value,
     ).first()
-    if not session or not session.proctor_pc_id:
-        raise HTTPException(status_code=404, detail="No active proctor session")
+    if not session:
+        raise HTTPException(status_code=404, detail="No active session")
 
+    # ── Fallback path: engine not connected — count in-memory, terminate via DB ──
+    if not session.proctor_pc_id:
+        if body.reason != "tab_switch":
+            # Non-tab-switch violations without an engine session are just acknowledged
+            return {"ok": True, "risk": None}
+
+        sess_key = str(session.id)
+        count = _tab_switch_fallback.get(sess_key, 0) + 1
+        _tab_switch_fallback[sess_key] = count
+
+        es = db.query(models.EngineSettings).first()
+        terminate_count = (es.tab_switch_terminate_count if es else None) or 3
+
+        terminated = count >= terminate_count
+        if terminated:
+            reason = f"Tab switched {count} times (limit: {terminate_count})"
+            session.status         = SessionStatus.TERMINATED.value
+            session.terminated_reason = reason
+            session.terminated_by  = "SYSTEM_RISK"
+            session.terminated_at  = datetime.now(UTC)
+            session.end_time       = session.end_time or session.terminated_at
+            db.commit()
+            push_event_sync(str(session.id), "TERMINATED", {"cause": "system", "reason": reason})
+            _tab_switch_fallback.pop(sess_key, None)
+            from app.exam.identity_check import cancel_identity_checks
+            cancel_identity_checks(sess_key)
+            log.info("Session terminated by fallback tab-switch counter: session=%s count=%d", session.id, count)
+
+        return {"ok": True, "risk": {"terminated": terminated, "tab_count": count, "tab_limit": terminate_count}}
+
+    # ── Normal path: proxy to engine ─────────────────────────────────────────────
     try:
         result = await proxy_tab_switch(session.proctor_engine_url, session.proctor_pc_id)
     except Exception as e:
@@ -1202,6 +1342,7 @@ async def proctor_violation(
         session.terminated_reason = risk.get("reason", "Exam policy violated")
         session.terminated_by = "SYSTEM_RISK"
         session.terminated_at = datetime.now(UTC)
+        session.end_time = session.end_time or session.terminated_at
         db.commit()
 
         # Push termination event through ProctorAI's own SSE so the active page
@@ -1210,6 +1351,8 @@ async def proctor_violation(
             "cause":  "system",
             "reason": session.terminated_reason,
         })
+        from app.exam.identity_check import cancel_identity_checks
+        cancel_identity_checks(str(session.id))
         log.info("Session terminated by engine (tab switch): session=%s", session.id)
 
     return result
@@ -1247,6 +1390,7 @@ async def proctor_events(
     async def event_stream():
         import json as _json
         from app.db.session import SessionLocal
+        parse_fail_count = 0
         async for chunk in stream_engine_events(engine_url, pc_id):
             yield chunk
 
@@ -1258,7 +1402,18 @@ async def proctor_events(
                 if raw.startswith("data: "):
                     raw = raw[6:]
                 event_data = _json.loads(raw)
-            except Exception:
+            except Exception as _e:
+                parse_fail_count += 1
+                # Avoid log spam: only log early/bursty parse failures.
+                if parse_fail_count <= 3 or parse_fail_count % 50 == 0:
+                    log.warning(
+                        "proctor_events: SSE chunk parse failed session_id=%s pc_id=%s fail_count=%s error=%s chunk_prefix=%r",
+                        session_id_str,
+                        pc_id,
+                        parse_fail_count,
+                        _e,
+                        chunk[:200],
+                    )
                 continue
 
             event_type = event_data.get("type")
@@ -1293,11 +1448,14 @@ async def proctor_events(
                         _sess.terminated_reason = event_data.get("message", "Terminated by proctoring engine")
                         _sess.terminated_by = "SYSTEM_RISK"
                         _sess.terminated_at = datetime.now(UTC)
+                        _sess.end_time = _sess.end_time or _sess.terminated_at
                         _db.commit()
                         push_event_sync(session_id_str, "TERMINATED", {
                             "cause": "system",
                             "reason": _sess.terminated_reason,
                         })
+                        from app.exam.identity_check import cancel_identity_checks
+                        cancel_identity_checks(session_id_str)
                         log.info("Session %s terminated by engine via SSE", session_id_str)
                 except Exception as _e:
                     log.warning("Failed to sync engine termination: %s", _e)

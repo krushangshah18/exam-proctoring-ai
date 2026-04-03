@@ -37,3 +37,96 @@ full setup is now complete. Here's what's working end-to-end:
   2. Wait ~60 seconds for it to boot
   3. Click Check Status to confirm it's running and see the new IP                                                            
   4. Click Apply & Restart (pushes .env + restarts Docker containers + updates URL in DB)                                       
+
+
+
+
+
+    Safe update workflow
+
+  Step 1 — Build new image locally
+  cd engine
+  docker build -t proctor-engine:latest .
+
+  Step 2 — Push to Docker Hub (or ECR)
+  docker tag proctor-engine:latest <your-dockerhub>/proctor-engine:latest
+  docker push <your-dockerhub>/proctor-engine:latest
+
+  Step 3 — Pull and restart on EC2 (via EC2 Instance Connect)
+  docker pull <your-dockerhub>/proctor-engine:latest
+  docker stop proctor1 proctor2
+  docker rm proctor1 proctor2
+  docker compose up -d
+
+  Step 4 — Reapply settings (since .env is on the EC2 disk, it persists across container rebuilds — no need to redo this
+  unless scoring changed)
+
+
+  flow of how the threshold/time is changed :
+    The full data flow is now complete:                                                     
+  1. UI loads → GET /admin/system-settings returns all ~60 values from DB
+  2. User edits → POST /admin/system-settings saves all ~60 values to DB                  
+  3. Apply & Restart → _build_env_file_content() reads them and writes .env to EC2
+
+
+
+
+
+    Alembic Migration Workflow (for RDS)                                                    
+                                                                                          
+  When you add a new model/column                                                         
+                                                                                          
+  1. Edit models.py — add the column/table as usual.                                      
+   
+  2. Generate the migration (from server/ directory):                                     
+  cd /home/krushang/Desktop/exam-proctoring-ai/server       
+  source .venv/bin/activate                                                               
+  alembic revision --autogenerate -m "describe_what_changed"
+  This reads your models.py, diffs against current DB schema, and creates a new file in
+  alembic/versions/.                                                                      
+                                                                                          
+  3. Review the generated file before applying — autogenerate isn't always perfect:       
+  - Adding NOT NULL columns to tables with existing rows → add                            
+  server_default=sa.text('...') to the op.add_column call                                 
+  - Check that the down_revision points to the correct previous migration                 
+  - Verify downgrade() is correct                                                         
+                                                            
+  4. Apply to RDS:                                                                        
+  alembic upgrade head
+  It reads DATABASE_URL from .env automatically and runs against your RDS instance.       
+                                                                                          
+  5. Verify:                                                                              
+  alembic current        # shows which revision RDS is at                                 
+  alembic history        # shows full chain                                               
+                                                                                          
+  ---                                                                                     
+  Common operations                                                                       
+                                                                                          
+  ┌───────────────────────────┬───────────────────────────────────────────┐
+  │          Command          │               What it does                │
+  ├───────────────────────────┼───────────────────────────────────────────┤               
+  │ alembic upgrade head      │ Apply all pending migrations to RDS       │
+  ├───────────────────────────┼───────────────────────────────────────────┤               
+  │ alembic upgrade +1        │ Apply only the next one                   │
+  ├───────────────────────────┼───────────────────────────────────────────┤               
+  │ alembic downgrade -1      │ Roll back one migration                   │
+  ├───────────────────────────┼───────────────────────────────────────────┤               
+  │ alembic current           │ Show what revision RDS is currently at    │
+  ├───────────────────────────┼───────────────────────────────────────────┤               
+  │ alembic history --verbose │ Show full migration chain                 │
+  ├───────────────────────────┼───────────────────────────────────────────┤               
+  │ alembic revision -m "..." │ Create a blank migration (write manually) │
+  └───────────────────────────┴───────────────────────────────────────────┘               
+   
+  ---                                                                                     
+  Important rules for this project                          
+                                                                                          
+  - Always add server_default when adding NOT NULL columns to existing tables — you have
+  existing rows in prod (as you saw with the a408ac074e9f migration)                      
+  - Run from server/ directory — that's where alembic.ini lives
+  - .env must be loaded — alembic/env.py reads DATABASE_URL from environment. Since it's  
+  in server/.env, either python-dotenv loads it automatically or you can export it first: 
+  export $(grep -v '^#' .env | xargs) && alembic upgrade head                             
+  - Never edit an already-applied migration — create a new one instead 
+
+  

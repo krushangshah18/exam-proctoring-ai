@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.auth.dependencies import get_current_user
 from app.db import models
 from app.db.enums import SessionStatus
+from app.core import log
 
 
 def exam_guard(
@@ -23,6 +24,11 @@ def exam_guard(
     device_fp = request.state.device_id
 
     if not device_fp:
+        log.warning(
+            "exam_guard: missing device fingerprint user_id=%s client_ip=%s",
+            getattr(user, "id", None),
+            getattr(request.client, "host", None),
+        )
         raise HTTPException(
             status_code=401,
             detail="Device not authenticated"
@@ -41,6 +47,11 @@ def exam_guard(
     )
 
     if not device:
+        log.warning(
+            "exam_guard: untrusted device (fingerprint=%s user_id=%s)",
+            device_fp,
+            user.id,
+        )
         raise HTTPException(
             status_code=403,
             detail="Untrusted device"
@@ -57,6 +68,10 @@ def exam_guard(
     )
 
     if not session:
+        log.warning(
+            "exam_guard: no active exam session (user_id=%s)",
+            user.id,
+        )
         raise HTTPException(
             status_code=403,
             detail="No active exam session"
@@ -64,6 +79,13 @@ def exam_guard(
 
     # 4️⃣ Device binding check
     if session.device_fingerprint != device_fp:
+        log.warning(
+            "exam_guard: device mismatch (user_id=%s session_id=%s expected=%s got=%s)",
+            user.id,
+            session.id,
+            session.device_fingerprint,
+            device_fp,
+        )
         raise HTTPException(
             status_code=403,
             detail="Exam device mismatch"
@@ -83,7 +105,16 @@ def exam_guard(
         )
         if personal_deadline < datetime.now(UTC):
             session.status = SessionStatus.ENDED.value
-            db.commit()
+            try:
+                db.commit()
+            except Exception as e:
+                log.exception(
+                    "exam_guard: failed to mark session ENDED on expiry (session_id=%s user_id=%s): %s",
+                    session.id,
+                    user.id,
+                    e,
+                )
+                db.rollback()
             raise HTTPException(
                 status_code=403,
                 detail="Exam session expired"

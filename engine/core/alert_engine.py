@@ -79,3 +79,15 @@ class AlertEngine:
     def _arm_warn_cooldown(self, key: str, now: float) -> None:
         cd = A.WARN_COOLDOWNS.get(key, 5.0)
         self._warn_cooldown_until[key] = now + cd
+
+    def get_debug_state(self, key: str, now: float | None = None) -> dict:
+        if now is None:
+            now = time.time()
+        warn_until = self._warn_cooldown_until.get(key, 0.0)
+        api_until  = self._api_cooldown_until.get(key, 0.0)
+        return {
+            "warn_cooldown_remaining_s": round(max(0.0, warn_until - now), 2),
+            "api_cooldown_remaining_s":  round(max(0.0, api_until - now), 2),
+            "warn_cooldown_s":           float(A.WARN_COOLDOWNS.get(key, 0.0)),
+            "api_cooldown_s":            float(A.API_COOLDOWNS.get(key, 0.0)),
+        }

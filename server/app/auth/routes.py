@@ -42,7 +42,7 @@ from app.auth.service import(
     create_reset_token,
     send_reset_email
 )
-from app.core import log, settings, generate_fingerprint, rate_limit, send_email, validate_single_face, generate_embedding, save_profile_image, can_update_profile_image, verify_same_person
+from app.core import log, settings, generate_fingerprint, rate_limit, send_email, validate_single_face, generate_embedding, save_profile_image, get_profile_image_url, can_update_profile_image, verify_same_person
 from app.auth.dependencies import (get_current_user,require_role)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -558,6 +558,36 @@ def setup_password(
     return {"message": "Password setup completed successfully"}
 
 
+@router.get("/profile-image/local")
+def serve_local_profile_image(path: str):
+    """
+    Serve a legacy profile image stored on the local filesystem.
+    No auth required — the URL is only returned to authenticated users via /me,
+    and the path is restricted to the known profile image directory.
+    """
+    from pathlib import Path as _Path
+    from fastapi.responses import Response as _Resp
+
+    # Restrict to the known legacy profile image directory (no path traversal)
+    safe_root = _Path("storage/profiles/users").resolve()
+    target = _Path(path).resolve()
+    try:
+        target.relative_to(safe_root)
+    except ValueError:
+        # Prevent path traversal attempts for legacy local profile images.
+        log.warning(
+            "serve_local_profile_image access denied path=%s safe_root=%s",
+            path,
+            safe_root.as_posix(),
+        )
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    return _Resp(content=target.read_bytes(), media_type="image/jpeg")
+
+
 @router.get("/me")
 def get_me(current_user=Depends(get_current_user)):
     """
@@ -572,7 +602,7 @@ def get_me(current_user=Depends(get_current_user)):
         "last_login": current_user.last_login.isoformat() if current_user.last_login else None,
         "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
         "must_change_password": current_user.must_change_password,
-        "profile_image_path": current_user.profile_image_path,
+        "profile_image_url": get_profile_image_url(current_user.profile_image_path),
         "last_profile_image_update": current_user.last_profile_image_update.isoformat() if current_user.last_profile_image_update else None
     }
 

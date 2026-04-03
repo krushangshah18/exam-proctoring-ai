@@ -8,19 +8,28 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 def _f(key: str, default: float) -> float:
     """Read a float env var, falling back to default."""
     try:
         return float(os.environ[key])
-    except (KeyError, ValueError):
+    except KeyError:
+        return default
+    except ValueError:
+        logger.warning("Invalid float env var %s=%r; using default=%s", key, os.environ.get(key), default)
         return default
 
 def _i(key: str, default: int) -> int:
     """Read an int env var, falling back to default."""
     try:
         return int(os.environ[key])
-    except (KeyError, ValueError):
+    except KeyError:
+        return default
+    except ValueError:
+        logger.warning("Invalid int env var %s=%r; using default=%s", key, os.environ.get(key), default)
         return default
 
 # ── Score bucket classification ───────────────────────────────────────────────
@@ -48,19 +57,19 @@ SCORE_MIN_CONF: dict = {
 #       warn_cooldown <= score_cooldown (warning shows at least as often as scoring).
 # Both live in alerts.py and must be kept in sync with these values.
 SCORE_COOLDOWNS: dict = {
-    "looking_away"   :  5,
-    "looking_down"   :  5,
-    "looking_up"     :  5,
-    "looking_side"   :  5,
-    "partial_face"   :  5,
-    "face_hidden"    :  5,
-    "book"           : 30,
-    "headphone"      : 30,
-    "earbud"         : 30,
-    "phone"          : 15,
-    "multiple_people": 10,
-    "no_person"      : 10,
-    "fake_presence"  : 10,
+    "looking_away"   : _f("SCORE_CD_LOOKING_AWAY",    5),
+    "looking_down"   : _f("SCORE_CD_LOOKING_DOWN",    5),
+    "looking_up"     : _f("SCORE_CD_LOOKING_UP",      5),
+    "looking_side"   : _f("SCORE_CD_LOOKING_SIDE",    5),
+    "partial_face"   : _f("SCORE_CD_PARTIAL_FACE",    5),
+    "face_hidden"    : _f("SCORE_CD_FACE_HIDDEN",     5),
+    "book"           : _f("SCORE_CD_BOOK",           30),
+    "headphone"      : _f("SCORE_CD_HEADPHONE",      30),
+    "earbud"         : _f("SCORE_CD_EARBUD",         30),
+    "phone"          : _f("SCORE_CD_PHONE",          15),
+    "multiple_people": _f("SCORE_CD_MULTIPLE_PEOPLE",10),
+    "no_person"      : _f("SCORE_CD_NO_PERSON",      10),
+    "fake_presence"  : _f("SCORE_CD_FAKE_PRESENCE",  10),
     # speaker_audio not listed — managed by its own tier system below
 }
 

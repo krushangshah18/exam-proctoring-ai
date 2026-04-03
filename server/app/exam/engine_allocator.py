@@ -33,6 +33,7 @@ def pick_any_container(db: Session) -> Optional[str]:
         .all()
     )
     if not containers:
+        log.warning("No active engine containers configured.")
         return None
 
     best_url: Optional[str] = None
@@ -51,4 +52,7 @@ def pick_any_container(db: Session) -> Optional[str]:
             best_count = active_count
             best_url = container.url
 
+    if not best_url:
+        # Should not happen if containers is non-empty, but keep a diagnostic breadcrumb.
+        log.error("Engine allocator failed to choose a container despite active containers existing.")
     return best_url

@@ -347,6 +347,7 @@ class ProctorAlert(UUIDMixin, Base):
     score_added = Column(Float, nullable=False, default=0.0)
     proof_s3_key = Column(String, nullable=True)         # S3 object key for proof image/audio
     proof_type  = Column(String, nullable=True)          # "image" | "audio"
+    proof_size_bytes = Column(Integer, nullable=True)    # uploaded proof object size in bytes
     occurred_at = Column(DateTime, nullable=False, default=func.now())
 
     session = relationship("ExamSession", back_populates="proctor_alerts")
@@ -428,3 +429,93 @@ class EngineSettings(UUIDMixin, TimestampMixin, Base):
     yolo_book_conf = Column(Float, default=0.70, nullable=False)
     yolo_audio_conf = Column(Float, default=0.41, nullable=False)
     yolo_person_conf = Column(Float, default=0.30, nullable=False)
+
+    # Detection toggles
+    detect_looking_away    = Column(Boolean, default=True, nullable=False)
+    detect_looking_down    = Column(Boolean, default=True, nullable=False)
+    detect_looking_up      = Column(Boolean, default=True, nullable=False)
+    detect_looking_side    = Column(Boolean, default=True, nullable=False)
+    detect_face_hidden     = Column(Boolean, default=True, nullable=False)
+    detect_partial_face    = Column(Boolean, default=True, nullable=False)
+    detect_fake_presence   = Column(Boolean, default=True, nullable=False)
+    detect_speaker_audio   = Column(Boolean, default=True, nullable=False)
+    detect_phone           = Column(Boolean, default=True, nullable=False)
+    detect_book            = Column(Boolean, default=True, nullable=False)
+    detect_headphone       = Column(Boolean, default=True, nullable=False)
+    detect_earbud          = Column(Boolean, default=True, nullable=False)
+    detect_multiple_people = Column(Boolean, default=True, nullable=False)
+
+    # Duration gates
+    partial_face_duration_gate = Column(Float, default=5.0, nullable=False)
+    face_hidden_dur_1          = Column(Float, default=5.0, nullable=False)
+    face_hidden_dur_2          = Column(Float, default=10.0, nullable=False)
+    no_person_dur_1            = Column(Float, default=5.0, nullable=False)
+    no_person_dur_2            = Column(Float, default=10.0, nullable=False)
+    fake_presence_dur_1        = Column(Float, default=10.0, nullable=False)
+    fake_presence_dur_2        = Column(Float, default=25.0, nullable=False)
+
+    # Tiered scores (missing ones)
+    partial_face_score   = Column(Float, default=2.0,  nullable=False)
+    face_hidden_score_1  = Column(Float, default=10.0, nullable=False)
+    face_hidden_score_2  = Column(Float, default=20.0, nullable=False)
+
+    # Speaker audio
+    speaker_warn_cooldown    = Column(Float, default=3.0,  nullable=False)
+    speaker_alert_cooldown   = Column(Float, default=10.0, nullable=False)
+    speaker_occ1_warn_s      = Column(Float, default=3.0,  nullable=False)
+    speaker_occ1_score       = Column(Float, default=10.0, nullable=False)
+    speaker_occ1_repeat      = Column(Float, default=20.0, nullable=False)
+    speaker_occ2_warn_s      = Column(Float, default=5.0,  nullable=False)
+    speaker_occ2_score       = Column(Float, default=20.0, nullable=False)
+    speaker_occ2_repeat      = Column(Float, default=20.0, nullable=False)
+    speaker_repeat_interval  = Column(Float, default=10.0, nullable=False)
+
+    # Score cooldowns (per violation type, seconds)
+    score_cd_looking_away    = Column(Float, default=5.0,  nullable=False)
+    score_cd_looking_down    = Column(Float, default=5.0,  nullable=False)
+    score_cd_looking_up      = Column(Float, default=5.0,  nullable=False)
+    score_cd_looking_side    = Column(Float, default=5.0,  nullable=False)
+    score_cd_partial_face    = Column(Float, default=5.0,  nullable=False)
+    score_cd_face_hidden     = Column(Float, default=5.0,  nullable=False)
+    score_cd_fake_presence   = Column(Float, default=10.0, nullable=False)
+    score_cd_phone           = Column(Float, default=15.0, nullable=False)
+    score_cd_multiple_people = Column(Float, default=10.0, nullable=False)
+    score_cd_no_person       = Column(Float, default=10.0, nullable=False)
+    score_cd_book            = Column(Float, default=30.0, nullable=False)
+    score_cd_headphone       = Column(Float, default=30.0, nullable=False)
+    score_cd_earbud          = Column(Float, default=30.0, nullable=False)
+    score_cd_speaker_audio   = Column(Float, default=10.0, nullable=False)
+
+    # Warning cooldowns (per violation type, seconds)
+    warn_cd_looking_away     = Column(Float, default=3.0,  nullable=False)
+    warn_cd_looking_down     = Column(Float, default=3.0,  nullable=False)
+    warn_cd_looking_up       = Column(Float, default=3.0,  nullable=False)
+    warn_cd_looking_side     = Column(Float, default=3.0,  nullable=False)
+    warn_cd_partial_face     = Column(Float, default=3.0,  nullable=False)
+    warn_cd_face_hidden      = Column(Float, default=3.0,  nullable=False)
+    warn_cd_fake_presence    = Column(Float, default=5.0,  nullable=False)
+    warn_cd_phone            = Column(Float, default=8.0,  nullable=False)
+    warn_cd_multiple_people  = Column(Float, default=5.0,  nullable=False)
+    warn_cd_no_person        = Column(Float, default=5.0,  nullable=False)
+    warn_cd_book             = Column(Float, default=15.0, nullable=False)
+    warn_cd_headphone        = Column(Float, default=15.0, nullable=False)
+    warn_cd_earbud           = Column(Float, default=15.0, nullable=False)
+    warn_cd_speaker_audio    = Column(Float, default=3.0,  nullable=False)
+
+    # Head pose & detection sensitivity
+    min_face_width           = Column(Integer, default=110, nullable=False)
+    min_face_height          = Column(Integer, default=120, nullable=False)
+    face_hidden_recency_s    = Column(Float, default=4.0,  nullable=False)
+
+    # In-exam identity verification
+    identity_check_count       = Column(Integer, default=5,   nullable=False)  # random checks per exam
+    identity_check_retries     = Column(Integer, default=3,   nullable=False)  # retries after first silent fail
+    identity_check_retry_delay = Column(Float,   default=5.0, nullable=False)  # seconds between retries
+
+    # Object detection temporal voting (min votes to confirm detection within window)
+    phone_min_votes     = Column(Integer, default=9,  nullable=False)
+    book_min_votes      = Column(Integer, default=10, nullable=False)
+    headphone_min_votes = Column(Integer, default=9,  nullable=False)
+    earbud_min_votes    = Column(Integer, default=9,  nullable=False)
+    object_min_votes    = Column(Integer, default=5,  nullable=False)
+    object_window       = Column(Integer, default=15, nullable=False)

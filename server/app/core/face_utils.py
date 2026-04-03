@@ -72,6 +72,9 @@ def verify_same_person(old_embedding, new_embedding):
         return similarity > 0.6 and distance < 0.81
     
     except Exception as e:
+        # This is an internal helper used during profile/identity checks.
+        # Log for diagnostics but keep it at warning level (do not treat as user failure).
+        log.warning("Embedding comparison failed: %s", e)
         raise ValueError(f"Embedding comparison failed: {e}")
 
 

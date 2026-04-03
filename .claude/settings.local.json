@@ -11,7 +11,8 @@
       "Bash(node_modules/.bin/tsc --noEmit)",
       "Bash(node -e \"const l = require\\(''lucide-react''\\); console.log\\(l.BookOpen ? ''BookOpen OK'' : ''missing''\\)\")",
       "Bash(python3 -c \":*)",
-      "Bash(alembic heads:*)"
+      "Bash(alembic heads:*)",
+      "Bash(xargs cat:*)"
     ]
   }
 }

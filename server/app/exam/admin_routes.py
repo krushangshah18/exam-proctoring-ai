@@ -1,9 +1,10 @@
+import json
 import secrets
 import time
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, BackgroundTasks, status, HTTPException
+from fastapi import APIRouter, Depends, BackgroundTasks, status, HTTPException, File, Form, UploadFile
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timezone, timedelta, UTC
@@ -12,8 +13,8 @@ from pydantic import BaseModel
 from app.db import models, get_db
 from app.db.enums import ExamStatus, UserRole, SessionStatus, ResumeStatus
 from app.auth.dependencies import require_role
-from app.core import log, send_email, settings
-from app.exam.schemas import ExamCreateRequest, ExamUpdateRequest, ExamListResponse, ExamDetailResponse
+from app.core import log, system_logger, send_email, settings
+from app.exam.schemas import ExamCreateRequest, ExamUpdateRequest, ExamInviteAddRequest, ExamListResponse, ExamDetailResponse
 from app.exam.events import push_event_sync
 
 router = APIRouter(prefix="/admin/exams", tags=["Admin Exams"])
@@ -40,6 +41,38 @@ def _fmt_email_time(dt: datetime) -> str:
     ist_dt = dt.astimezone(_IST)
     ist_str = ist_dt.strftime("%I:%M %p IST").lstrip("0")
     return f"{utc_str}  ({ist_str})"
+
+
+def _backfill_missing_proof_sizes(db: Session, session_ids: list) -> None:
+    """Populate proof_size_bytes from S3 for older alerts that predate size tracking."""
+    if not session_ids:
+        return
+
+    from app.core.storage import get_s3_object_size
+
+    missing_alerts = (
+        db.query(models.ProctorAlert)
+        .filter(
+            models.ProctorAlert.session_id.in_(session_ids),
+            models.ProctorAlert.proof_s3_key.isnot(None),
+            models.ProctorAlert.proof_size_bytes.is_(None),
+            (models.ProctorAlert.proof_type.is_(None) | (models.ProctorAlert.proof_type != "audio")),
+        )
+        .all()
+    )
+
+    if not missing_alerts:
+        return
+
+    updated = False
+    for alert in missing_alerts:
+        size = get_s3_object_size(alert.proof_s3_key)
+        if size is not None:
+            alert.proof_size_bytes = size
+            updated = True
+
+    if updated:
+        db.commit()
 
 
 def _send_exam_invites(
@@ -644,6 +677,89 @@ def update_exam(
     return {"message": "Exam updated successfully."}
 
 
+@router.post("/{exam_id}/students")
+def add_exam_students(
+    exam_id: str,
+    data: ExamInviteAddRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_admin=Depends(require_role(UserRole.ADMIN, UserRole.SYSADMIN)),
+):
+    exam = (
+        db.query(models.Exam)
+        .filter(
+            models.Exam.id == exam_id,
+            models.Exam.created_by == current_admin.id,
+            models.Exam.is_deleted == False,
+        )
+        .first()
+    )
+    if not exam:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exam not found")
+
+    if exam.status in (ExamStatus.ENDED.value, ExamStatus.CANCELLED.value):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot add students to an exam with status '{exam.status}'.",
+        )
+
+    current_invites = (
+        db.query(models.ExamInvite).filter(models.ExamInvite.exam_id == exam.id).all()
+    )
+    existing_emails = {inv.student_email.lower() for inv in current_invites}
+    requested_emails = set(data.invites)
+    emails_to_add = requested_emails - existing_emails
+
+    if not emails_to_add:
+        return {
+            "message": "All provided students are already assigned to this exam.",
+            "added_count": 0,
+            "skipped_count": len(requested_emails),
+        }
+
+    exam_end = exam.end_window.replace(tzinfo=UTC) if exam.end_window.tzinfo is None else exam.end_window
+    invite_data: List[dict] = []
+    for email in emails_to_add:
+        token = secrets.token_urlsafe(32)
+        db.add(
+            models.ExamInvite(
+                exam_id=exam.id,
+                student_email=email,
+                token=token,
+                expires_at=exam_end,
+                used=False,
+            )
+        )
+        invite_data.append({"email": email, "token": token})
+
+    db.commit()
+
+    hard_deadline = exam.hard_join_deadline if exam.hard_join_deadline else exam.end_window
+    hard_deadline_str = _fmt_email_time(hard_deadline)
+
+    background_tasks.add_task(
+        _send_exam_invites,
+        current_admin.email,
+        exam.title,
+        hard_deadline_str,
+        invite_data,
+        _fmt_email_time(exam.start_window),
+        _fmt_email_time(exam.end_window),
+    )
+
+    log.info(
+        "Added %d students to exam '%s' by %s.",
+        len(invite_data),
+        exam.title,
+        current_admin.email,
+    )
+    return {
+        "message": f"Added {len(invite_data)} student{'s' if len(invite_data) != 1 else ''}. Invite emails are being sent.",
+        "added_count": len(invite_data),
+        "skipped_count": len(requested_emails) - len(invite_data),
+    }
+
+
 @router.delete("/{exam_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_exam(
     exam_id: str,
@@ -900,26 +1016,36 @@ def review_resume_request(
     rr.time_extension_minutes = data.time_extension_minutes if data.decision == "APPROVED" else None
 
     if data.decision == "APPROVED":
-        # Apply time extension to session if provided
+        # Fix B: keep the terminated session intact (preserves its alerts/proofs as a
+        # clean separate report), and create a NEW ExamSession so the next attempt
+        # gets its own session_id. The student's SSE is still subscribed to the OLD
+        # session_id at this point, so we push RESUME_APPROVED there first.
         added_extension_seconds = 0
         if data.time_extension_minutes and data.time_extension_minutes > 0:
             added_extension_seconds = data.time_extension_minutes * 60
-            sess.time_extension_seconds = (sess.time_extension_seconds or 0) + added_extension_seconds
 
-        # Resume: reactivate session so student can rejoin via /exam/start
-        if sess.status == SessionStatus.TERMINATED.value:
-            sess.status = SessionStatus.CREATED.value
+        new_extension_s = (sess.time_extension_seconds or 0) + added_extension_seconds
+
+        new_sess = models.ExamSession(
+            user_id                = sess.user_id,
+            exam_id                = sess.exam_id,
+            status                 = SessionStatus.CREATED.value,
+            start_time             = sess.start_time,   # preserve original start (timer continuity)
+            risk_score             = sess.risk_score,   # carry forward existing risk score
+            time_extension_seconds = new_extension_s,
+            device_fingerprint     = sess.device_fingerprint,
+            ip_address             = sess.ip_address,
+        )
+        db.add(new_sess)
 
         event_type = "RESUME_APPROVED"
         event_data = {
             "review_note": data.review_note,
             "time_extension_minutes": data.time_extension_minutes,
-            "time_extension_seconds": sess.time_extension_seconds,
+            "time_extension_seconds": new_extension_s,
         }
     else:
         # DENIED — permanently close the session so no ghost sessions remain.
-        # Types 3/4/5 (system/admin): session ends, no extra time.
-        # Types 6/7 (disconnect): same, no extra time.
         sess.status = SessionStatus.ENDED.value
         sess.end_time = datetime.now(UTC)
 
@@ -928,7 +1054,8 @@ def review_resume_request(
 
     db.commit()
 
-    # Push SSE event to the student
+    # Push SSE event to the ORIGINAL (terminated) session — the student's browser
+    # is still subscribed to that session_id while waiting on the terminated page.
     push_event_sync(str(sess.id), event_type, event_data)
 
     log.info(
@@ -1088,6 +1215,7 @@ async def terminate_session(
     sess.terminated_by = "ADMIN"
     sess.terminated_reason = "Session terminated by exam proctor due to high risk score"
     sess.terminated_at = datetime.now(UTC)
+    sess.end_time = sess.end_time or sess.terminated_at
     db.commit()
 
     push_event_sync(str(sess.id), "TERMINATED", {
@@ -1150,6 +1278,13 @@ async def admin_live_frame(
     try:
         jpeg_bytes = await fetch_snapshot(session.proctor_engine_url, session.proctor_pc_id)
     except Exception as e:
+        log.warning(
+            "admin_live_frame: engine snapshot fetch failed exam_id=%s session_id=%s pc_id=%s: %s",
+            exam_id,
+            session_id,
+            session.proctor_pc_id,
+            e,
+        )
         raise HTTPException(status_code=502, detail=f"Engine snapshot unavailable: {e}")
 
     return _Response(content=jpeg_bytes, media_type="image/jpeg")
@@ -1399,6 +1534,13 @@ async def get_proof_presigned_url(
         )
         return {"url": url, "expires_in": 3600}
     except (BotoCoreError, ClientError) as e:
+        log.warning(
+            "get_proof_presigned_url: S3 presigned URL failed exam_id=%s session_id=%s s3_key=%s error=%s",
+            exam_id,
+            session_id,
+            s3_key,
+            e,
+        )
         raise HTTPException(status_code=502, detail=f"S3 presigned URL failed: {e}")
 
 
@@ -1431,6 +1573,14 @@ async def admin_debug_mode(
             session.proctor_engine_url, session.proctor_pc_id, body.enabled
         )
     except Exception as e:
+        log.warning(
+            "admin_debug_mode: engine debug toggle failed exam_id=%s session_id=%s pc_id=%s enabled=%s: %s",
+            exam_id,
+            session_id,
+            session.proctor_pc_id,
+            body.enabled,
+            e,
+        )
         raise HTTPException(status_code=502, detail=f"Engine debug toggle failed: {e}")
 
     return result
@@ -1441,322 +1591,218 @@ async def admin_debug_mode(
 # =====================================================
 
 @router.get("/{exam_id}/reports")
-async def list_exam_reports(
+def list_exam_reports(
     exam_id: str,
     db: Session = Depends(get_db),
     current_admin=Depends(require_role(UserRole.ADMIN, UserRole.SYSADMIN)),
 ):
     """
-    List session reports for a specific exam.
-    Fetches metadata from each engine container for sessions that have a
-    proctor_report_id; falls back to DB-only data for sessions without one.
+    List session reports for a specific exam (sourced from RDS).
+    Returns one row per completed/terminated session with alert/warning counts.
     """
-    import httpx
+    from sqlalchemy import func as _sqlfunc
 
-    exam = (
-        db.query(models.Exam)
-        .filter(
-            models.Exam.id == exam_id,
-            models.Exam.created_by == current_admin.id,
-            models.Exam.is_deleted == False,
-        )
-        .first()
-    )
+    # Sysadmin can view all exams; admin can only view their own
+    exam_filter = [
+        models.Exam.id == exam_id,
+        models.Exam.is_deleted == False,
+    ]
+    if getattr(current_admin, "role", None) != "SYSADMIN":
+        exam_filter.append(models.Exam.created_by == current_admin.id)
+
+    exam = db.query(models.Exam).filter(*exam_filter).first()
     if not exam:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exam not found")
 
-    sessions = db.query(models.ExamSession).filter(
-        models.ExamSession.exam_id == exam_id
-    ).all()
-    session_by_id = {str(sess.id): sess for sess in sessions}
-    users = db.query(models.User).filter(
-        models.User.id.in_([sess.user_id for sess in sessions])
-    ).all() if sessions else []
-    user_by_id = {str(user.id): user for user in users}
-    session_by_user_id: dict[str, list[models.ExamSession]] = {}
-    session_by_email: dict[str, list[models.ExamSession]] = {}
-    for sess in sessions:
-        session_by_user_id.setdefault(str(sess.user_id), []).append(sess)
-        user = user_by_id.get(str(sess.user_id))
-        if user and user.email:
-            session_by_email.setdefault(user.email.lower(), []).append(sess)
+    sessions = (
+        db.query(models.ExamSession)
+        .filter(models.ExamSession.exam_id == exam_id)
+        .order_by(models.ExamSession.created_at.desc())
+        .all()
+    )
 
-    def _normalise_dt(value: datetime | None) -> datetime:
-        if value is None:
-            return datetime.min.replace(tzinfo=UTC)
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value
+    if not sessions:
+        return []
 
-    def _pick_best_session(candidates: list[models.ExamSession], engine_url: str, rep: dict) -> models.ExamSession | None:
-        if not candidates:
-            return None
+    _backfill_missing_proof_sizes(db, [s.id for s in sessions])
 
-        report_end = rep.get("session_end")
-        rep_end_dt = None
-        if report_end:
-            try:
-                if not report_end.endswith("Z") and "+" not in report_end[10:]:
-                    report_end += "Z"
-                rep_end_dt = datetime.fromisoformat(report_end.replace("Z", "+00:00"))
-            except Exception:
-                rep_end_dt = None
+    user_ids = [s.user_id for s in sessions]
+    users = {str(u.id): u for u in db.query(models.User).filter(models.User.id.in_(user_ids)).all()}
 
-        engine_matches = [s for s in candidates if s.proctor_engine_url == engine_url]
-        if len(engine_matches) == 1:
-            return engine_matches[0]
-        if len(engine_matches) > 1:
-            candidates = engine_matches
+    session_ids = [s.id for s in sessions]
 
-        if rep_end_dt is not None:
-            candidates = sorted(
-                candidates,
-                key=lambda s: abs((rep_end_dt - _normalise_dt(s.end_time or s.start_time)).total_seconds()),
-            )
-            if candidates:
-                return candidates[0]
+    alert_counts: dict = dict(
+        db.query(models.ProctorAlert.session_id, _sqlfunc.count())
+        .filter(models.ProctorAlert.session_id.in_(session_ids))
+        .group_by(models.ProctorAlert.session_id).all()
+    )
+    warning_counts: dict = dict(
+        db.query(models.ProctorWarning.session_id, _sqlfunc.count())
+        .filter(models.ProctorWarning.session_id.in_(session_ids))
+        .group_by(models.ProctorWarning.session_id).all()
+    )
+    proof_counts: dict = dict(
+        db.query(models.ProctorAlert.session_id, _sqlfunc.count())
+        .filter(
+            models.ProctorAlert.session_id.in_(session_ids),
+            models.ProctorAlert.proof_s3_key.isnot(None),
+        )
+        .group_by(models.ProctorAlert.session_id).all()
+    )
+    proof_size_bytes: dict = dict(
+        db.query(
+            models.ProctorAlert.session_id,
+            _sqlfunc.coalesce(_sqlfunc.sum(models.ProctorAlert.proof_size_bytes), 0),
+        )
+        .filter(
+            models.ProctorAlert.session_id.in_(session_ids),
+            models.ProctorAlert.proof_s3_key.isnot(None),
+            (models.ProctorAlert.proof_type.is_(None) | (models.ProctorAlert.proof_type != "audio")),
+        )
+        .group_by(models.ProctorAlert.session_id)
+        .all()
+    )
 
-        return sorted(
-            candidates,
-            key=lambda s: _normalise_dt(s.end_time or s.start_time),
-            reverse=True,
-        )[0]
+    report_rows = []
+    for s in sessions:
+        user = users.get(str(s.user_id))
+        effective_end = s.end_time or s.terminated_at
+        student_name = None
+        if user:
+            fn = getattr(user, "first_name", None) or ""
+            ln = getattr(user, "last_name",  None) or ""
+            student_name = f"{fn} {ln}".strip() or getattr(user, "full_name", None) or user.email
 
-    def _match_exam_report(rep: dict) -> models.ExamSession | None:
-        external_session_id = rep.get("external_exam_session_id")
-        external_exam_id = rep.get("external_exam_id")
-        external_user_id = rep.get("external_user_id")
-        external_student_email = (rep.get("external_student_email") or "").strip().lower()
-
-        if external_exam_id and str(external_exam_id) != exam_id:
-            return None
-
-        if external_session_id:
-            sess = session_by_id.get(str(external_session_id))
-            if sess:
-                return sess
-
-        if external_user_id and external_exam_id:
-            sess = _pick_best_session(
-                session_by_user_id.get(str(external_user_id), []),
-                rep.get("engine_url") or "",
-                rep,
-            )
-            if sess:
-                return sess
-
-        if external_student_email:
-            sess = _pick_best_session(
-                session_by_email.get(external_student_email, []),
-                rep.get("engine_url") or "",
-                rep,
-            )
-            if sess:
-                return sess
-
-        return next((s for s in sessions if s.proctor_report_id == rep.get("id")), None)
-
-    # Determine which engine URLs to query:
-    # - Always include engine URLs from sessions in this exam (they actually ran there)
-    # - Also include active containers (may have new sessions not yet in DB)
-    # - Skip inactive containers that have no sessions in this exam (avoids hammering dead engines)
-    session_engine_urls = {sess.proctor_engine_url for sess in sessions if sess.proctor_engine_url}
-    active_container_urls = {
-        c.url for c in db.query(models.EngineContainer)
-        .filter(models.EngineContainer.is_active == True).all()
-    }
-    engine_urls_to_query = session_engine_urls | active_container_urls
-
-    report_rows: list[dict] = []
-    seen_report_keys: set[tuple[str | None, str]] = set()
-    # Collect report_id updates to commit in a single batch after the loop
-    # (committing inside the loop causes SQLAlchemy expire_on_commit to expire
-    # all ORM objects, making subsequent attribute access fail with lazy-load errors)
-    pending_report_id_updates: list[tuple[models.ExamSession, str]] = []
-
-    import asyncio as _asyncio
-
-    async def _fetch_engine_reports(client: httpx.AsyncClient, engine_url: str) -> tuple[str, list]:
-        """Fetch /reports/meta from one engine URL, returning (url, reports) or (url, []) on error."""
-        try:
-            r = await client.get(f"{engine_url}/reports/meta")
-            r.raise_for_status()
-            return engine_url, r.json()
-        except Exception as exc:
-            log.warning("Could not fetch reports/meta from %s: %s", engine_url, exc)
-            return engine_url, []
-
-    # Fetch all engines concurrently — total wait = slowest single engine, not sum of all
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=3.0, read=8.0, write=4.0, pool=4.0)) as client:
-        results = await _asyncio.gather(
-            *[_fetch_engine_reports(client, url) for url in engine_urls_to_query]
+        duration_s = (
+            max(0, int(round((effective_end - s.start_time).total_seconds())))
+            if s.start_time and effective_end else None
         )
 
-    for engine_url, engine_reports in results:
-        for rep in engine_reports:
-            rep = {**rep, "engine_url": engine_url}
-            sess = _match_exam_report(rep)
-            if sess is None or str(sess.exam_id) != exam_id:
-                continue
-
-            report_key = (rep.get("id"), engine_url)
-            if report_key in seen_report_keys:
-                continue
-            seen_report_keys.add(report_key)
-
-            user = user_by_id.get(str(sess.user_id))
-            # Queue report_id save — will commit once after the loop
-            if not sess.proctor_report_id and rep.get("id"):
-                sess.proctor_report_id = str(rep.get("id"))
-                pending_report_id_updates.append((sess, str(rep.get("id"))))
-            report_rows.append({
-                "row_id": f"{sess.id}:{rep.get('id')}",
-                "session_id": str(sess.id),
-                "report_id": rep.get("id"),
-                "engine_url": engine_url,
-                "student_name": user.full_name if user else rep.get("external_student_name") or "Unknown",
-                "student_email": user.email if user else rep.get("external_student_email") or "",
-                "session_status": sess.status,
-                "terminated_by": sess.terminated_by,
-                "terminated_reason": sess.terminated_reason,
-                "risk_score": sess.risk_score or 0,
-                "start_time": sess.start_time.isoformat() if sess.start_time else None,
-                "end_time": sess.end_time.isoformat() if sess.end_time else None,
-                "report_start_time": rep.get("session_start"),
-                "report_end_time": rep.get("session_end"),
-                "risk_state": rep.get("risk_state"),
-                "final_score": rep.get("final_score"),
-                "alert_count": rep.get("alert_count"),
-                "warning_count": rep.get("warning_count"),
-                "size_kb": rep.get("size_kb"),
-                "proof_count": rep.get("proof_count"),
-                "duration_s": rep.get("duration_s"),
-                "terminated": rep.get("terminated"),
-            })
-
-    # Batch-commit any new proctor_report_id values discovered above
-    if pending_report_id_updates:
-        try:
-            db.commit()
-            log.info("list_exam_reports: saved proctor_report_id for %d sessions", len(pending_report_id_updates))
-        except Exception as exc:
-            log.warning("list_exam_reports: batch report_id commit failed: %s", exc)
-            db.rollback()
-
-    sessions_with_reports = {row["session_id"] for row in report_rows}
-    for sess in sessions:
-        if str(sess.id) in sessions_with_reports:
-            continue
-        user = user_by_id.get(str(sess.user_id))
         report_rows.append({
-            "row_id": str(sess.id),
-            "session_id": str(sess.id),
-            "report_id": sess.proctor_report_id,
-            "engine_url": sess.proctor_engine_url,
-            "student_name": user.full_name if user else "Unknown",
-            "student_email": user.email if user else "",
-            "session_status": sess.status,
-            "terminated_by": sess.terminated_by,
-            "terminated_reason": sess.terminated_reason,
-            "risk_score": sess.risk_score or 0,
-            "start_time": sess.start_time.isoformat() if sess.start_time else None,
-            "end_time": sess.end_time.isoformat() if sess.end_time else None,
-            "report_start_time": None,
-            "report_end_time": None,
-            "risk_state": None,
-            "final_score": None,
-            "alert_count": None,
-            "warning_count": None,
-            "size_kb": None,
-            "proof_count": None,
-            "duration_s": None,
-            "terminated": None,
+            "row_id":           str(s.id),
+            "session_id":       str(s.id),
+            "report_id":        str(s.id),      # session UUID is the report ID for RDS reports
+            "engine_url":       s.proctor_engine_url or "",
+            "student_name":     student_name or "Unknown",
+            "student_email":    user.email if user else "",
+            "session_status":   s.status,
+            "terminated_by":    s.terminated_by,
+            "terminated_reason": s.terminated_reason,
+            "risk_score":       s.risk_score or 0,
+            "start_time":       s.start_time.isoformat() if s.start_time else None,
+            "end_time":         effective_end.isoformat() if effective_end else None,
+            "risk_state":       s.status,
+            "final_score":      s.risk_score,
+            "alert_count":      alert_counts.get(s.id, 0),
+            "warning_count":    warning_counts.get(s.id, 0),
+            "proof_count":      proof_counts.get(s.id, 0),
+            "size_kb":          round((proof_size_bytes.get(s.id, 0) or 0) / 1024, 1),
+            "duration_s":       duration_s,
+            "terminated":       s.status == "TERMINATED",
         })
 
-    def _sort_key(x):
-        t = x.get("report_end_time") or x.get("end_time") or ""
-        if hasattr(t, "isoformat"):
-            t = t.isoformat()
-        return (x["report_id"] is None, str(t))
-
-    report_rows.sort(key=_sort_key, reverse=True)
     return report_rows
 
 
 @router.get("/{exam_id}/sessions/{session_id}/report/full")
-async def get_exam_session_full_report(
+def get_exam_session_full_report(
     exam_id: str,
     session_id: str,
-    report_id: str | None = None,
-    engine_url: str | None = None,
+    report_id: str | None = None,   # kept for API compat, ignored (session_id is used)
+    engine_url: str | None = None,  # kept for API compat, ignored
     db: Session = Depends(get_db),
     current_admin=Depends(require_role(UserRole.ADMIN, UserRole.SYSADMIN)),
 ):
-    """Proxy full report JSON from an engine container for an exam session."""
-    import httpx as _httpx
+    """Return full report for an exam session from RDS (alerts, warnings, S3 proof URLs)."""
+    import uuid as _uuid
+    from app.core.storage import get_profile_image_url as _presign
 
-    exam = (
-        db.query(models.Exam)
-        .filter(
-            models.Exam.id == exam_id,
-            models.Exam.created_by == current_admin.id,
-            models.Exam.is_deleted == False,
-        )
-        .first()
-    )
+    # Sysadmin can view all exams; admin can only view their own
+    exam_filter = [
+        models.Exam.id == exam_id,
+        models.Exam.is_deleted == False,
+    ]
+    if getattr(current_admin, "role", None) != "SYSADMIN":
+        exam_filter.append(models.Exam.created_by == current_admin.id)
+
+    exam = db.query(models.Exam).filter(*exam_filter).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
 
+    try:
+        session_uuid = _uuid.UUID(session_id)
+    except ValueError:
+        log.warning(
+            "get_exam_session_full_report: invalid session_id exam_id=%s session_id=%s",
+            exam_id,
+            session_id,
+        )
+        raise HTTPException(status_code=400, detail="Invalid session ID")
+
     sess = db.query(models.ExamSession).filter(
-        models.ExamSession.id == session_id,
+        models.ExamSession.id == session_uuid,
         models.ExamSession.exam_id == exam_id,
     ).first()
     if not sess:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    resolved_report_id = report_id or sess.proctor_report_id
-    resolved_engine_url = engine_url or sess.proctor_engine_url
+    _backfill_missing_proof_sizes(db, [sess.id])
 
-    if not resolved_report_id or not resolved_engine_url:
-        raise HTTPException(status_code=404, detail="No engine report for this session")
+    effective_end = sess.end_time or sess.terminated_at
+    duration_s = (
+        max(0, int(round((effective_end - sess.start_time).total_seconds())))
+        if sess.start_time and effective_end else None
+    )
 
-    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=15.0, write=4.0, pool=4.0)) as client:
-        try:
-            r = await client.get(f"{resolved_engine_url}/report/{resolved_report_id}")
-            r.raise_for_status()
-            raw = r.json()
+    alert_log = []
+    for a in sess.proctor_alerts:
+        entry: dict = {
+            "_type":       "alert",
+            "key":         a.alert_key,
+            "message":     a.message,
+            "score_added": a.score_added,
+            "elapsed_s":   a.elapsed_s,
+            "time":        a.time_str,
+        }
+        if a.proof_s3_key:
+            url = _presign(a.proof_s3_key, expires_in=3600)
+            if url:
+                entry["proof_url"]  = url
+                entry["proof_type"] = a.proof_type or "image"
+        alert_log.append(entry)
 
-            def _get(d: dict, *keys, default=None):
-                for k in keys:
-                    if k in d:
-                        return d[k]
-                return default
+    warning_log = [
+        {
+            "_type":     "warning",
+            "message":   w.message,
+            "elapsed_s": w.elapsed_s,
+            "time":      w.time_str,
+        }
+        for w in sess.proctor_warnings
+    ]
 
-            return {
-                "report_id":     raw.get("id") or raw.get("report_id") or resolved_report_id,
-                "engine_url":    resolved_engine_url,
-                "risk_state":    _get(raw, "risk_state", "state", "final_state"),
-                "final_score":   _get(raw, "final_score", "score", "risk_score"),
-                "alert_count":   _get(raw, "alert_count", "alerts_count", default=len(raw.get("alert_log", []))),
-                "warning_count": _get(raw, "warning_count", "warnings_count", default=len(raw.get("warning_log", []))),
-                "size_kb":       _get(raw, "size_kb"),
-                "proof_count":   _get(raw, "proof_count", default=len(raw.get("proofs", []))),
-                "duration_s":    _get(raw, "duration_s", "duration"),
-                "terminated":    _get(raw, "terminated"),
-                "session_start": _get(raw, "session_start", "start_time"),
-                "session_end":   _get(raw, "session_end", "end_time"),
-                "alert_log":     raw.get("alert_log", []),
-                "warning_log":   raw.get("warning_log", []),
-            }
-        except _httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                raise HTTPException(
-                    status_code=410,
-                    detail="Report no longer exists and has been deleted.",
-                )
-            raise HTTPException(status_code=exc.response.status_code, detail=f"Engine error: {exc}")
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Engine unreachable: {exc}")
+    return {
+        "report_id":     session_id,
+        "risk_state":    sess.status,
+        "final_score":   sess.risk_score,
+        "alert_count":   len(alert_log),
+        "warning_count": len(warning_log),
+        "size_kb":       round(
+            sum(
+                (a.proof_size_bytes or 0)
+                for a in sess.proctor_alerts
+                if a.proof_s3_key and (a.proof_type or "image") != "audio"
+            ) / 1024,
+            1,
+        ),
+        "proof_count":   sum(1 for a in sess.proctor_alerts if a.proof_s3_key),
+        "duration_s":    duration_s,
+        "terminated":    sess.status == "TERMINATED",
+        "session_start": sess.start_time.isoformat() if sess.start_time else None,
+        "session_end":   effective_end.isoformat() if effective_end else None,
+        "alert_log":     alert_log,
+        "warning_log":   warning_log,
+    }
 
 
 # =====================================================
@@ -1764,21 +1810,49 @@ async def get_exam_session_full_report(
 # =====================================================
 
 _system_settings_router = APIRouter(prefix="/admin", tags=["System Admin"])
+_model_tuning_sessions: dict[str, dict] = {}
 
 
 class EngineSettingsUpdate(BaseModel):
+    # Detection toggles
+    detect_looking_away: bool | None = None
+    detect_looking_down: bool | None = None
+    detect_looking_up: bool | None = None
+    detect_looking_side: bool | None = None
+    detect_face_hidden: bool | None = None
+    detect_partial_face: bool | None = None
+    detect_fake_presence: bool | None = None
+    detect_speaker_audio: bool | None = None
+    detect_phone: bool | None = None
+    detect_book: bool | None = None
+    detect_headphone: bool | None = None
+    detect_earbud: bool | None = None
+    detect_multiple_people: bool | None = None
     # Head pose
     look_away_yaw: float | None = None
     look_down_pitch: float | None = None
     look_up_pitch: float | None = None
     gaze_left: float | None = None
     gaze_right: float | None = None
+    min_face_width: int | None = None
+    min_face_height: int | None = None
+    face_hidden_recency_s: float | None = None
     # Duration gates
     looking_away_threshold: float | None = None
     gaze_threshold: float | None = None
     fake_window: float | None = None
+    partial_face_duration_gate: float | None = None
+    face_hidden_dur_1: float | None = None
+    face_hidden_dur_2: float | None = None
+    no_person_dur_1: float | None = None
+    no_person_dur_2: float | None = None
+    fake_presence_dur_1: float | None = None
+    fake_presence_dur_2: float | None = None
     # Risk scores
     gaze_score: float | None = None
+    partial_face_score: float | None = None
+    face_hidden_score_1: float | None = None
+    face_hidden_score_2: float | None = None
     phone_score_2nd: float | None = None
     phone_score_3rd: float | None = None
     book_score: float | None = None
@@ -1806,6 +1880,57 @@ class EngineSettingsUpdate(BaseModel):
     yolo_book_conf: float | None = None
     yolo_audio_conf: float | None = None
     yolo_person_conf: float | None = None
+    # Score cooldowns
+    score_cd_looking_away: float | None = None
+    score_cd_looking_down: float | None = None
+    score_cd_looking_up: float | None = None
+    score_cd_looking_side: float | None = None
+    score_cd_partial_face: float | None = None
+    score_cd_face_hidden: float | None = None
+    score_cd_fake_presence: float | None = None
+    score_cd_phone: float | None = None
+    score_cd_multiple_people: float | None = None
+    score_cd_no_person: float | None = None
+    score_cd_book: float | None = None
+    score_cd_headphone: float | None = None
+    score_cd_earbud: float | None = None
+    score_cd_speaker_audio: float | None = None
+    # Warning cooldowns
+    warn_cd_looking_away: float | None = None
+    warn_cd_looking_down: float | None = None
+    warn_cd_looking_up: float | None = None
+    warn_cd_looking_side: float | None = None
+    warn_cd_partial_face: float | None = None
+    warn_cd_face_hidden: float | None = None
+    warn_cd_fake_presence: float | None = None
+    warn_cd_phone: float | None = None
+    warn_cd_multiple_people: float | None = None
+    warn_cd_no_person: float | None = None
+    warn_cd_book: float | None = None
+    warn_cd_headphone: float | None = None
+    warn_cd_earbud: float | None = None
+    warn_cd_speaker_audio: float | None = None
+    # Speaker audio
+    speaker_warn_cooldown: float | None = None
+    speaker_alert_cooldown: float | None = None
+    speaker_occ1_warn_s: float | None = None
+    speaker_occ1_score: float | None = None
+    speaker_occ1_repeat: float | None = None
+    speaker_occ2_warn_s: float | None = None
+    speaker_occ2_score: float | None = None
+    speaker_occ2_repeat: float | None = None
+    speaker_repeat_interval: float | None = None
+    # Identity verification
+    identity_check_count: int | None = None
+    identity_check_retries: int | None = None
+    identity_check_retry_delay: float | None = None
+    # Object detection temporal voting
+    phone_min_votes: int | None = None
+    book_min_votes: int | None = None
+    headphone_min_votes: int | None = None
+    earbud_min_votes: int | None = None
+    object_min_votes: int | None = None
+    object_window: int | None = None
 
 
 @_system_settings_router.get("/system-settings")
@@ -1819,15 +1944,45 @@ def get_system_settings(
         raise HTTPException(status_code=404, detail="Engine settings not initialised")
     return {
         "id": str(row.id),
+        # Detection toggles
+        "detect_looking_away":        row.detect_looking_away,
+        "detect_looking_down":        row.detect_looking_down,
+        "detect_looking_up":          row.detect_looking_up,
+        "detect_looking_side":        row.detect_looking_side,
+        "detect_face_hidden":         row.detect_face_hidden,
+        "detect_partial_face":        row.detect_partial_face,
+        "detect_fake_presence":       row.detect_fake_presence,
+        "detect_speaker_audio":       row.detect_speaker_audio,
+        "detect_phone":               row.detect_phone,
+        "detect_book":                row.detect_book,
+        "detect_headphone":           row.detect_headphone,
+        "detect_earbud":              row.detect_earbud,
+        "detect_multiple_people":     row.detect_multiple_people,
+        # Head pose
         "look_away_yaw":              row.look_away_yaw,
         "look_down_pitch":            row.look_down_pitch,
         "look_up_pitch":              row.look_up_pitch,
         "gaze_left":                  row.gaze_left,
         "gaze_right":                 row.gaze_right,
+        "min_face_width":             row.min_face_width,
+        "min_face_height":            row.min_face_height,
+        "face_hidden_recency_s":      row.face_hidden_recency_s,
+        # Duration gates
         "looking_away_threshold":     row.looking_away_threshold,
         "gaze_threshold":             row.gaze_threshold,
         "fake_window":                row.fake_window,
+        "partial_face_duration_gate": row.partial_face_duration_gate,
+        "face_hidden_dur_1":          row.face_hidden_dur_1,
+        "face_hidden_dur_2":          row.face_hidden_dur_2,
+        "no_person_dur_1":            row.no_person_dur_1,
+        "no_person_dur_2":            row.no_person_dur_2,
+        "fake_presence_dur_1":        row.fake_presence_dur_1,
+        "fake_presence_dur_2":        row.fake_presence_dur_2,
+        # Risk scores
         "gaze_score":                 row.gaze_score,
+        "partial_face_score":         row.partial_face_score,
+        "face_hidden_score_1":        row.face_hidden_score_1,
+        "face_hidden_score_2":        row.face_hidden_score_2,
         "phone_score_2nd":            row.phone_score_2nd,
         "phone_score_3rd":            row.phone_score_3rd,
         "book_score":                 row.book_score,
@@ -1840,17 +1995,71 @@ def get_system_settings(
         "no_person_score_2":          row.no_person_score_2,
         "fake_presence_score_1":      row.fake_presence_score_1,
         "fake_presence_score_2":      row.fake_presence_score_2,
+        # State thresholds
         "state_warning":              row.state_warning,
         "state_high_risk":            row.state_high_risk,
         "state_admin_review":         row.state_admin_review,
         "decay_amount":               row.decay_amount,
+        # Termination
         "tab_switch_terminate_count": row.tab_switch_terminate_count,
         "multi_people_terminate_s":   row.multi_people_terminate_s,
         "no_person_terminate_s":      row.no_person_terminate_s,
+        # YOLO confidence
         "yolo_phone_conf":            row.yolo_phone_conf,
         "yolo_book_conf":             row.yolo_book_conf,
         "yolo_audio_conf":            row.yolo_audio_conf,
         "yolo_person_conf":           row.yolo_person_conf,
+        # Score cooldowns
+        "score_cd_looking_away":      row.score_cd_looking_away,
+        "score_cd_looking_down":      row.score_cd_looking_down,
+        "score_cd_looking_up":        row.score_cd_looking_up,
+        "score_cd_looking_side":      row.score_cd_looking_side,
+        "score_cd_partial_face":      row.score_cd_partial_face,
+        "score_cd_face_hidden":       row.score_cd_face_hidden,
+        "score_cd_fake_presence":     row.score_cd_fake_presence,
+        "score_cd_phone":             row.score_cd_phone,
+        "score_cd_multiple_people":   row.score_cd_multiple_people,
+        "score_cd_no_person":         row.score_cd_no_person,
+        "score_cd_book":              row.score_cd_book,
+        "score_cd_headphone":         row.score_cd_headphone,
+        "score_cd_earbud":            row.score_cd_earbud,
+        "score_cd_speaker_audio":     row.score_cd_speaker_audio,
+        # Warning cooldowns
+        "warn_cd_looking_away":       row.warn_cd_looking_away,
+        "warn_cd_looking_down":       row.warn_cd_looking_down,
+        "warn_cd_looking_up":         row.warn_cd_looking_up,
+        "warn_cd_looking_side":       row.warn_cd_looking_side,
+        "warn_cd_partial_face":       row.warn_cd_partial_face,
+        "warn_cd_face_hidden":        row.warn_cd_face_hidden,
+        "warn_cd_fake_presence":      row.warn_cd_fake_presence,
+        "warn_cd_phone":              row.warn_cd_phone,
+        "warn_cd_multiple_people":    row.warn_cd_multiple_people,
+        "warn_cd_no_person":          row.warn_cd_no_person,
+        "warn_cd_book":               row.warn_cd_book,
+        "warn_cd_headphone":          row.warn_cd_headphone,
+        "warn_cd_earbud":             row.warn_cd_earbud,
+        "warn_cd_speaker_audio":      row.warn_cd_speaker_audio,
+        # Speaker audio
+        "speaker_warn_cooldown":      row.speaker_warn_cooldown,
+        "speaker_alert_cooldown":     row.speaker_alert_cooldown,
+        "speaker_occ1_warn_s":        row.speaker_occ1_warn_s,
+        "speaker_occ1_score":         row.speaker_occ1_score,
+        "speaker_occ1_repeat":        row.speaker_occ1_repeat,
+        "speaker_occ2_warn_s":        row.speaker_occ2_warn_s,
+        "speaker_occ2_score":         row.speaker_occ2_score,
+        "speaker_occ2_repeat":        row.speaker_occ2_repeat,
+        "speaker_repeat_interval":    row.speaker_repeat_interval,
+        # Identity verification
+        "identity_check_count":       row.identity_check_count,
+        "identity_check_retries":     row.identity_check_retries,
+        "identity_check_retry_delay": row.identity_check_retry_delay,
+        # Object detection temporal voting
+        "phone_min_votes":            row.phone_min_votes,
+        "book_min_votes":             row.book_min_votes,
+        "headphone_min_votes":        row.headphone_min_votes,
+        "earbud_min_votes":           row.earbud_min_votes,
+        "object_min_votes":           row.object_min_votes,
+        "object_window":              row.object_window,
         "updated_at":                 row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -1876,6 +2085,144 @@ def update_system_settings(
     return {"message": "Settings updated", "changed": list(patch.keys())}
 
 
+class ModelTuningSessionCreate(BaseModel):
+    container_id: str | None = None
+    overrides: dict | None = None
+
+
+@_system_settings_router.post("/model-tuning/sessions")
+async def create_model_tuning_session(
+    body: ModelTuningSessionCreate,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    from app.exam.proctor_proxy import create_calibration_session as _create_calibration_session
+
+    settings_row = db.query(models.EngineSettings).first()
+    if not settings_row:
+        raise HTTPException(status_code=404, detail="Engine settings not initialised")
+
+    query = db.query(models.EngineContainer).filter(models.EngineContainer.is_active == True)
+    if body.container_id:
+        query = query.filter(models.EngineContainer.id == body.container_id)
+    container = query.order_by(models.EngineContainer.created_at.asc()).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="No active engine container available")
+
+    config = _build_model_tuning_config(settings_row, body.overrides)
+    try:
+        created = await _create_calibration_session(container.url, config=config)
+    except Exception as exc:
+        import httpx as _httpx
+        if isinstance(exc, _httpx.HTTPStatusError) and exc.response.status_code == 409:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot start model tuning: exam sessions are currently active on this engine. Wait for all exams to finish.",
+            )
+        log.warning(
+            "create_model_tuning_session: engine calibration session failed container_url=%s: %s",
+            container.url,
+            exc,
+        )
+        raise HTTPException(status_code=502, detail=f"Engine calibration session failed: {exc}")
+
+    session_id = secrets.token_urlsafe(18)
+    _model_tuning_sessions[session_id] = {
+        "engine_url": container.url,
+        "engine_session_id": created.get("session_id"),
+        "container_id": str(container.id),
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+    return {
+        "session_id": session_id,
+        "engine_session_id": created.get("session_id"),
+        "engine": {
+            "container_id": str(container.id),
+            "container_name": container.container_name,
+            "url": container.url,
+        },
+        "tick_rate_hz": created.get("tick_rate_hz"),
+        "object_window_frames": created.get("object_window_frames"),
+        "object_vote_targets": created.get("object_vote_targets", {}),
+    }
+
+
+@_system_settings_router.post("/model-tuning/sessions/{session_id}/frame")
+async def process_model_tuning_frame(
+    session_id: str,
+    frame: UploadFile = File(...),
+    config_json: str = Form("{}"),
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    from app.exam.proctor_proxy import process_calibration_frame as _process_calibration_frame
+
+    state = _model_tuning_sessions.get(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Model tuning session not found")
+
+    settings_row = db.query(models.EngineSettings).first()
+    if not settings_row:
+        raise HTTPException(status_code=404, detail="Engine settings not initialised")
+
+    try:
+        overrides = json.loads(config_json or "{}")
+    except Exception as exc:
+        system_logger.warning(
+            "process_model_tuning_frame: invalid config_json session_id=%s engine_session_id=%s error=%s",
+            session_id,
+            state.get("engine_session_id"),
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=f"Invalid config JSON: {exc}")
+
+    config = _build_model_tuning_config(settings_row, overrides)
+    image_bytes = await frame.read()
+    state["updated_at"] = time.time()
+    try:
+        result = await _process_calibration_frame(
+            state["engine_url"],
+            state["engine_session_id"],
+            image_bytes=image_bytes,
+            config=config,
+            filename=frame.filename or "frame.jpg",
+        )
+    except Exception as exc:
+        log.warning(
+            "process_model_tuning_frame: engine calibration frame failed session_id=%s engine_url=%s engine_session_id=%s: %s",
+            session_id,
+            state.get("engine_url"),
+            state.get("engine_session_id"),
+            exc,
+        )
+        raise HTTPException(status_code=502, detail=f"Engine calibration frame failed: {exc}")
+
+    return result
+
+
+@_system_settings_router.delete("/model-tuning/sessions/{session_id}")
+async def delete_model_tuning_session(
+    session_id: str,
+    _=Depends(require_role("SYSADMIN")),
+):
+    from app.exam.proctor_proxy import close_calibration_session as _close_calibration_session
+
+    state = _model_tuning_sessions.pop(session_id, None)
+    if not state:
+        return {"ok": True}
+    try:
+        await _close_calibration_session(state["engine_url"], state["engine_session_id"])
+    except Exception:
+        log.warning(
+            "delete_model_tuning_session: engine close calibration session failed session_id=%s engine_url=%s engine_session_id=%s",
+            session_id,
+            state.get("engine_url"),
+            state.get("engine_session_id"),
+        )
+    return {"ok": True}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SYSADMIN — EC2 Engine instance management (start / stop / restart / apply-settings)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1898,41 +2245,343 @@ def _get_ec2_client(region: str = "ap-south-1"):
         aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
     )
 
+def _build_engine_settings_payload(s: "models.EngineSettings") -> dict:
+    """Build the /admin/settings POST body from the current EngineSettings row."""
+    return {
+        "scoring": {
+            "STATE_WARNING":              s.state_warning,
+            "STATE_HIGH_RISK":            s.state_high_risk,
+            "STATE_ADMIN":                s.state_admin_review,
+            "DECAY_AMOUNT":               s.decay_amount,
+            "TAB_SWITCH_SCORE":           s.tab_switch_score,
+            "TAB_SWITCH_TERMINATE_COUNT": s.tab_switch_terminate_count,
+            "GAZE_SCORE":                 s.gaze_score,
+            "PHONE_SCORE_2ND":            s.phone_score_2nd,
+            "PHONE_SCORE_3RD":            s.phone_score_3rd,
+            "BOOK_SCORE":                 s.book_score,
+            "HEADPHONE_SCORE":            s.headphone_score,
+            "EARBUD_SCORE":               s.earbud_score,
+            "MULTI_PEOPLE_SCORE_2ND":     s.multi_people_score_2nd,
+            "MULTI_PEOPLE_SCORE_3RD":     s.multi_people_score_3rd,
+            "NO_PERSON_SCORE_1":          s.no_person_score_1,
+            "NO_PERSON_SCORE_2":          s.no_person_score_2,
+            "NO_PERSON_DUR_1":            s.no_person_dur_1,
+            "NO_PERSON_DUR_2":            s.no_person_dur_2,
+            "MULTI_PEOPLE_TERMINATE_S":   s.multi_people_terminate_s,
+            "NO_PERSON_TERMINATE_S":      s.no_person_terminate_s,
+            "FAKE_PRESENCE_SCORE_1":      s.fake_presence_score_1,
+            "FAKE_PRESENCE_SCORE_2":      s.fake_presence_score_2,
+            "FAKE_PRESENCE_DUR_1":        s.fake_presence_dur_1,
+            "FAKE_PRESENCE_DUR_2":        s.fake_presence_dur_2,
+        },
+        "cooldowns": {
+            "score": {
+                "looking_away":    s.score_cd_looking_away,
+                "looking_down":    s.score_cd_looking_down,
+                "looking_up":      s.score_cd_looking_up,
+                "looking_side":    s.score_cd_looking_side,
+                "partial_face":    s.score_cd_partial_face,
+                "face_hidden":     s.score_cd_face_hidden,
+                "fake_presence":   s.score_cd_fake_presence,
+                "phone":           s.score_cd_phone,
+                "multiple_people": s.score_cd_multiple_people,
+                "no_person":       s.score_cd_no_person,
+                "book":            s.score_cd_book,
+                "headphone":       s.score_cd_headphone,
+                "earbud":          s.score_cd_earbud,
+                "speaker_audio":   s.score_cd_speaker_audio,
+            },
+        },
+        "thresholds": {
+            "LOOK_AWAY_YAW":          s.look_away_yaw,
+            "LOOK_DOWN_PITCH":        s.look_down_pitch,
+            "LOOK_UP_PITCH":          s.look_up_pitch,
+            "GAZE_LEFT":              s.gaze_left,
+            "GAZE_RIGHT":             s.gaze_right,
+            "LOOKING_AWAY_THRESHOLD": s.looking_away_threshold,
+            "GAZE_THRESHOLD":         s.gaze_threshold,
+            "FAKE_WINDOW":            s.fake_window,
+        },
+        # Detection toggles — updates coordinator.exam_config on the engine
+        # immediately (all running sessions see the change).
+        "detection": {
+            "DETECT_LOOKING_AWAY":    s.detect_looking_away,
+            "DETECT_LOOKING_DOWN":    s.detect_looking_down,
+            "DETECT_LOOKING_UP":      s.detect_looking_up,
+            "DETECT_LOOKING_SIDE":    s.detect_looking_side,
+            "DETECT_FACE_HIDDEN":     s.detect_face_hidden,
+            "DETECT_PARTIAL_FACE":    s.detect_partial_face,
+            "DETECT_FAKE_PRESENCE":   s.detect_fake_presence,
+            "DETECT_SPEAKER_AUDIO":   s.detect_speaker_audio,
+            "DETECT_PHONE":           s.detect_phone,
+            "DETECT_BOOK":            s.detect_book,
+            "DETECT_HEADPHONE":       s.detect_headphone,
+            "DETECT_EARBUD":          s.detect_earbud,
+            "DETECT_MULTIPLE_PEOPLE": s.detect_multiple_people,
+        },
+        # YOLO confidence thresholds — updates the live ObjectDetector instance
+        # immediately (all running sessions see the change).
+        "objects": {
+            "YOLO_PHONE_CONF":  s.yolo_phone_conf,
+            "YOLO_BOOK_CONF":   s.yolo_book_conf,
+            "YOLO_AUDIO_CONF":  s.yolo_audio_conf,
+            "YOLO_PERSON_CONF": s.yolo_person_conf,
+        },
+    }
+
+
+def _build_model_tuning_config(
+    settings_row: "models.EngineSettings",
+    overrides: dict | None = None,
+) -> dict:
+    payload = _build_engine_settings_payload(settings_row)
+    flat = {
+        **payload.get("detection", {}),
+        **payload.get("thresholds", {}),
+        **payload.get("objects", {}),
+        **payload.get("scoring", {}),
+        "SCORE_COOLDOWNS": payload.get("cooldowns", {}).get("score", {}),
+        "WARN_COOLDOWNS": {
+            "looking_away": settings_row.warn_cd_looking_away,
+            "looking_down": settings_row.warn_cd_looking_down,
+            "looking_up": settings_row.warn_cd_looking_up,
+            "looking_side": settings_row.warn_cd_looking_side,
+            "partial_face": settings_row.warn_cd_partial_face,
+            "face_hidden": settings_row.warn_cd_face_hidden,
+            "fake_presence": settings_row.warn_cd_fake_presence,
+            "phone": settings_row.warn_cd_phone,
+            "multiple_people": settings_row.warn_cd_multiple_people,
+            "no_person": settings_row.warn_cd_no_person,
+            "book": settings_row.warn_cd_book,
+            "headphone": settings_row.warn_cd_headphone,
+            "earbud": settings_row.warn_cd_earbud,
+            "speaker_audio": settings_row.warn_cd_speaker_audio,
+        },
+        "PARTIAL_FACE_SCORE": settings_row.partial_face_score,
+        "PARTIAL_FACE_DURATION_GATE": settings_row.partial_face_duration_gate,
+        "FACE_HIDDEN_SCORE_1": settings_row.face_hidden_score_1,
+        "FACE_HIDDEN_SCORE_2": settings_row.face_hidden_score_2,
+        "FACE_HIDDEN_DUR_1": settings_row.face_hidden_dur_1,
+        "FACE_HIDDEN_DUR_2": settings_row.face_hidden_dur_2,
+        "FAKE_PRESENCE_DUR_1": settings_row.fake_presence_dur_1,
+        "FAKE_PRESENCE_DUR_2": settings_row.fake_presence_dur_2,
+        "SPEAKER_WARN_COOLDOWN": settings_row.speaker_warn_cooldown,
+        "SPEAKER_ALERT_COOLDOWN": settings_row.speaker_alert_cooldown,
+        "SPEAKER_OCC1_WARN_S": settings_row.speaker_occ1_warn_s,
+        "SPEAKER_OCC1_SCORE": settings_row.speaker_occ1_score,
+        "SPEAKER_OCC1_REPEAT": settings_row.speaker_occ1_repeat,
+        "SPEAKER_OCC2_WARN_S": settings_row.speaker_occ2_warn_s,
+        "SPEAKER_OCC2_SCORE": settings_row.speaker_occ2_score,
+        "SPEAKER_OCC2_REPEAT": settings_row.speaker_occ2_repeat,
+        "SPEAKER_REPEAT_INTERVAL": settings_row.speaker_repeat_interval,
+        "MIN_FACE_WIDTH": settings_row.min_face_width,
+        "MIN_FACE_HEIGHT": settings_row.min_face_height,
+        "FACE_HIDDEN_RECENCY_S": settings_row.face_hidden_recency_s,
+    }
+
+    field_to_engine_key = {
+        "detect_looking_away": "DETECT_LOOKING_AWAY",
+        "detect_looking_down": "DETECT_LOOKING_DOWN",
+        "detect_looking_up": "DETECT_LOOKING_UP",
+        "detect_looking_side": "DETECT_LOOKING_SIDE",
+        "detect_face_hidden": "DETECT_FACE_HIDDEN",
+        "detect_partial_face": "DETECT_PARTIAL_FACE",
+        "detect_fake_presence": "DETECT_FAKE_PRESENCE",
+        "detect_speaker_audio": "DETECT_SPEAKER_AUDIO",
+        "detect_phone": "DETECT_PHONE",
+        "detect_book": "DETECT_BOOK",
+        "detect_headphone": "DETECT_HEADPHONE",
+        "detect_earbud": "DETECT_EARBUD",
+        "detect_multiple_people": "DETECT_MULTIPLE_PEOPLE",
+        "looking_away_threshold": "LOOKING_AWAY_THRESHOLD",
+        "gaze_threshold": "GAZE_THRESHOLD",
+        "fake_window": "FAKE_WINDOW",
+        "partial_face_duration_gate": "PARTIAL_FACE_DURATION_GATE",
+        "face_hidden_dur_1": "FACE_HIDDEN_DUR_1",
+        "face_hidden_dur_2": "FACE_HIDDEN_DUR_2",
+        "no_person_dur_1": "NO_PERSON_DUR_1",
+        "no_person_dur_2": "NO_PERSON_DUR_2",
+        "fake_presence_dur_1": "FAKE_PRESENCE_DUR_1",
+        "fake_presence_dur_2": "FAKE_PRESENCE_DUR_2",
+        "face_hidden_score_1": "FACE_HIDDEN_SCORE_1",
+        "face_hidden_score_2": "FACE_HIDDEN_SCORE_2",
+        "partial_face_score": "PARTIAL_FACE_SCORE",
+        "multi_people_terminate_s": "MULTI_PEOPLE_TERMINATE_S",
+        "no_person_terminate_s": "NO_PERSON_TERMINATE_S",
+        "speaker_occ1_warn_s": "SPEAKER_OCC1_WARN_S",
+        "speaker_occ2_warn_s": "SPEAKER_OCC2_WARN_S",
+        "speaker_repeat_interval": "SPEAKER_REPEAT_INTERVAL",
+        "speaker_occ1_score": "SPEAKER_OCC1_SCORE",
+        "speaker_occ2_score": "SPEAKER_OCC2_SCORE",
+        "speaker_occ1_repeat": "SPEAKER_OCC1_REPEAT",
+        "speaker_occ2_repeat": "SPEAKER_OCC2_REPEAT",
+        "speaker_warn_cooldown": "SPEAKER_WARN_COOLDOWN",
+        "speaker_alert_cooldown": "SPEAKER_ALERT_COOLDOWN",
+        "min_face_width": "MIN_FACE_WIDTH",
+        "min_face_height": "MIN_FACE_HEIGHT",
+        "face_hidden_recency_s": "FACE_HIDDEN_RECENCY_S",
+        "look_away_yaw": "LOOK_AWAY_YAW",
+        "look_down_pitch": "LOOK_DOWN_PITCH",
+        "look_up_pitch": "LOOK_UP_PITCH",
+        "gaze_left": "GAZE_LEFT",
+        "gaze_right": "GAZE_RIGHT",
+        "yolo_phone_conf": "YOLO_PHONE_CONF",
+        "yolo_book_conf": "YOLO_BOOK_CONF",
+        "yolo_audio_conf": "YOLO_AUDIO_CONF",
+        "yolo_person_conf": "YOLO_PERSON_CONF",
+        "state_warning": "STATE_WARNING",
+        "state_high_risk": "STATE_HIGH_RISK",
+        "state_admin_review": "STATE_ADMIN",
+        "decay_amount": "DECAY_AMOUNT",
+        "gaze_score": "GAZE_SCORE",
+        "phone_score_2nd": "PHONE_SCORE_2ND",
+        "phone_score_3rd": "PHONE_SCORE_3RD",
+        "book_score": "BOOK_SCORE",
+        "headphone_score": "HEADPHONE_SCORE",
+        "earbud_score": "EARBUD_SCORE",
+        "multi_people_score_2nd": "MULTI_PEOPLE_SCORE_2ND",
+        "multi_people_score_3rd": "MULTI_PEOPLE_SCORE_3RD",
+        "no_person_score_1": "NO_PERSON_SCORE_1",
+        "no_person_score_2": "NO_PERSON_SCORE_2",
+        "fake_presence_score_1": "FAKE_PRESENCE_SCORE_1",
+        "fake_presence_score_2": "FAKE_PRESENCE_SCORE_2",
+        "tab_switch_terminate_count": "TAB_SWITCH_TERMINATE_COUNT",
+        "tab_switch_score": "TAB_SWITCH_SCORE",
+    }
+
+    if overrides:
+        for key, value in overrides.items():
+            if value is not None:
+                flat[field_to_engine_key.get(key, key)] = value
+    return flat
+
+
 def _build_env_file_content(s: models.EngineSettings, db_url: str, s3_bucket: str,
                              aws_key: str, aws_secret: str, aws_region: str) -> str:
     """Build the full engine .env content from current DB settings."""
+    def _b(v) -> str:
+        return "true" if v else "false"
+
     return f"""DATABASE_URL={db_url}
 S3_BUCKET={s3_bucket}
 AWS_REGION={aws_region}
 AWS_ACCESS_KEY_ID={aws_key}
 AWS_SECRET_ACCESS_KEY={aws_secret}
 SAVE_REPORT=false
+SAVE_PROOF=true
 
+# State thresholds
 STATE_WARNING={s.state_warning}
 STATE_HIGH_RISK={s.state_high_risk}
 STATE_ADMIN={s.state_admin_review}
 DECAY_AMOUNT={s.decay_amount}
 
+# Risk scores
 GAZE_SCORE={s.gaze_score}
 TAB_SWITCH_SCORE={s.tab_switch_score}
 TAB_SWITCH_TERMINATE_COUNT={s.tab_switch_terminate_count}
-
 PHONE_SCORE_2ND={s.phone_score_2nd}
 PHONE_SCORE_3RD={s.phone_score_3rd}
 BOOK_SCORE={s.book_score}
 HEADPHONE_SCORE={s.headphone_score}
 EARBUD_SCORE={s.earbud_score}
-
 MULTI_PEOPLE_SCORE_2ND={s.multi_people_score_2nd}
 MULTI_PEOPLE_SCORE_3RD={s.multi_people_score_3rd}
 MULTI_PEOPLE_TERMINATE_S={s.multi_people_terminate_s}
-
 NO_PERSON_SCORE_1={s.no_person_score_1}
 NO_PERSON_SCORE_2={s.no_person_score_2}
 NO_PERSON_TERMINATE_S={s.no_person_terminate_s}
-
 FAKE_PRESENCE_SCORE_1={s.fake_presence_score_1}
 FAKE_PRESENCE_SCORE_2={s.fake_presence_score_2}
+PARTIAL_FACE_SCORE={s.partial_face_score}
+FACE_HIDDEN_SCORE_1={s.face_hidden_score_1}
+FACE_HIDDEN_SCORE_2={s.face_hidden_score_2}
+
+# Duration gates
+LOOKING_AWAY_THRESHOLD={s.looking_away_threshold}
+GAZE_THRESHOLD={s.gaze_threshold}
+FAKE_WINDOW={s.fake_window}
+PARTIAL_FACE_DURATION_GATE={s.partial_face_duration_gate}
+FACE_HIDDEN_DUR_1={s.face_hidden_dur_1}
+FACE_HIDDEN_DUR_2={s.face_hidden_dur_2}
+NO_PERSON_DUR_1={s.no_person_dur_1}
+NO_PERSON_DUR_2={s.no_person_dur_2}
+FAKE_PRESENCE_DUR_1={s.fake_presence_dur_1}
+FAKE_PRESENCE_DUR_2={s.fake_presence_dur_2}
+
+# Head pose thresholds
+LOOK_AWAY_YAW={s.look_away_yaw}
+LOOK_DOWN_PITCH={s.look_down_pitch}
+LOOK_UP_PITCH={s.look_up_pitch}
+GAZE_LEFT={s.gaze_left}
+GAZE_RIGHT={s.gaze_right}
+MIN_FACE_WIDTH={s.min_face_width}
+MIN_FACE_HEIGHT={s.min_face_height}
+FACE_HIDDEN_RECENCY_S={s.face_hidden_recency_s}
+
+# YOLO confidence thresholds
+YOLO_PHONE_CONF={s.yolo_phone_conf}
+YOLO_BOOK_CONF={s.yolo_book_conf}
+YOLO_AUDIO_CONF={s.yolo_audio_conf}
+YOLO_PERSON_CONF={s.yolo_person_conf}
+
+# Detection toggles
+DETECT_LOOKING_AWAY={_b(s.detect_looking_away)}
+DETECT_LOOKING_DOWN={_b(s.detect_looking_down)}
+DETECT_LOOKING_UP={_b(s.detect_looking_up)}
+DETECT_LOOKING_SIDE={_b(s.detect_looking_side)}
+DETECT_FACE_HIDDEN={_b(s.detect_face_hidden)}
+DETECT_PARTIAL_FACE={_b(s.detect_partial_face)}
+DETECT_FAKE_PRESENCE={_b(s.detect_fake_presence)}
+DETECT_SPEAKER_AUDIO={_b(s.detect_speaker_audio)}
+DETECT_PHONE={_b(s.detect_phone)}
+DETECT_BOOK={_b(s.detect_book)}
+DETECT_HEADPHONE={_b(s.detect_headphone)}
+DETECT_EARBUD={_b(s.detect_earbud)}
+DETECT_MULTIPLE_PEOPLE={_b(s.detect_multiple_people)}
+
+# Speaker audio
+SPEAKER_WARN_COOLDOWN={s.speaker_warn_cooldown}
+SPEAKER_ALERT_COOLDOWN={s.speaker_alert_cooldown}
+SPEAKER_OCC1_WARN_S={s.speaker_occ1_warn_s}
+SPEAKER_OCC1_SCORE={s.speaker_occ1_score}
+SPEAKER_OCC1_REPEAT={s.speaker_occ1_repeat}
+SPEAKER_OCC2_WARN_S={s.speaker_occ2_warn_s}
+SPEAKER_OCC2_SCORE={s.speaker_occ2_score}
+SPEAKER_OCC2_REPEAT={s.speaker_occ2_repeat}
+SPEAKER_REPEAT_INTERVAL={s.speaker_repeat_interval}
+
+# Score cooldowns (also used as API alert cooldowns)
+SCORE_CD_LOOKING_AWAY={s.score_cd_looking_away}
+SCORE_CD_LOOKING_DOWN={s.score_cd_looking_down}
+SCORE_CD_LOOKING_UP={s.score_cd_looking_up}
+SCORE_CD_LOOKING_SIDE={s.score_cd_looking_side}
+SCORE_CD_PARTIAL_FACE={s.score_cd_partial_face}
+SCORE_CD_FACE_HIDDEN={s.score_cd_face_hidden}
+SCORE_CD_FAKE_PRESENCE={s.score_cd_fake_presence}
+SCORE_CD_PHONE={s.score_cd_phone}
+SCORE_CD_MULTIPLE_PEOPLE={s.score_cd_multiple_people}
+SCORE_CD_NO_PERSON={s.score_cd_no_person}
+SCORE_CD_BOOK={s.score_cd_book}
+SCORE_CD_HEADPHONE={s.score_cd_headphone}
+SCORE_CD_EARBUD={s.score_cd_earbud}
+SCORE_CD_SPEAKER_AUDIO={s.score_cd_speaker_audio}
+
+# Warning cooldowns
+WARN_CD_LOOKING_AWAY={s.warn_cd_looking_away}
+WARN_CD_LOOKING_DOWN={s.warn_cd_looking_down}
+WARN_CD_LOOKING_UP={s.warn_cd_looking_up}
+WARN_CD_LOOKING_SIDE={s.warn_cd_looking_side}
+WARN_CD_PARTIAL_FACE={s.warn_cd_partial_face}
+WARN_CD_FACE_HIDDEN={s.warn_cd_face_hidden}
+WARN_CD_FAKE_PRESENCE={s.warn_cd_fake_presence}
+WARN_CD_PHONE={s.warn_cd_phone}
+WARN_CD_MULTIPLE_PEOPLE={s.warn_cd_multiple_people}
+WARN_CD_NO_PERSON={s.warn_cd_no_person}
+WARN_CD_BOOK={s.warn_cd_book}
+WARN_CD_HEADPHONE={s.warn_cd_headphone}
+WARN_CD_EARBUD={s.warn_cd_earbud}
+WARN_CD_SPEAKER_AUDIO={s.warn_cd_speaker_audio}
 """
 
 
@@ -1981,6 +2630,12 @@ def start_ec2_instance(
         log.info("SYSADMIN: started EC2 instance %s", body.instance_id)
         return {"message": f"Starting {body.instance_id}"}
     except Exception as e:
+        system_logger.error(
+            "start_ec2_instance failed region=%s instance_id=%s error=%s",
+            body.region,
+            body.instance_id,
+            e,
+        )
         raise HTTPException(status_code=502, detail=str(e))
 
 
@@ -1996,6 +2651,12 @@ def stop_ec2_instance(
         log.info("SYSADMIN: stopped EC2 instance %s", body.instance_id)
         return {"message": f"Stopping {body.instance_id}"}
     except Exception as e:
+        system_logger.error(
+            "stop_ec2_instance failed region=%s instance_id=%s error=%s",
+            body.region,
+            body.instance_id,
+            e,
+        )
         raise HTTPException(status_code=502, detail=str(e))
 
 
@@ -2015,6 +2676,84 @@ def get_ec2_status(
             "public_ip": instance.get("PublicIpAddress"),
         }
     except Exception as e:
+        system_logger.error(
+            "get_ec2_status failed region=%s instance_id=%s error=%s",
+            body.region,
+            body.instance_id,
+            e,
+        )
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+class ContainerAction(BaseModel):
+    container_id: str
+
+
+@_system_settings_router.post("/engine/containers/{container_id}/start")
+def start_container(
+    container_id: str,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Start a Docker container on its EC2 instance via SSM."""
+    container = db.query(models.EngineContainer).filter(
+        models.EngineContainer.id == container_id
+    ).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+    if not container.ec2_instance_id or not container.container_name:
+        raise HTTPException(status_code=400, detail="EC2 instance ID or container name not configured")
+    try:
+        ssm = _get_ssm_client(container.ec2_region or "ap-south-1")
+        resp = ssm.send_command(
+            InstanceIds=[container.ec2_instance_id],
+            DocumentName="AWS-RunShellScript",
+            Parameters={"commands": [f"docker start {container.container_name}"]},
+            Comment=f"Start container {container.container_name}",
+        )
+        return {"message": f"Starting {container.container_name}", "command_id": resp["Command"]["CommandId"]}
+    except Exception as e:
+        system_logger.error(
+            "start_container failed container_id=%s container_name=%s ec2_instance_id=%s error=%s",
+            container_id,
+            container.container_name,
+            container.ec2_instance_id,
+            e,
+        )
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@_system_settings_router.post("/engine/containers/{container_id}/stop")
+def stop_container(
+    container_id: str,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Stop a Docker container on its EC2 instance via SSM."""
+    container = db.query(models.EngineContainer).filter(
+        models.EngineContainer.id == container_id
+    ).first()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+    if not container.ec2_instance_id or not container.container_name:
+        raise HTTPException(status_code=400, detail="EC2 instance ID or container name not configured")
+    try:
+        ssm = _get_ssm_client(container.ec2_region or "ap-south-1")
+        resp = ssm.send_command(
+            InstanceIds=[container.ec2_instance_id],
+            DocumentName="AWS-RunShellScript",
+            Parameters={"commands": [f"docker stop {container.container_name}"]},
+            Comment=f"Stop container {container.container_name}",
+        )
+        return {"message": f"Stopping {container.container_name}", "command_id": resp["Command"]["CommandId"]}
+    except Exception as e:
+        system_logger.error(
+            "stop_container failed container_id=%s container_name=%s ec2_instance_id=%s error=%s",
+            container_id,
+            container.container_name,
+            container.ec2_instance_id,
+            e,
+        )
         raise HTTPException(status_code=502, detail=str(e))
 
 
@@ -2035,20 +2774,53 @@ async def apply_engine_settings(
       3. Update container URLs if IP changed (via describe_instances)
     """
     import os
+    import asyncio
+    import httpx
 
     s = db.query(models.EngineSettings).first()
     if not s:
         raise HTTPException(status_code=404, detail="EngineSettings not found")
 
+    # ── Step 1: Live push to all active engines via /admin/settings ─────────────
+    # This works without EC2 instance IDs and applies settings IMMEDIATELY to
+    # all running containers (updates S.* module vars in real-time).
+    all_active = db.query(models.EngineContainer).filter(
+        models.EngineContainer.is_active == True
+    ).all()
+
+    live_push_results = []
+    async def _push_live(client: httpx.AsyncClient, url: str) -> dict:
+        try:
+            payload = _build_engine_settings_payload(s)
+            r = await client.post(f"{url}/admin/settings", json=payload, timeout=8.0)
+            r.raise_for_status()
+            return {"url": url, "status": "live_applied"}
+        except Exception as exc:
+            log.warning("Live push settings to %s failed: %s", url, exc)
+            return {"url": url, "status": "live_push_failed", "error": str(exc)}
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=3.0, read=8.0, write=4.0, pool=4.0)) as _client:
+        live_push_results = list(await asyncio.gather(
+            *[_push_live(_client, c.url) for c in all_active],
+            return_exceptions=False,
+        ))
+
+    log.info("apply-settings live push: %s", live_push_results)
+
+    # ── Step 2: SSM restart (persistent across container restarts) ─────────────
+    # Only runs if containers have EC2 instance IDs configured.
     containers = db.query(models.EngineContainer).filter(
         models.EngineContainer.ec2_instance_id.isnot(None)
     ).all()
 
     if not containers:
-        raise HTTPException(
-            status_code=400,
-            detail="No containers have EC2 instance IDs set. Use PATCH /engine/containers/{id}/meta first."
-        )
+        # No EC2 configured — live push was enough, return results
+        db.commit()
+        return {
+            "message": "Settings applied live to all running containers. "
+                       "To make settings persist across Docker restarts, configure EC2 instance IDs on container cards.",
+            "results": live_push_results,
+        }
 
     db_url    = os.getenv("DATABASE_URL", "").replace("+psycopg2", "")
     s3_bucket = os.getenv("S3_BUCKET", "")
@@ -2128,8 +2900,8 @@ async def apply_engine_settings(
 
     db.commit()
     return {
-        "message": "Settings applied. Containers are restarting.",
-        "results": results,
+        "message": "Settings applied live and containers are restarting via SSM.",
+        "results": live_push_results + results,
     }
 
 
@@ -2192,8 +2964,11 @@ async def get_engine_metrics(
                 r = await client.get(f"{c.url}/metrics")
                 r.raise_for_status()
                 results.append({"url": c.url, "ok": True, "metrics": r.json()})
+                log.debug("Engine metrics OK: %s", c.url)
             except Exception as exc:
-                results.append({"url": c.url, "ok": False, "error": str(exc)})
+                error_detail = f"{type(exc).__name__}: {exc}"
+                log.warning("Engine metrics FAILED for %s — %s", c.url, error_detail)
+                results.append({"url": c.url, "ok": False, "error": error_detail})
     return results
 
 
@@ -2220,6 +2995,11 @@ async def get_engine_report(
                 r.raise_for_status()
                 results.append({"url": c.url, "ok": True, "report": r.json()})
             except Exception as exc:
+                system_logger.warning(
+                    "get_engine_report failed engine_url=%s error=%s",
+                    c.url,
+                    exc,
+                )
                 results.append({"url": c.url, "ok": False, "error": str(exc)})
     return results
 
@@ -2336,6 +3116,12 @@ async def sysadmin_live_frame(
         jpeg = await fetch_snapshot(session.proctor_engine_url, session.proctor_pc_id)
         return _Response(content=jpeg, media_type="image/jpeg")
     except Exception as e:
+        log.warning(
+            "sysadmin_live_frame: engine snapshot fetch failed session_id=%s pc_id=%s: %s",
+            session_id,
+            session.proctor_pc_id,
+            e,
+        )
         return _Response(content=b"", status_code=204, media_type="image/jpeg")
 
 
@@ -2415,253 +3201,179 @@ async def sysadmin_session_alert_history(
         ]
         return {"alerts": list(reversed(alerts)), "warnings": list(reversed(warnings))}
     except Exception:
+        log.warning(
+            "sysadmin_session_alert_history: fetch_session_log failed session_id=%s pc_id=%s",
+            session_id,
+            session.proctor_pc_id,
+        )
         return {"alerts": [], "warnings": []}
+
+
+@_system_settings_router.post("/sessions/{session_id}/debug-mode")
+async def sysadmin_debug_mode(
+    session_id: str,
+    body: DebugModeBody,
+    db: Session = Depends(get_db),
+    _=Depends(require_role("SYSADMIN")),
+):
+    """Toggle CV2 debug overlay on the engine's live snapshot for any session."""
+    from app.exam.proctor_proxy import proxy_debug_toggle
+
+    session = db.query(models.ExamSession).filter(
+        models.ExamSession.id == session_id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.proctor_pc_id or not session.proctor_engine_url:
+        raise HTTPException(status_code=404, detail="No proctoring engine session for this student")
+
+    try:
+        return await proxy_debug_toggle(
+            session.proctor_engine_url, session.proctor_pc_id, body.enabled
+        )
+    except Exception as e:
+        system_logger.warning(
+            "sysadmin_debug_mode failed session_id=%s pc_id=%s engine_url=%s enabled=%s error=%s",
+            session_id,
+            session.proctor_pc_id,
+            session.proctor_engine_url,
+            body.enabled,
+            e,
+        )
+        raise HTTPException(status_code=502, detail=f"Engine debug toggle failed: {e}")
 
 # =====================================================
 # SYSTEM ADMIN — SESSION REPORTS (cross-engine)
 # =====================================================
 
 @_system_settings_router.get("/reports")
-async def list_all_reports(
+def list_all_reports(
     db: Session = Depends(get_db),
     _=Depends(require_role("SYSADMIN")),
 ):
     """
-    List all session reports from all active engine containers.
-    Cross-references proctor_report_id in the DB to enrich with student/exam info.
+    List all completed/terminated exam sessions as reports (sourced from RDS).
     """
-    import httpx as _httpx
+    from sqlalchemy import func as _sqlfunc
 
-    containers = (
-        db.query(models.EngineContainer)
-        .filter(models.EngineContainer.is_active == True)
+    sessions = (
+        db.query(models.ExamSession)
+        .filter(models.ExamSession.status.in_(["ENDED", "TERMINATED"]))
+        .order_by(models.ExamSession.created_at.desc())
         .all()
     )
 
-    all_sessions = db.query(models.ExamSession).all()
-    sessions_with_reports = [s for s in all_sessions if s.proctor_report_id]
-    report_to_session: dict[str, models.ExamSession] = {
-        s.proctor_report_id: s for s in sessions_with_reports
-    }
-    # Secondary lookup by pc_id for reports not yet linked via proctor_report_id
-    sessions_with_pc = [s for s in all_sessions if s.proctor_pc_id]
-    pc_to_session: dict[str, models.ExamSession] = {
-        s.proctor_pc_id: s for s in sessions_with_pc
-    }
-    session_by_id = {str(s.id): s for s in all_sessions}
-    session_by_user_id: dict[str, list[models.ExamSession]] = {}
-    for sess in all_sessions:
-        session_by_user_id.setdefault(str(sess.user_id), []).append(sess)
+    users  = {str(u.id): u for u in db.query(models.User).all()}
+    exams  = {str(e.id): e for e in db.query(models.Exam).all()}
+    _backfill_missing_proof_sizes(db, [s.id for s in sessions])
 
-    users = db.query(models.User).all()
-    user_by_id = {str(user.id): user for user in users}
-    session_by_email: dict[str, list[models.ExamSession]] = {}
-    for sess in all_sessions:
-        user = user_by_id.get(str(sess.user_id))
-        if user and user.email:
-            session_by_email.setdefault(user.email.lower(), []).append(sess)
-
-    exams = db.query(models.Exam).all()
-    exam_by_id = {str(exam.id): exam for exam in exams}
-
-    def _pick_best_session(candidates: list[models.ExamSession], engine_url: str, rep: dict) -> models.ExamSession | None:
-        if not candidates:
-            return None
-
-        def _normalise_dt(value: datetime | None) -> datetime:
-            if value is None:
-                return datetime.min.replace(tzinfo=UTC)
-            if value.tzinfo is None:
-                return value.replace(tzinfo=UTC)
-            return value
-
-        report_end = rep.get("session_end")
-        rep_end_dt = None
-        if report_end:
-            try:
-                if not report_end.endswith("Z") and "+" not in report_end[10:]:
-                    report_end += "Z"
-                rep_end_dt = datetime.fromisoformat(report_end.replace("Z", "+00:00"))
-            except Exception:
-                rep_end_dt = None
-
-        engine_matches = [s for s in candidates if s.proctor_engine_url == engine_url]
-        if len(engine_matches) == 1:
-            return engine_matches[0]
-        if len(engine_matches) > 1:
-            candidates = engine_matches
-
-        if rep_end_dt is not None:
-            candidates = sorted(
-                candidates,
-                key=lambda s: abs((rep_end_dt - _normalise_dt(s.end_time or s.start_time)).total_seconds()),
-            )
-            if candidates:
-                return candidates[0]
-
-        return sorted(
-            candidates,
-            key=lambda s: _normalise_dt(s.end_time or s.start_time),
-            reverse=True,
-        )[0]
+    # Aggregate alert/warning/proof counts in a single pass per table
+    alert_counts: dict = dict(
+        db.query(models.ProctorAlert.session_id, _sqlfunc.count())
+        .group_by(models.ProctorAlert.session_id).all()
+    )
+    warning_counts: dict = dict(
+        db.query(models.ProctorWarning.session_id, _sqlfunc.count())
+        .group_by(models.ProctorWarning.session_id).all()
+    )
+    proof_counts: dict = dict(
+        db.query(models.ProctorAlert.session_id, _sqlfunc.count())
+        .filter(models.ProctorAlert.proof_s3_key.isnot(None))
+        .group_by(models.ProctorAlert.session_id).all()
+    )
+    proof_size_bytes: dict = dict(
+        db.query(
+            models.ProctorAlert.session_id,
+            _sqlfunc.coalesce(_sqlfunc.sum(models.ProctorAlert.proof_size_bytes), 0),
+        )
+        .filter(
+            models.ProctorAlert.proof_s3_key.isnot(None),
+            (models.ProctorAlert.proof_type.is_(None) | (models.ProctorAlert.proof_type != "audio")),
+        )
+        .group_by(models.ProctorAlert.session_id)
+        .all()
+    )
 
     result = []
-    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=8.0, write=4.0, pool=4.0)) as client:
-        for c in containers:
-            try:
-                r = await client.get(f"{c.url}/reports/meta")
-                r.raise_for_status()
-                engine_reports = r.json()
-            except Exception as exc:
-                log.warning("Could not fetch reports/meta from %s: %s", c.url, exc)
-                engine_reports = []
+    for s in sessions:
+        user  = users.get(str(s.user_id))
+        exam  = exams.get(str(s.exam_id))
+        effective_end = s.end_time or s.terminated_at
+        duration_s = (
+            max(0, int(round((effective_end - s.start_time).total_seconds())))
+            if s.start_time and effective_end else None
+        )
+        student_name = None
+        if user:
+            fn = getattr(user, "first_name", None) or ""
+            ln = getattr(user, "last_name",  None) or ""
+            student_name = f"{fn} {ln}".strip() or getattr(user, "full_name", None) or user.email
 
-            for rep in engine_reports:
-                entry: dict = {
-                    "report_id": rep["id"],
-                    "engine_url": c.url,
-                    "risk_state": rep.get("risk_state"),
-                    "final_score": rep.get("final_score"),
-                    "alert_count": rep.get("alert_count"),
-                    "warning_count": rep.get("warning_count"),
-                    "size_kb": rep.get("size_kb"),
-                    "proof_count": rep.get("proof_count"),
-                    "duration_s": rep.get("duration_s"),
-                    "terminated": rep.get("terminated"),
-                    "session_start": rep.get("session_start"),
-                    "session_end": rep.get("session_end"),
-                    "session_id": None,
-                    "exam_id": None,
-                    "exam_title": None,
-                    "student_name": None,
-                    "student_email": None,
-                    "session_status": None,
-                }
-                # Try primary lookup by report_id, fall back to device_id (pc_id),
-                # then fall back to session_start timestamp matching.
-                sess = None
-                external_session_id = rep.get("external_exam_session_id")
-                external_exam_id = rep.get("external_exam_id")
-                external_user_id = rep.get("external_user_id")
-                external_student_email = (rep.get("external_student_email") or "").strip().lower()
-                if external_session_id:
-                    sess = session_by_id.get(str(external_session_id))
-                    if sess and sess.proctor_report_id is None:
-                        sess.proctor_report_id = rep["id"]
-                        db.commit()
+        result.append({
+            "report_id":      str(s.id),
+            "engine_url":     s.proctor_engine_url or "",
+            "risk_state":     s.status,           # ENDED | TERMINATED
+            "final_score":    s.risk_score,
+            "alert_count":    alert_counts.get(s.id, 0),
+            "warning_count":  warning_counts.get(s.id, 0),
+            "size_kb":        round((proof_size_bytes.get(s.id, 0) or 0) / 1024, 1),
+            "proof_count":    proof_counts.get(s.id, 0),
+            "duration_s":     duration_s,
+            "terminated":     s.status == "TERMINATED",
+            "session_start":  s.start_time.isoformat()  if s.start_time  else None,
+            "session_end":    effective_end.isoformat() if effective_end else None,
+            "session_id":     str(s.id),
+            "exam_id":        str(s.exam_id)   if s.exam_id   else None,
+            "exam_title":     exam.title        if exam        else "Unknown Exam",
+            "student_name":   student_name,
+            "student_email":  user.email        if user        else None,
+            "session_status": s.status,
+        })
 
-                if sess is None and external_exam_id and external_user_id:
-                    candidates = [
-                        s for s in session_by_user_id.get(str(external_user_id), [])
-                        if str(s.exam_id) == str(external_exam_id)
-                    ]
-                    sess = _pick_best_session(candidates, c.url, rep)
-                    if sess and sess.proctor_report_id is None:
-                        sess.proctor_report_id = rep["id"]
-                        db.commit()
-
-                if sess is None and external_exam_id and external_student_email:
-                    candidates = [
-                        s for s in session_by_email.get(external_student_email, [])
-                        if str(s.exam_id) == str(external_exam_id)
-                    ]
-                    sess = _pick_best_session(candidates, c.url, rep)
-                    if sess and sess.proctor_report_id is None:
-                        sess.proctor_report_id = rep["id"]
-                        db.commit()
-
-                if sess is None:
-                    sess = report_to_session.get(rep["id"])
-                if sess is None:
-                    pc_id = rep.get("device_id") or rep.get("pc_id") or rep.get("session_id")
-                    if pc_id:
-                        sess = pc_to_session.get(pc_id)
-                        if sess and sess.proctor_report_id is None:
-                            sess.proctor_report_id = rep["id"]
-                            db.commit()
-                # Timestamp-based fallback: match session_start within 30 s
-                if sess is None and rep.get("session_start"):
-                    try:
-                        rep_start_str = rep["session_start"]
-                        if not rep_start_str.endswith("Z") and "+" not in rep_start_str[10:]:
-                            rep_start_str += "Z"
-                        rep_start = datetime.fromisoformat(rep_start_str.replace("Z", "+00:00"))
-                        for s in sessions_with_pc:
-                            if s.proctor_engine_url != c.url or s.start_time is None:
-                                continue
-                            s_start = (
-                                s.start_time if s.start_time.tzinfo
-                                else s.start_time.replace(tzinfo=UTC)
-                            )
-                            if abs((rep_start - s_start).total_seconds()) <= 30:
-                                sess = s
-                                if sess.proctor_report_id is None:
-                                    sess.proctor_report_id = rep["id"]
-                                    db.commit()
-                                break
-                    except Exception:
-                        pass
-
-                if sess:
-                    user = user_by_id.get(str(sess.user_id))
-                    exam = exam_by_id.get(str(sess.exam_id))
-                    entry.update({
-                        "session_id": str(sess.id),
-                        "exam_id": str(sess.exam_id),
-                        "exam_title": exam.title if exam else "Unknown",
-                        "student_name": user.full_name if user else "Unknown",
-                        "student_email": user.email if user else "",
-                        "session_status": sess.status,
-                    })
-                else:
-                    entry.update({
-                        "exam_title": "Orphaned Engine Report",
-                        "student_name": "Deleted Session",
-                        "session_status": "ORPHANED",
-                    })
-                result.append(entry)
-
-    result.sort(key=lambda x: x.get("session_end") or "", reverse=True)
     return result
 
 
 @_system_settings_router.delete("/reports/{report_id}")
 async def delete_report(
     report_id: str,
-    engine_url: str,
     db: Session = Depends(get_db),
     _=Depends(require_role("SYSADMIN")),
 ):
-    """Delete a report from an engine container and clear the DB reference."""
-    import httpx as _httpx
+    """Delete only proof images for a report while preserving the report data."""
+    import uuid as _uuid
+    from app.core.storage import delete_s3_objects
 
-    container = db.query(models.EngineContainer).filter(
-        models.EngineContainer.url == engine_url
-    ).first()
-    if not container:
-        raise HTTPException(status_code=400, detail="Unknown engine URL")
+    try:
+        session_uuid = _uuid.UUID(report_id)
+    except ValueError:
+        system_logger.warning("delete_report invalid report_id=%s", report_id)
+        raise HTTPException(status_code=400, detail="Invalid report ID")
 
-    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=8.0, write=4.0, pool=4.0)) as client:
-        try:
-            r = await client.delete(f"{engine_url}/report/{report_id}")
-            r.raise_for_status()
-        except _httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                pass
-            else:
-                raise HTTPException(status_code=502, detail=f"Engine delete failed: {exc}")
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Engine unreachable: {exc}")
+    sess = db.query(models.ExamSession).filter(models.ExamSession.id == session_uuid).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-    sess = db.query(models.ExamSession).filter(
-        models.ExamSession.proctor_report_id == report_id
-    ).first()
-    if sess:
-        sess.proctor_report_id = None
-        db.commit()
+    proof_alerts = [
+        alert for alert in sess.proctor_alerts
+        if alert.proof_s3_key and (alert.proof_type or "image") != "audio"
+    ]
+    keys = [alert.proof_s3_key for alert in proof_alerts if alert.proof_s3_key]
 
-    log.info("SYSADMIN deleted report %s from engine %s", report_id, engine_url)
-    return {"ok": True, "deleted": report_id}
+    deleted_count, errors = delete_s3_objects(keys)
+
+    for alert in proof_alerts:
+        alert.proof_s3_key = None
+        alert.proof_size_bytes = None
+
+    db.commit()
+
+    log.info("SYSADMIN deleted %d proof image(s) for report %s", deleted_count, report_id)
+    return {
+        "ok": True,
+        "report_id": report_id,
+        "deleted_proofs": deleted_count,
+        "errors": errors,
+    }
 
 
 # =====================================================
@@ -2809,56 +3521,83 @@ def list_users(
 # =====================================================
 
 @_system_settings_router.get("/report/{report_id}/full")
-async def get_full_report(
+def get_full_report(
     report_id: str,
-    engine_url: str,
+    engine_url: str = "",   # kept for API compat, ignored
     db: Session = Depends(get_db),
     _=Depends(require_role("SYSADMIN")),
 ):
-    """Proxy full report JSON from an engine container."""
-    import httpx as _httpx
+    """Return full report for an exam session from RDS (alerts, warnings, S3 proof URLs)."""
+    import uuid as _uuid
+    from app.core.storage import get_profile_image_url as _presign
 
-    container = db.query(models.EngineContainer).filter(
-        models.EngineContainer.url == engine_url
-    ).first()
-    if not container:
-        raise HTTPException(status_code=400, detail="Unknown engine URL")
+    try:
+        session_uuid = _uuid.UUID(report_id)
+    except ValueError:
+        system_logger.warning("get_full_report invalid report_id=%s", report_id)
+        raise HTTPException(status_code=400, detail="Invalid report ID")
 
-    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=15.0, write=4.0, pool=4.0)) as client:
-        try:
-            r = await client.get(f"{engine_url}/report/{report_id}")
-            r.raise_for_status()
-            raw = r.json()
+    session = db.query(models.ExamSession).filter(models.ExamSession.id == session_uuid).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-            # Normalize field names — engines may use different key conventions.
-            # We map common aliases to the canonical names expected by the frontend.
-            def _get(d: dict, *keys, default=None):
-                for k in keys:
-                    if k in d:
-                        return d[k]
-                return default
+    _backfill_missing_proof_sizes(db, [session.id])
 
-            normalized = {
-                "report_id":    raw.get("id") or raw.get("report_id") or report_id,
-                "risk_state":   _get(raw, "risk_state", "state", "final_state"),
-                "final_score":  _get(raw, "final_score", "score", "risk_score"),
-                "alert_count":  _get(raw, "alert_count", "alerts_count", default=len(raw.get("alert_log", []))),
-                "warning_count": _get(raw, "warning_count", "warnings_count", default=len(raw.get("warning_log", []))),
-                "size_kb":      _get(raw, "size_kb"),
-                "proof_count":  _get(raw, "proof_count", default=len(raw.get("proofs", []))),
-                "duration_s":   _get(raw, "duration_s", "duration"),
-                "terminated":   _get(raw, "terminated"),
-                "session_start": _get(raw, "session_start", "start_time"),
-                "session_end":  _get(raw, "session_end", "end_time"),
-                # Alert and warning logs for the detailed view
-                "alert_log":    raw.get("alert_log", []),
-                "warning_log":  raw.get("warning_log", []),
-            }
-            return normalized
-        except _httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=exc.response.status_code, detail=f"Engine error: {exc}")
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Engine unreachable: {exc}")
+    effective_end = session.end_time or session.terminated_at
+    duration_s = (
+        max(0, int(round((effective_end - session.start_time).total_seconds())))
+        if session.start_time and effective_end else None
+    )
+
+    alert_log = []
+    for a in session.proctor_alerts:
+        entry: dict = {
+            "_type":       "alert",
+            "key":         a.alert_key,
+            "message":     a.message,
+            "score_added": a.score_added,
+            "elapsed_s":   a.elapsed_s,
+            "time":        a.time_str,
+        }
+        if a.proof_s3_key:
+            url = _presign(a.proof_s3_key, expires_in=3600)
+            if url:
+                entry["proof_url"]  = url
+                entry["proof_type"] = a.proof_type or "image"
+        alert_log.append(entry)
+
+    warning_log = [
+        {
+            "_type":     "warning",
+            "message":   w.message,
+            "elapsed_s": w.elapsed_s,
+            "time":      w.time_str,
+        }
+        for w in session.proctor_warnings
+    ]
+
+    return {
+        "report_id":     report_id,
+        "risk_state":    session.status,
+        "final_score":   session.risk_score,
+        "alert_count":   len(alert_log),
+        "warning_count": len(warning_log),
+        "size_kb":       round(
+            sum(
+                (a.proof_size_bytes or 0)
+                for a in session.proctor_alerts
+                if a.proof_s3_key and (a.proof_type or "image") != "audio"
+            ) / 1024,
+            1,
+        ),
+        "proof_count":   sum(1 for a in session.proctor_alerts if a.proof_s3_key),
+        "duration_s":    duration_s,
+        "terminated":    session.status == "TERMINATED",
+        "session_start": session.start_time.isoformat() if session.start_time else None,
+        "session_end":   effective_end.isoformat() if effective_end else None,
+        "alert_log":     alert_log,
+        "warning_log":   warning_log,
+    }
 
 
 # =====================================================
@@ -2870,51 +3609,32 @@ async def delete_all_reports(
     db: Session = Depends(get_db),
     _=Depends(require_role("SYSADMIN")),
 ):
-    """Delete ALL reports from all active engine containers and clear DB references."""
-    import httpx as _httpx
+    """Delete all stored proof images while preserving report rows and alert history."""
+    from app.core.storage import delete_s3_objects
 
-    containers = (
-        db.query(models.EngineContainer)
-        .filter(models.EngineContainer.is_active == True)
+    proof_alerts = (
+        db.query(models.ProctorAlert)
+        .filter(
+            models.ProctorAlert.proof_s3_key.isnot(None),
+            (models.ProctorAlert.proof_type.is_(None) | (models.ProctorAlert.proof_type != "audio")),
+        )
         .all()
     )
 
-    deleted_total = 0
-    errors = []
+    keys = [alert.proof_s3_key for alert in proof_alerts if alert.proof_s3_key]
+    deleted_total, errors = delete_s3_objects(keys)
 
-    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=4.0, read=15.0, write=4.0, pool=4.0)) as client:
-        for c in containers:
-            try:
-                # Get list of reports from this engine
-                r = await client.get(f"{c.url}/reports/meta")
-                r.raise_for_status()
-                engine_reports = r.json()
-            except Exception as exc:
-                errors.append({"engine_url": c.url, "error": f"Could not list: {exc}"})
-                continue
-
-            for rep in engine_reports:
-                rid = rep.get("id")
-                if not rid:
-                    continue
-                try:
-                    dr = await client.delete(f"{c.url}/report/{rid}")
-                    if dr.status_code not in (200, 204, 404):
-                        errors.append({"engine_url": c.url, "report_id": rid, "error": f"HTTP {dr.status_code}"})
-                        continue
-                    deleted_total += 1
-                    # Clear DB reference
-                    sess = db.query(models.ExamSession).filter(
-                        models.ExamSession.proctor_report_id == rid
-                    ).first()
-                    if sess:
-                        sess.proctor_report_id = None
-                except Exception as exc:
-                    errors.append({"engine_url": c.url, "report_id": rid, "error": str(exc)})
+    for alert in proof_alerts:
+        alert.proof_s3_key = None
+        alert.proof_size_bytes = None
 
     db.commit()
-    log.info("SYSADMIN deleted all reports: %d deleted, %d errors", deleted_total, len(errors))
-    return {"deleted": deleted_total, "errors": errors}
+    log.info("SYSADMIN deleted %d proof image(s) across all reports", deleted_total)
+    return {
+        "deleted_proofs": deleted_total,
+        "affected_reports": len({str(alert.session_id) for alert in proof_alerts}),
+        "errors": errors,
+    }
 
 
 # =====================================================
@@ -2952,6 +3672,18 @@ async def proxy_proof(
             content_type = r.headers.get("content-type", "application/octet-stream")
             return FastAPIResponse(content=r.content, media_type=content_type)
         except _httpx.HTTPStatusError as exc:
+            system_logger.warning(
+                "proxy_proof not found on engine engine_url=%s path=%s status=%s",
+                engine_url,
+                path,
+                exc.response.status_code if exc.response else None,
+            )
             raise HTTPException(status_code=exc.response.status_code, detail="Proof not found on engine")
         except Exception as exc:
+            system_logger.error(
+                "proxy_proof engine unreachable engine_url=%s path=%s error=%s",
+                engine_url,
+                path,
+                exc,
+            )
             raise HTTPException(status_code=502, detail=f"Engine unreachable: {exc}")

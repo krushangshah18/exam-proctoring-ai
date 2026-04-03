@@ -1,5 +1,7 @@
 from facenet_pytorch import MTCNN
 
+from app.core import log
+
 
 class FaceDetector:
 
@@ -9,9 +11,13 @@ class FaceDetector:
     def get_detector(cls):
 
         if cls._detector is None:
-            cls._detector = MTCNN(
-                keep_all=True,
-                device="cpu"   # later: "cuda"
-            )
+            try:
+                cls._detector = MTCNN(
+                    keep_all=True,
+                    device="cpu",  # later: "cuda"
+                )
+            except Exception as e:
+                log.exception("Failed to initialise MTCNN face detector: %s", e)
+                raise
 
         return cls._detector

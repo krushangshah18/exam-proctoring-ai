@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.core import settings
+from app.core import settings, log
 
 """
 SQLAlchemy :
@@ -24,5 +24,14 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception as e:
+        # Route-layer exceptions should trigger a rollback to avoid a broken transaction
+        # lingering across requests within the same session instance.
+        log.exception("DB transaction failed; rolling back: %s", e)
+        try:
+            db.rollback()
+        except Exception as rb_e:
+            log.warning("DB rollback failed after transaction error: %s", rb_e)
+        raise
     finally:
         db.close()

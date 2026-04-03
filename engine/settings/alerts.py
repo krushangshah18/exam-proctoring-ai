@@ -1,63 +1,72 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 #  AI Proctor — Alert & Warning Settings
 #
+#  All cooldown values are read from environment variables at import time.
+#  Defaults match original hardcoded values.
+#
 #  RULES (must be respected when editing):
 #    api_cooldown  == score_cooldown   every score event directly fires an alert
 #    warn_cooldown <= score_cooldown   warning shows at least as often as scoring
-#
-#  Grace period is enforced in the RiskEngine (occ=1 arms cooldown, no score).
-#  AlertEngine rule: risk_added == 0 → WARNING,  risk_added > 0 → ALERT.
 # ═══════════════════════════════════════════════════════════════════════════════
 
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+def _f(key: str, default: float) -> float:
+    try: return float(os.environ[key])
+    except KeyError:
+        return default
+    except ValueError:
+        logger.warning("Invalid float env var %s=%r; using default=%s", key, os.environ.get(key), default)
+        return default
+
 # ── On-screen display durations (seconds) ──────────────────────────────────────
-WARN_DISPLAY_DURATION  : float = 3.0   # how long a warning banner stays visible
-ALERT_DISPLAY_DURATION : float = 5.0   # how long an alert banner stays visible
+WARN_DISPLAY_DURATION  : float = 3.0
+ALERT_DISPLAY_DURATION : float = 5.0
 
 # ── Warning cooldowns (seconds) ────────────────────────────────────────────────
-# Minimum gap between consecutive soft (amber) warnings for the same key.
-# Must be <= the corresponding SCORE_COOLDOWNS value.
+# WARN_CD_{KEY} env var controls each. Must be <= corresponding API_CD_{KEY}.
 WARN_COOLDOWNS: dict = {
-    "looking_away"   :  3,    # score_cooldown =  5s
-    "looking_down"   :  3,
-    "looking_up"     :  3,
-    "looking_side"   :  3,
-    "speaker_audio"  :  3,    # ← edit in scoring.py (SPEAKER_WARN_COOLDOWN)
-    "partial_face"   :  3,
-    "face_hidden"    :  3,
-    "fake_presence"  :  5,    # score_cooldown = 10s
-    "phone"          :  8,    # score_cooldown = 15s
-    "multiple_people":  5,    # score_cooldown = 10s
-    "no_person"      :  5,
-    "book"           : 15,    # score_cooldown = 30s
-    "headphone"      : 15,
-    "earbud"         : 15,
-    "tab_switch"     :  0,    # discrete event — cooldown managed by engine occurrence count
+    "looking_away"   : _f("WARN_CD_LOOKING_AWAY",    3),
+    "looking_down"   : _f("WARN_CD_LOOKING_DOWN",    3),
+    "looking_up"     : _f("WARN_CD_LOOKING_UP",      3),
+    "looking_side"   : _f("WARN_CD_LOOKING_SIDE",    3),
+    "speaker_audio"  : _f("WARN_CD_SPEAKER_AUDIO",   3),
+    "partial_face"   : _f("WARN_CD_PARTIAL_FACE",    3),
+    "face_hidden"    : _f("WARN_CD_FACE_HIDDEN",     3),
+    "fake_presence"  : _f("WARN_CD_FAKE_PRESENCE",   5),
+    "phone"          : _f("WARN_CD_PHONE",           8),
+    "multiple_people": _f("WARN_CD_MULTIPLE_PEOPLE", 5),
+    "no_person"      : _f("WARN_CD_NO_PERSON",       5),
+    "book"           : _f("WARN_CD_BOOK",           15),
+    "headphone"      : _f("WARN_CD_HEADPHONE",      15),
+    "earbud"         : _f("WARN_CD_EARBUD",         15),
+    "tab_switch"     : 0,    # discrete — managed by occurrence count
 }
 
 # ── API alert cooldowns (seconds) ─────────────────────────────────────────────
-# MUST equal SCORE_COOLDOWNS — every scoring event fires an alert.
-# Edit both together when changing timing for a key.
+# Must equal SCORE_COOLDOWNS in scoring.py — share the same env vars (SCORE_CD_*).
 API_COOLDOWNS: dict = {
-    "looking_away"   :  5,
-    "looking_down"   :  5,
-    "looking_up"     :  5,
-    "looking_side"   :  5,
-    "speaker_audio"  : 10,    # ← edit in scoring.py (SPEAKER_ALERT_COOLDOWN)
-    "partial_face"   :  5,
-    "face_hidden"    :  5,
-    "fake_presence"  : 10,
-    "phone"          : 15,
-    "multiple_people": 10,
-    "no_person"      : 10,
-    "book"           : 30,
-    "headphone"      : 30,
-    "earbud"         : 30,
-    "tab_switch"     :  0,    # discrete — no cooldown needed (per-occurrence)
+    "looking_away"   : _f("SCORE_CD_LOOKING_AWAY",    5),
+    "looking_down"   : _f("SCORE_CD_LOOKING_DOWN",    5),
+    "looking_up"     : _f("SCORE_CD_LOOKING_UP",      5),
+    "looking_side"   : _f("SCORE_CD_LOOKING_SIDE",    5),
+    "speaker_audio"  : _f("SCORE_CD_SPEAKER_AUDIO",  10),
+    "partial_face"   : _f("SCORE_CD_PARTIAL_FACE",    5),
+    "face_hidden"    : _f("SCORE_CD_FACE_HIDDEN",     5),
+    "fake_presence"  : _f("SCORE_CD_FAKE_PRESENCE",  10),
+    "phone"          : _f("SCORE_CD_PHONE",          15),
+    "multiple_people": _f("SCORE_CD_MULTIPLE_PEOPLE",10),
+    "no_person"      : _f("SCORE_CD_NO_PERSON",      10),
+    "book"           : _f("SCORE_CD_BOOK",           30),
+    "headphone"      : _f("SCORE_CD_HEADPHONE",      30),
+    "earbud"         : _f("SCORE_CD_EARBUD",         30),
+    "tab_switch"     : 0,    # discrete — no cooldown needed
 }
 
 # ── On-screen messages ─────────────────────────────────────────────────────────
-# WARN_MESSAGES — shown on amber banner (no score added yet)
-# ALERT_MESSAGES — shown on red banner (score was added, pts appended automatically)
 WARN_MESSAGES: dict = {
     "phone"          : "Phone visible in frame",
     "book"           : "Book visible in frame",

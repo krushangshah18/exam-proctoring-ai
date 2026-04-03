@@ -316,11 +316,22 @@ export default function AdminExamDetailsPage() {
                 // Browser
                 tab_switching:         { group: 'Browser',  label: 'tab switching' },
               };
+              // Build a set of "group|label" pairs explicitly disabled in detection_config.
+              // detection_config false values override legacy config true values that
+              // share the same display label (e.g. DETECT_EARBUD:false beats earphones:true).
+              const disabledKeys = new Set<string>();
+              for (const [key, enabled] of Object.entries(exam.detection_config ?? {})) {
+                if (!enabled) {
+                  const mapped = KEY_MAP[key];
+                  if (mapped) disabledKeys.add(`${mapped.group}|${mapped.label}`);
+                }
+              }
               const groups: Record<string, Set<string>> = {};
               for (const [key, enabled] of Object.entries(allConfig)) {
                 if (!enabled) continue;
                 const mapped = KEY_MAP[key];
                 if (!mapped) continue;
+                if (disabledKeys.has(`${mapped.group}|${mapped.label}`)) continue;
                 if (!groups[mapped.group]) groups[mapped.group] = new Set();
                 groups[mapped.group].add(mapped.label);
               }
