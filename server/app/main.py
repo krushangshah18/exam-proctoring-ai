@@ -299,7 +299,7 @@ async def add_security_headers(request: Request, call_next):
             "script-src 'self'; "
             "style-src 'self'; "
             "img-src 'self'; "
-            "connect-src 'self' http://localhost:3000; "
+            f"connect-src 'self' {settings.FRONTEND_URL}; "
             "frame-ancestors 'none';"
         )
     response.headers["X-Frame-Options"] = "DENY"
