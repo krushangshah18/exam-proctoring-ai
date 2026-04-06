@@ -1,0 +1,35 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Environment — NEVER bake secrets into the image
+.env
+.env.*
+*.env
+
+# Logs and runtime data
+logs/
+storage/
+
+# Dev/test files
+flush_redis.py
+README.md
+*.md
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Deploy configs (not needed inside container)
+deploy/
+
+# uv cache
+.uv/

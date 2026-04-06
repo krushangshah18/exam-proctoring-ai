@@ -1,0 +1,105 @@
+name: Deploy Server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/server-deploy.yml'
+
+env:
+  AWS_REGION:     ap-south-1
+  ECR_REGISTRY:   687159379171.dkr.ecr.ap-south-1.amazonaws.com
+  ECR_REPOSITORY: proctorapi
+  IMAGE_TAG:      ${{ github.sha }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        working-directory: server
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "Image pushed: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+      - name: Deploy on EC2 via SSM
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --region $AWS_REGION \
+            --instance-ids "${{ secrets.SERVER_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "set -e",
+              "echo === Logging into ECR ===",
+              "aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 687159379171.dkr.ecr.ap-south-1.amazonaws.com",
+              "echo === Pulling new image ===",
+              "docker pull 687159379171.dkr.ecr.ap-south-1.amazonaws.com/proctorapi:latest",
+              "echo === Restarting server ===",
+              "cd /srv/proctorapi && docker compose up -d --remove-orphans",
+              "echo === Cleaning up old images ===",
+              "docker image prune -f",
+              "echo === Deploy complete ==="
+            ]' \
+            --output text \
+            --query "Command.CommandId")
+
+          echo "SSM Command ID: $COMMAND_ID"
+
+          # Wait for the command to finish (poll every 5s, max 3 min)
+          for i in $(seq 1 36); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "${{ secrets.SERVER_INSTANCE_ID }}" \
+              --query "Status" --output text 2>/dev/null || echo "Pending")
+
+            echo "[$i/36] Status: $STATUS"
+
+            if [ "$STATUS" = "Success" ]; then
+              echo "Deploy succeeded."
+              exit 0
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Deploy FAILED with status: $STATUS"
+              # Print output for debugging
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "${{ secrets.SERVER_INSTANCE_ID }}" \
+                --query "StandardErrorContent" --output text
+              exit 1
+            fi
+            sleep 5
+          done
+
+          echo "Deploy timed out waiting for SSM command."
+          exit 1
+
+      - name: Smoke test
+        run: |
+          sleep 10
+          HTTP=$(curl -sf -o /dev/null -w "%{http_code}" \
+            https://3-6-8-253.sslip.io/health || echo "000")
+          echo "Health check HTTP status: $HTTP"
+          if [ "$HTTP" != "200" ]; then
+            echo "Health check failed — deployment may be broken."
+            exit 1
+          fi
+          echo "Server is healthy."

@@ -1,0 +1,45 @@
+services:
+
+  server:
+    image: 687159379171.dkr.ecr.ap-south-1.amazonaws.com/proctorapi:latest
+    container_name: proctorapi
+    restart: unless-stopped
+    env_file: /srv/proctorapi/.env
+    ports:
+      - "127.0.0.1:8000:8000"   # Only nginx reaches this — never expose directly
+    volumes:
+      - /srv/proctorapi/storage:/app/storage
+      - /srv/proctorapi/logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s           # facenet + YOLO models load on first request
+
+  redis:
+    image: redis:7-alpine
+    container_name: proctorapi-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"   # Localhost only — not reachable from outside EC2
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --save 60 1
+      --loglevel warning
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redis_data:
+    driver: local
