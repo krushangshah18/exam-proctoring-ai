@@ -254,7 +254,7 @@ export default function SettingsPage() {
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em]" style={{ color: 'rgba(255,255,255,0.62)' }}>
                 Last Login
               </p>
-              <p className="mt-1 text-sm font-semibold text-white">{formatDateTime(profile?.last_login)}</p>
+              <p className="mt-1 text-sm font-semibold text-white">{formatDateTime(profile?.last_login ?? null)}</p>
             </div>
           </div>
         </div>
@@ -291,7 +291,7 @@ export default function SettingsPage() {
               />
               <InfoField
                 label="Joined Platform"
-                value={formatDateTime(profile?.created_at, 'Unavailable')}
+                value={formatDateTime(profile?.created_at ?? null, 'Unavailable')}
                 icon={CalendarClock}
               />
             </div>

@@ -169,7 +169,7 @@ export default function DeviceManagement() {
         confirmLabel="Revoke Device"
         cancelLabel="Cancel"
         variant="destructive"
-        onConfirm={() => deviceToRevoke && handleRevoke(deviceToRevoke.id)}
+        onConfirm={() => { if (deviceToRevoke) handleRevoke(deviceToRevoke.id); }}
       />
     </>
   );

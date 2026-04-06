@@ -294,7 +294,7 @@ function FullReportModal({ report, onClose }: { report: EngineReport; onClose: (
                             <p className="font-medium" style={{ color: ev._type === 'alert' ? '#BE123C' : '#B45309' }}>
                               {ev.message || ev.key || ev._type}
                             </p>
-                            {ev.score_added > 0 && (
+                            {(ev.score_added ?? 0) > 0 && (
                               <p className="text-xs mt-0.5 opacity-75" style={{ color: ev._type === 'alert' ? '#BE123C' : '#B45309' }}>
                                 +{(ev.score_added as number).toFixed(1)} pts
                               </p>

@@ -12,7 +12,8 @@
       "Bash(node -e \"const l = require\\(''lucide-react''\\); console.log\\(l.BookOpen ? ''BookOpen OK'' : ''missing''\\)\")",
       "Bash(python3 -c \":*)",
       "Bash(alembic heads:*)",
-      "Bash(xargs cat:*)"
+      "Bash(xargs cat:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }
