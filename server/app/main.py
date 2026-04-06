@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core import log, settings
+from app.core import log, system_logger, settings
 from app.auth.routes import router as auth_router
 from app.auth.admin_applications import router as admin_app_router
 from app.exam.admin_routes import router as admin_exams_router
@@ -27,6 +27,7 @@ async def _exam_status_scheduler():
     from app.db import models
     from app.db.enums import ExamStatus, SessionStatus
     from sqlalchemy import func
+    from sqlalchemy.orm import joinedload
 
     while True:
         try:
@@ -112,6 +113,7 @@ async def _exam_status_scheduler():
                 active_overdue_q = (
                     db.query(models.ExamSession, models.Exam)
                     .join(models.Exam, models.Exam.id == models.ExamSession.exam_id)
+                    .options(joinedload(models.ExamSession.user))
                     .filter(
                         models.Exam.status == ExamStatus.LIVE.value,
                         models.ExamSession.status == SessionStatus.ACTIVE.value,
@@ -147,6 +149,7 @@ async def _exam_status_scheduler():
                 long_disconnected_q = (
                     db.query(models.ExamSession, models.Exam)
                     .join(models.Exam, models.Exam.id == models.ExamSession.exam_id)
+                    .options(joinedload(models.ExamSession.user))
                     .filter(
                         models.ExamSession.status == SessionStatus.DISCONNECTED.value,
                         models.ExamSession.last_heartbeat <= disconnect_cutoff,
@@ -180,6 +183,7 @@ async def _exam_status_scheduler():
                 ended_exam_sessions = (
                     db.query(models.ExamSession, models.Exam)
                     .join(models.Exam, models.Exam.id == models.ExamSession.exam_id)
+                    .options(joinedload(models.ExamSession.user))
                     .filter(
                         models.Exam.status == ExamStatus.ENDED.value,
                         models.ExamSession.status.in_([
@@ -216,10 +220,12 @@ async def _exam_status_scheduler():
                     )
             except Exception as e:
                 db.rollback()
+                system_logger.error("Exam scheduler DB error (rolled back): %s", e, exc_info=True)
                 log.error("Exam status update failed: %s", e)
             finally:
                 db.close()
         except Exception as e:
+            system_logger.error("Exam scheduler outer error (scheduler will retry): %s", e, exc_info=True)
             log.error("Exam scheduler outer error: %s", e)
 
         await asyncio.sleep(60)
@@ -227,6 +233,26 @@ async def _exam_status_scheduler():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Validate required environment variables before starting
+    _required_vars = {
+        "JWT_SECRET_KEY": settings.JWT_SECRET_KEY,
+        "DATABASE_URL": settings.DATABASE_URL,
+        "PROCTOR_ENGINE_URLS": settings.PROCTOR_ENGINE_URLS,
+    }
+    _missing = [k for k, v in _required_vars.items() if not v]
+    if _missing:
+        system_logger.critical("Missing required environment variables: %s", _missing)
+        raise RuntimeError(f"Missing required environment variables: {_missing}")
+
+    # Validate Redis connectivity
+    try:
+        from app.core.redis import redis_client as _redis
+        _redis.ping()
+        log.info("Redis connection verified.")
+    except Exception as _e:
+        system_logger.critical("Redis unavailable at startup: %s", _e)
+        raise RuntimeError(f"Redis unavailable: {_e}")
+
     # Seed engine containers + ensure settings row exist
     from app.exam.proctor_startup import run_all as _proctor_startup
     from app.exam.events import set_event_loop

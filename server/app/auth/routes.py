@@ -1,6 +1,5 @@
 # API endpoints
 import hashlib
-from pydantic import EmailStr
 from datetime import datetime, timedelta, UTC
 from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File
 from sqlalchemy.orm import Session
@@ -12,7 +11,6 @@ from app.db import models
 from app.db.enums import UserRole, SessionStatus
 
 from app.auth.schemas import (
-    UserAdminCreate,
     UnlockVerifyRequest,
     DeviceOut,
     UpdateProfile,
@@ -27,7 +25,7 @@ from app.auth.schemas import (
     ForgotPasswordRequest,
     ResetPasswordRequest,
     UserStudentCreate,
-    DeviceVerifyRequest, 
+    DeviceVerifyRequest,
     DeviceVerifyResponse
 )
 
@@ -47,61 +45,6 @@ from app.auth.dependencies import (get_current_user,require_role)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-# REGISTER
-# @router.post("/register/admin",status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_role(UserRole.SYSADMIN))])
-# def register_admin(user: UserAdminCreate, request: Request, db:Session = Depends(get_db)):
-#     """
-#     Register new ADMIN (SYSADMIN only)
-#     """
-#     ip = request.client.host
-
-#     existing = (
-#         db.query(models.User)
-#         .filter(models.User.email == user.email,
-#                 models.User.is_active == True
-#         )
-#         .first()
-#     )
-
-#     if existing:
-#         log.warning(
-#             "Admin register failed: email exists (%s) ip=%s",
-#             user.email,
-#             ip
-#         )
-
-#         raise HTTPException(
-#             status_code=400,
-#             detail="Email already registered"
-#         )
-
-#     hashed = hash_password(user.password)
-
-#     new_user = models.User(
-#         email=user.email,
-#         full_name=user.full_name,
-#         password_hash=hashed,
-#         role=UserRole.ADMIN.value,
-#         is_active=True
-#     )
-
-#     db.add(new_user)
-#     db.commit()
-#     db.refresh(new_user)
-
-#     log.info(
-#         "Admin created: id=%s email=%s by=%s ip=%s",
-#         new_user.id,
-#         new_user.email,
-#         request.state.user_id,
-#         ip
-#     )
-
-#     return {
-#         "message": "Admin registered successfully",
-#         "id": str(new_user.id),
-#         "email": new_user.email,
-#     }
 
 @router.post("/register/student",status_code=status.HTTP_201_CREATED)
 @rate_limit("register_student", limit=3, window=600)
@@ -132,14 +75,43 @@ async def register_student(
         if existing.is_active:
             log.warning("Student register failed: exists %s ip=%s", user.email, ip)
             raise HTTPException(status_code=400, detail="Email already registered")
-        # Reactivate
+        # Reactivation — must repeat consent + face + embedding checks
+        if not user.consent:
+            raise HTTPException(status_code=400, detail="You must accept privacy policy")
+        reactivation_data = await selfie.read()
+        try:
+            face_box = validate_single_face(reactivation_data)
+        except ValueError as e:
+            error_msg = str(e)
+            log.warning("Face validation failed on reactivation: %s ip=%s", str(e), ip)
+            if "multiple" in error_msg.lower():
+                detail = "Multiple faces detected. Please ensure only your face is visible."
+            elif "no face" in error_msg.lower():
+                detail = "No face detected. Please retake your selfie."
+            else:
+                detail = "Invalid image. Please upload a clear selfie."
+            raise HTTPException(status_code=400, detail=detail)
+        try:
+            embedding = generate_embedding(reactivation_data, face_box)
+        except ValueError as e:
+            log.warning("Embedding failed on reactivation: %s ip=%s", str(e), ip)
+            raise HTTPException(status_code=400, detail=str(e))
+        try:
+            path = save_profile_image(existing.id, reactivation_data)
+        except Exception as e:
+            log.error("Profile image save failed on reactivation user=%s: %s", existing.id, e)
+            raise HTTPException(status_code=500, detail="Failed to save profile image")
         existing.is_active = True
         existing.deleted_at = None
         existing.password_hash = hash_password(user.password)
         existing.full_name = user.full_name
-
+        existing.face_embedding = embedding
+        existing.profile_image_path = path
+        existing.consent_given = True
+        existing.consent_at = datetime.now(UTC)
+        existing.privacy_version = "v1.0-2026"
         db.commit()
-
+        log.info("Account reactivated: id=%s email=%s ip=%s", existing.id, existing.email, ip)
         return {"message": "Account reactivated"}
     
     #Consent in Registration
@@ -195,11 +167,16 @@ async def register_student(
     )
 
     db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    db.flush()  # get new_user.id without committing
 
-    # Save image
-    path = save_profile_image(new_user.id, data)
+    # Save profile image before final commit — if this fails we rollback, no orphaned user
+    try:
+        path = save_profile_image(new_user.id, data)
+    except Exception as e:
+        db.rollback()
+        log.error("Profile image save failed during registration email=%s: %s", user.email, e)
+        raise HTTPException(status_code=500, detail="Failed to save profile image. Please try again.")
+
     new_user.profile_image_path = path
     db.commit()
 
@@ -635,7 +612,8 @@ def refresh_token(data: RefreshRequest, request: Request, db: Session = Depends(
     if expires_at < now:
         raise HTTPException(status_code=401,detail="Refresh token expired")
     if token_obj.device_fingerprint != fingerprint:
-        raise HTTPException(403, "Device mismatch")
+        log.warning("Refresh token device mismatch user=%s ip=%s", token_obj.user_id, request.client.host)
+        raise HTTPException(401, "Device mismatch")
 
     user = (
         db.query(models.User)
@@ -1090,35 +1068,6 @@ def verify_unlock(
 
     if not is_valid:
         raise HTTPException(400, "Invalid or expired OTP")
-
-    # token = (
-    #     db.query(models.AccountUnlockToken)
-    #     .filter(
-    #         models.AccountUnlockToken.user_id == user.id,
-    #         models.AccountUnlockToken.used == False,
-    #         models.AccountUnlockToken.expires_at > datetime.utcnow()
-    #     )
-    #     .order_by(models.AccountUnlockToken.created_at.desc())
-    #     .first()
-    # )
-
-    # if not token:
-    #     raise HTTPException(400, "OTP expired")
-
-    # if token.attempts >= settings.MAX_OTP_ATTEMPTS:
-    #     raise HTTPException(403, "OTP locked")
-
-    # if not verify_otp(otp, token.otp_hash):
-
-    #     token.attempts += 1
-
-    #     db.commit()
-
-    #     raise HTTPException(400, "Invalid OTP")
-
-    # ---------------- SUCCESS ----------------
-
-    # token.used = True
 
     user.failed_login_attempts = 0
     user.locked_until = None

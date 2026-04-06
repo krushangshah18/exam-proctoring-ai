@@ -40,8 +40,9 @@ class Settings:
     MAX_TRUSTED_DEVICES=int(os.getenv("MAX_TRUSTED_DEVICES",3))
 
     # Proctoring engine containers — comma-separated list of base URLs
-    # e.g. "http://13.201.166.165:8000,http://13.201.166.165:8001"
-    PROCTOR_ENGINE_URLS: str = os.getenv("PROCTOR_ENGINE_URLS", "http://13.201.166.165:8000,http://13.201.166.165:8001")
+    # e.g. "http://10.0.0.1:8000,http://10.0.0.1:8001"
+    # REQUIRED: set PROCTOR_ENGINE_URLS in your environment / .env file.
+    PROCTOR_ENGINE_URLS: str = os.getenv("PROCTOR_ENGINE_URLS", "")
     PROCTOR_ENGINE_MAX_SESSIONS: int = int(os.getenv("PROCTOR_ENGINE_MAX_SESSIONS", 3))
 
     @property

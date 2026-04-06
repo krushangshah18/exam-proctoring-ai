@@ -160,17 +160,20 @@ def review_application(
 
             audit_action = "PROMOTE_TO_ADMIN"
 
-            send_email(
-                to=app.email,
-                subject="Admin Role Granted",
-                body="""
+            try:
+                send_email(
+                    to=app.email,
+                    subject="Admin Role Granted",
+                    body="""
     Your account has been upgraded to ADMIN.
 
     You can now manage exams.
 
     - Exam Proctoring Team
     """
-            )
+                )
+            except Exception as _e:
+                log.error("Failed to send promotion email to %s: %s", app.email, _e)
 
         # ---------------- CASE 3: Deleted User → Reactivate ----------------
         elif user and not user.is_active:
@@ -186,10 +189,11 @@ def review_application(
             admin = user
             audit_action = "REACTIVATE_ADMIN"
 
-            send_email(
-                to=app.email,
-                subject="Admin Account Reactivated",
-                body=f"""
+            try:
+                send_email(
+                    to=app.email,
+                    subject="Admin Account Reactivated",
+                    body=f"""
     Hello {app.full_name},
 
     Your admin account has been reactivated.
@@ -201,7 +205,9 @@ def review_application(
 
     - Exam Proctoring Team
     """
-            )
+                )
+            except Exception as _e:
+                log.error("Failed to send reactivation email to %s: %s", app.email, _e)
 
         # ---------------- CASE 4: New User ----------------
         else:
@@ -222,10 +228,11 @@ def review_application(
 
             audit_action = "APPROVE_ADMIN_APPLICATION"
 
-            send_email(
-                to=app.email,
-                subject="Admin Account Approved",
-                body=f"""
+            try:
+                send_email(
+                    to=app.email,
+                    subject="Admin Account Approved",
+                    body=f"""
     Hello {app.full_name},
 
     Your admin account has been approved.
@@ -237,7 +244,9 @@ def review_application(
 
     - Exam Proctoring Team
     """
-            )
+                )
+            except Exception as _e:
+                log.error("Failed to send approval email to %s: %s", app.email, _e)
 
         # ---------------- UPDATE APPLICATION ----------------
 
@@ -286,10 +295,11 @@ def review_application(
             current_user.id
         )
 
-        send_email(
-            to=app.email,
-            subject="Admin Application Status Update",
-            body=f"""
+        try:
+            send_email(
+                to=app.email,
+                subject="Admin Application Status Update",
+                body=f"""
 Hello {app.full_name},
 
 We appreciate your interest in joining as an admin/teacher.
@@ -301,7 +311,9 @@ If you have any questions or would like to appeal, please contact support.
 
 - Exam Proctoring Team
 """
-        )
+            )
+        except Exception as _e:
+            log.error("Failed to send rejection email to %s: %s", app.email, _e)
 
     db.commit()
 

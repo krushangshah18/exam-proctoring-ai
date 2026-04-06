@@ -182,13 +182,27 @@ def get_exam_history(
         .all()
     )
 
+    # Batch-load all sessions at once to avoid N+1 queries
+    exam_ids = [exam.id for _, exam in invites]
+    all_sessions = (
+        db.query(models.ExamSession)
+        .filter(
+            models.ExamSession.user_id == current_user.id,
+            models.ExamSession.exam_id.in_(exam_ids),
+        )
+        .order_by(models.ExamSession.created_at.desc())
+        .all()
+    )
+    # Keep newest session per exam (dict keyed by exam_id str)
+    sessions_by_exam: dict = {}
+    for s in all_sessions:
+        key = str(s.exam_id)
+        if key not in sessions_by_exam:
+            sessions_by_exam[key] = s
+
     result = []
     for invite, exam in invites:
-        # Find session for this exam — newest first (multiple sessions exist after Fix-B appeal flow)
-        session = db.query(models.ExamSession).filter(
-            models.ExamSession.user_id == current_user.id,
-            models.ExamSession.exam_id == exam.id,
-        ).order_by(models.ExamSession.created_at.desc()).first()
+        session = sessions_by_exam.get(str(exam.id))
 
         session_status = session.status if session else None
         is_history = (
@@ -1040,8 +1054,7 @@ def end_exam(
         import asyncio as _asyncio
         from app.exam.proctor_proxy import fetch_session_log as _fetch_log
         try:
-            loop = _asyncio.get_event_loop()
-            log_data = loop.run_until_complete(
+            log_data = _asyncio.run(
                 _fetch_log(session.proctor_engine_url, session.proctor_pc_id)
             )
             risk = log_data.get("risk", {})

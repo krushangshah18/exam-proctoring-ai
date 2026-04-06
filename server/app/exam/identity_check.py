@@ -22,13 +22,9 @@ from __future__ import annotations
 import asyncio
 import random
 from datetime import datetime, UTC
-from typing import TYPE_CHECKING
 
 from app.core import log, validate_single_face, generate_embedding, verify_same_person
 from app.exam.proctor_proxy import fetch_snapshot
-
-if TYPE_CHECKING:
-    pass
 
 # session_id (str) → running asyncio.Task
 _identity_tasks: dict[str, asyncio.Task] = {}
@@ -189,7 +185,8 @@ async def _perform_single_check(
         "Identity check TERMINATED (all %d retries failed): session=%s",
         retry_count, session_id,
     )
-    _terminate_session_db(session_id)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _terminate_session_db, session_id)
     await push_event(session_id, "TERMINATED", {
         "type": "TERMINATED",
         "reason": "identity_mismatch",
@@ -219,7 +216,7 @@ async def _check_face(
         log.warning("Identity check: snapshot unavailable (pc_id=%s): %s", pc_id, exc)
         return True  # Benefit of the doubt — engine or network hiccup
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         face_box = await loop.run_in_executor(None, validate_single_face, jpeg_bytes)
         new_embedding = await loop.run_in_executor(None, generate_embedding, jpeg_bytes, face_box)

@@ -197,7 +197,7 @@ async def stream_engine_events(
                         if "session_end" in message:
                             return
         except httpx.RemoteProtocolError:
-            # Engine closed the connection cleanly
+            # Engine closed the connection cleanly (expected on session end)
             global _remote_protocol_last_log_at
             now = time.time()
             if now - _remote_protocol_last_log_at >= 60:
@@ -207,7 +207,6 @@ async def stream_engine_events(
                     engine_url,
                 )
                 _remote_protocol_last_log_at = now
-            pass
         except Exception as exc:
             log.warning("SSE proxy error (pc_id=%s): %s", pc_id, exc)
             # Yield an error event so the client knows

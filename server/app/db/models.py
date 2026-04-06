@@ -245,27 +245,6 @@ class AdminApplication(UUIDMixin, TimestampMixin, Base):
     reviewer = relationship("User", foreign_keys=[reviewed_by])
 
 
-# class AccountUnlockToken(UUIDMixin, TimestampMixin, Base):
-#     __tablename__ = "account_unlock_tokens"
-
-#     user_id = Column(
-#         UUID(as_uuid=True),
-#         ForeignKey("users.id"),
-#         nullable=False
-#     )
-
-#     otp_hash = Column(String, nullable=False)
-
-#     expires_at = Column(DateTime, nullable=False)
-
-#     used = Column(Boolean, default=False)
-
-#     attempts = Column(Integer, default=0)
-
-#     user = relationship("User")
-
-
-
 class UserDevice(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "user_devices"
 

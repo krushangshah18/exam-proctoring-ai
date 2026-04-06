@@ -71,6 +71,17 @@ async def push_event(session_id: str, event_type: str, data: dict) -> None:
             _log_queue_full(session_id, event_type)
 
 
+def _safe_put(queue: asyncio.Queue, item: dict, session_id: str, event_type: str) -> None:
+    """
+    Called on the event loop thread by call_soon_threadsafe.
+    Handles QueueFull here where the exception can actually be caught.
+    """
+    try:
+        queue.put_nowait(item)
+    except asyncio.QueueFull:
+        _log_queue_full(session_id, event_type)
+
+
 def push_event_sync(session_id: str, event_type: str, data: dict) -> None:
     """
     Push an event from a sync context (sync FastAPI route handler).
@@ -80,22 +91,20 @@ def push_event_sync(session_id: str, event_type: str, data: dict) -> None:
     if session_id not in _queues:
         return
     if _main_loop is None:
-        # If this happens, SSE push infrastructure isn't initialised correctly.
         log.error("push_event_sync called before event loop initialised (session_id=%s, event=%s)", session_id, event_type)
         return
     try:
         _main_loop.call_soon_threadsafe(
-            _queues[session_id].put_nowait,
+            _safe_put,
+            _queues[session_id],
             {"type": event_type, "data": data},
+            session_id,
+            event_type,
         )
     except RuntimeError as e:
-        # Thread-safety / lifecycle issue; log for diagnostics.
         log.warning(
             "SSE push_event_sync runtime error (session_id=%s, event=%s): %s",
             session_id,
             event_type,
             e,
         )
-        return
-    except asyncio.QueueFull:
-        _log_queue_full(session_id, event_type)
