@@ -45,7 +45,7 @@ function parseServerDate(value: string): Date {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-const examSchema = z.object({
+const baseExamSchema = z.object({
   title: z.string().min(3, 'Title must be at least 3 characters').max(150),
   exam_mode: z.enum(['FLEXIBLE', 'FIXED']),
   start_window: z.string().min(1, 'Start window is required'),
@@ -70,7 +70,11 @@ const examSchema = z.object({
     DETECT_MULTIPLE_PEOPLE: z.boolean(),
   }),
   invites_text: z.string().optional(),
-}).refine(data => {
+});
+
+type ExamFormValues = z.infer<typeof baseExamSchema>;
+
+const examSchema = baseExamSchema.refine(data => {
   const startD = new Date(data.start_window);
   return startD >= new Date(Date.now() + 9 * 60000);
 }, { message: 'Start window must be at least 10 minutes in the future', path: ['start_window'] })
@@ -83,8 +87,6 @@ const examSchema = z.object({
   const d = new Date(data.hard_join_deadline);
   return d >= new Date(data.start_window) && d <= new Date(data.end_window);
 }, { message: 'Join deadline must be between the start and end windows', path: ['hard_join_deadline'] });
-
-type ExamFormValues = z.infer<typeof examSchema>;
 type InviteRow = { student_email: string };
 type ApiError = { response?: { data?: { detail?: string } } };
 type DetectionFieldKey =
