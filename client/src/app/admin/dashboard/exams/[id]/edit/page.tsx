@@ -158,7 +158,7 @@ export default function EditExamPage() {
   const csvInputRef = useRef<HTMLInputElement>(null);
 
   const form = useForm<ExamFormValues>({
-    resolver: zodResolver(examSchema),
+    resolver: zodResolver(examSchema) as import('react-hook-form').Resolver<ExamFormValues>,
     defaultValues: {
       title: '', exam_mode: 'FLEXIBLE',
       start_window: '', end_window: '', duration_minutes: 60,
