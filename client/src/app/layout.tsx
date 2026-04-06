@@ -4,6 +4,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DeviceAccessGate } from "@/components/common/DeviceAccessGate";
+import { Suspense } from "react";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -31,10 +32,12 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <TooltipProvider>
-          <DeviceAccessGate>
-            {children}
-            <Toaster />
-          </DeviceAccessGate>
+          <Suspense>
+            <DeviceAccessGate>
+              {children}
+              <Toaster />
+            </DeviceAccessGate>
+          </Suspense>
         </TooltipProvider>
       </body>
     </html>
