@@ -736,7 +736,7 @@ export default function EditExamPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-5 rounded-xl border"
                   style={{ background: '#F8FAFC', borderColor: '#E2E8F0' }}>
-                  {[
+                  {([
                     { id: 'DETECT_LOOKING_AWAY', label: 'Eye Gaze' },
                     { id: 'DETECT_LOOKING_DOWN', label: 'Head — Down' },
                     { id: 'DETECT_LOOKING_UP', label: 'Head — Up' },
@@ -748,7 +748,7 @@ export default function EditExamPage() {
                     { id: 'DETECT_HEADPHONE', label: 'Headphone Detection' },
                     { id: 'DETECT_EARBUD', label: 'Earbud Detection' },
                     { id: 'DETECT_MULTIPLE_PEOPLE', label: 'Multiple People' },
-                  ].map((item: { id: DetectionFieldKey; label: string }) => (
+                  ] as { id: DetectionFieldKey; label: string }[]).map((item) => (
                     <FormField key={item.id} control={form.control} name={`detection_config.${item.id}`} render={({ field }) => (
                       <FormItem className="flex items-center gap-3 space-y-0">
                         <FormControl>
