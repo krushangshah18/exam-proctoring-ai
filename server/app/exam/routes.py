@@ -293,6 +293,27 @@ def get_exam_status(
                 "review_note": rr.review_note,
                 "time_extension_minutes": rr.time_extension_minutes,
             }
+        elif session.status == SessionStatus.CREATED.value:
+            # Fix B: new CREATED session (from terminated approval) has no direct RR.
+            # Look for an approved appeal on any sibling session for this user+exam.
+            cross_rr = (
+                db.query(models.ResumeRequest)
+                .join(models.ExamSession, models.ExamSession.id == models.ResumeRequest.session_id)
+                .filter(
+                    models.ExamSession.user_id == current_user.id,
+                    models.ExamSession.exam_id == exam_id,
+                    models.ResumeRequest.status == ResumeStatus.APPROVED.value,
+                )
+                .order_by(models.ResumeRequest.created_at.desc())
+                .first()
+            )
+            if cross_rr:
+                active_resume_request = {
+                    "status": cross_rr.status,
+                    "reason": cross_rr.reason,
+                    "review_note": cross_rr.review_note,
+                    "time_extension_minutes": cross_rr.time_extension_minutes,
+                }
 
     allowed_to_enter = start_time <= now + timedelta(minutes=15)
     time_until_open_ms = max(0, int((start_time - timedelta(minutes=15) - now).total_seconds() * 1000))
@@ -692,14 +713,12 @@ def submit_appeal(
     else:
         if session.status == SessionStatus.ACTIVE.value:
             raise HTTPException(status_code=400, detail="Cannot appeal while session is active")
-        # CREATED means appeal was already approved and student hasn't re-joined yet
-        if session.status == SessionStatus.CREATED.value:
-            raise HTTPException(status_code=400, detail="Your appeal has already been approved. Proceed to rejoin.")
         # Type 1 & 2: student submitted or timer expired — no appeal allowed
         if session.status == SessionStatus.ENDED.value:
             raise HTTPException(status_code=403, detail="This exam has already been submitted. No appeal is allowed.")
 
-    # Enforce one-appeal-per-termination rule
+    # Enforce one-appeal-per-termination rule — check RR BEFORE the CREATED status
+    # guard so that CREATED+PENDING correctly returns "already pending" not "already approved".
     any_rr = (
         db.query(models.ResumeRequest)
         .filter(models.ResumeRequest.session_id == session.id)
@@ -714,6 +733,26 @@ def submit_appeal(
         if any_rr.status == ResumeStatus.APPROVED.value:
             raise HTTPException(status_code=400, detail="Your appeal has already been approved. Proceed to rejoin.")
         # NOT_APPLIED means they previously dismissed — allow re-appeal as long as they can still appeal
+
+    # CREATED with no direct RR: either Fix B new-session (cross-session approved) or
+    # unexpected state. Block re-appeal in both sub-cases.
+    if not any_rr and session.status == SessionStatus.CREATED.value:
+        cross_approved = (
+            db.query(models.ResumeRequest)
+            .join(models.ExamSession, models.ExamSession.id == models.ResumeRequest.session_id)
+            .filter(
+                models.ExamSession.user_id == current_user.id,
+                models.ExamSession.exam_id == exam_id,
+                models.ResumeRequest.status == ResumeStatus.APPROVED.value,
+            )
+            .first()
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Your appeal has already been approved. Proceed to rejoin."
+            if cross_approved else
+            "Your appeal is already in progress. Please wait for admin review."
+        )
 
     # Fix B: cross-session AGAIN check — a sibling session for this user+exam already
     # has an APPROVED appeal, meaning the student has used their one appeal chance.
@@ -917,7 +956,33 @@ def start_exam(
         session.ip_address = request.client.host
         session.user_agent = request.headers.get("user-agent")
         if not session.start_time:
-            session.start_time = datetime.now(UTC)
+            join_time = datetime.now(UTC)
+            session.start_time = join_time
+
+            # For late-join CREATED sessions the admin extension is pre-stored on
+            # the session but the mode-specific base penalty hasn't been applied yet
+            # (because we didn't know the actual join time at appeal-submission time).
+            # Apply the same penalty logic used for new sessions below.
+            from app.db.enums import ExamMode as _ExamMode
+            def _to_utc(dt):
+                return dt.replace(tzinfo=UTC) if dt and dt.tzinfo is None else dt
+
+            admin_extension_s = session.time_extension_seconds or 0
+
+            if exam.exam_mode == _ExamMode.FIXED.value:
+                exam_start_utc = _to_utc(exam.start_window)
+                base_s = int((exam_start_utc - join_time).total_seconds())
+                # base_s is negative for late joiners (loses time vs shared deadline)
+                session.time_extension_seconds = base_s + admin_extension_s
+            else:  # FLEXIBLE
+                hjd = _to_utc(exam.hard_join_deadline)
+                if hjd and join_time > hjd:
+                    end_utc = _to_utc(exam.end_window)
+                    remaining_s = (end_utc - join_time).total_seconds()
+                    bonus_s = (exam.max_late_minutes or 0) * 60 if exam.allow_late_extension else 0
+                    total_s = remaining_s + bonus_s
+                    base_s = int(total_s - exam.duration_minutes * 60)
+                    session.time_extension_seconds = base_s + admin_extension_s
         if is_reconnect or session.proctor_pc_id:
             # Clear the stale engine session — the old WebRTC connection is dead.
             # Covers both: DISCONNECTED reconnect and TERMINATED→CREATED (appeal approved).

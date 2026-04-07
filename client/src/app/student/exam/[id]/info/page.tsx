@@ -150,8 +150,15 @@ export default function ExamInfoPage() {
     if (!examId) return;
     fetchStatus();
     const id = setInterval(fetchStatus, pollInterval);
+
+    // Immediately re-fetch when the student returns to this tab — browsers throttle
+    // setInterval in background tabs so approval could be missed without this.
+    const onVisible = () => { if (!document.hidden) fetchStatus(); };
+    document.addEventListener('visibilitychange', onVisible);
+
     return () => {
       clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
       if (gatewayTidRef.current) clearTimeout(gatewayTidRef.current);
     };
   }, [examId, fetchStatus, pollInterval]);

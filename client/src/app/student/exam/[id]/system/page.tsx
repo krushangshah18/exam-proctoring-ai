@@ -82,9 +82,19 @@ export default function SystemCheckPage() {
         const data = res.data;
         if (data.session_status === 'TERMINATED') { router.replace(`/student/exam/${examId}/terminated`); return; }
 
-        // If hard deadline has already passed and student isn't reconnecting,
-        // send them back to info page where they can see appeal options.
-        if (!isReconnect && data.hard_join_deadline && data.session_status !== 'ACTIVE') {
+        // Block everyone after end_window — no exceptions
+        if (data.end_window) {
+          const endMs = parseUTC(data.end_window).getTime();
+          if (Date.now() >= endMs) {
+            toast.error('The exam has ended.');
+            router.replace(`/student/exam/${examId}/info`);
+            return;
+          }
+        }
+
+        // Block if past hard deadline UNLESS this student has an approved appeal
+        const isApprovalResuming = data.active_resume_request?.status === 'APPROVED';
+        if (!isReconnect && !isApprovalResuming && data.hard_join_deadline && data.session_status !== 'ACTIVE') {
           const deadlineMs = parseUTC(data.hard_join_deadline).getTime();
           if (Date.now() > deadlineMs) {
             toast.error('The join deadline has passed. Please submit an appeal.');

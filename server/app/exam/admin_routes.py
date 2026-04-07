@@ -1024,27 +1024,34 @@ def review_resume_request(
     rr.time_extension_minutes = data.time_extension_minutes if data.decision == "APPROVED" else None
 
     if data.decision == "APPROVED":
-        # Fix B: keep the terminated session intact (preserves its alerts/proofs as a
-        # clean separate report), and create a NEW ExamSession so the next attempt
-        # gets its own session_id. The student's SSE is still subscribed to the OLD
-        # session_id at this point, so we push RESUME_APPROVED there first.
         added_extension_seconds = 0
         if data.time_extension_minutes and data.time_extension_minutes > 0:
             added_extension_seconds = data.time_extension_minutes * 60
 
-        new_extension_s = (sess.time_extension_seconds or 0) + added_extension_seconds
-
-        new_sess = models.ExamSession(
-            user_id                = sess.user_id,
-            exam_id                = sess.exam_id,
-            status                 = SessionStatus.CREATED.value,
-            start_time             = sess.start_time,   # preserve original start (timer continuity)
-            risk_score             = sess.risk_score,   # carry forward existing risk score
-            time_extension_seconds = new_extension_s,
-            device_fingerprint     = sess.device_fingerprint,
-            ip_address             = sess.ip_address,
-        )
-        db.add(new_sess)
+        if sess.status == SessionStatus.CREATED.value:
+            # Late-join placeholder session: no history to preserve.
+            # Just mark the RR approved and store admin-granted extension directly on
+            # the session. The start endpoint will add the late-penalty on top when
+            # the student actually joins (start_time is still None here).
+            sess.time_extension_seconds = (sess.time_extension_seconds or 0) + added_extension_seconds
+            new_extension_s = sess.time_extension_seconds
+        else:
+            # Fix B: TERMINATED session has alert/proof history — keep it intact.
+            # Create a NEW CREATED session so the next attempt gets a fresh session_id.
+            # The student's SSE is still subscribed to the OLD session_id (terminated page),
+            # so we push RESUME_APPROVED there first.
+            new_extension_s = (sess.time_extension_seconds or 0) + added_extension_seconds
+            new_sess = models.ExamSession(
+                user_id                = sess.user_id,
+                exam_id                = sess.exam_id,
+                status                 = SessionStatus.CREATED.value,
+                start_time             = sess.start_time,   # preserve original start (timer continuity)
+                risk_score             = sess.risk_score,   # carry forward existing risk score
+                time_extension_seconds = new_extension_s,
+                device_fingerprint     = sess.device_fingerprint,
+                ip_address             = sess.ip_address,
+            )
+            db.add(new_sess)
 
         event_type = "RESUME_APPROVED"
         event_data = {
