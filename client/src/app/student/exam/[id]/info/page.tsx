@@ -110,7 +110,16 @@ export default function ExamInfoPage() {
   const gatewayTidRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const appealPending = exam?.active_resume_request?.status === "PENDING";
+  const appealApproved = exam?.active_resume_request?.status === "APPROVED";
   const sessionStatus = exam?.session_status as string | null;
+
+  // Auto-redirect when late-join appeal gets approved
+  useEffect(() => {
+    if (appealApproved && exam?.is_late) {
+      toast.success("Your appeal was approved! Proceeding to exam setup...");
+      setTimeout(() => router.push(`/student/exam/${examId}/device`), 1500);
+    }
+  }, [appealApproved, exam?.is_late, examId, router]);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -131,7 +140,7 @@ export default function ExamInfoPage() {
     }
   }, [examId]);
 
-  const pollInterval = appealPending
+  const pollInterval = appealPending || appealApproved
     ? 5000
     : sessionStatus === "DISCONNECTED"
       ? 10000
@@ -233,6 +242,8 @@ export default function ExamInfoPage() {
   }
 
   const startTime = parseUTC(exam.start_window);
+  const endTime = exam.end_window ? parseUTC(exam.end_window) : null;
+  const examEnded = endTime ? new Date() >= endTime : false;
   const deadlineTime = exam.hard_join_deadline
     ? parseUTC(exam.hard_join_deadline)
     : null;
@@ -501,6 +512,39 @@ export default function ExamInfoPage() {
       );
     }
 
+    if (examEnded && sessionStatus !== "ACTIVE" && sessionStatus !== "ENDED") {
+      return (
+        <div
+          style={{
+            padding: "20px 24px",
+            background: "rgba(100,116,139,0.06)",
+            borderRadius: "12px",
+            border: "1.5px solid rgba(100,116,139,0.2)",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "12px",
+          }}
+        >
+          <XCircle style={{ width: "20px", height: "20px", color: "#64748B", flexShrink: 0, marginTop: "1px" }} />
+          <div>
+            <h4 style={{ fontSize: "15px", fontWeight: 700, color: "#334155" }}>
+              Exam Has Ended
+            </h4>
+            <p style={{ fontSize: "13px", color: "#64748B", marginTop: "3px", lineHeight: 1.55 }}>
+              This exam's window has closed. You are no longer able to enter.
+            </p>
+            <button
+              onClick={() => router.push("/student/dashboard")}
+              className="st-btn-ghost"
+              style={{ marginTop: "12px" }}
+            >
+              Back to Dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     if (exam.is_late && exam.active_resume_request?.status !== "APPROVED") {
       return (
         <div
@@ -619,6 +663,39 @@ export default function ExamInfoPage() {
                 >
                   Please keep this page open. Do not close the browser.
                 </p>
+              </div>
+            )}
+
+          {exam.late_join_policy === "REVIEW" &&
+            exam.active_resume_request?.status === "APPROVED" && (
+              <div
+                style={{
+                  padding: "14px 16px",
+                  background: "rgba(34,197,94,0.08)",
+                  borderRadius: "8px",
+                  border: "1px solid rgba(34,197,94,0.3)",
+                }}
+              >
+                <p
+                  style={{
+                    fontSize: "13.5px",
+                    color: "#166534",
+                    fontWeight: 700,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}
+                >
+                  <CheckCircle2 style={{ width: "15px", height: "15px" }} />
+                  Your appeal was approved! Redirecting to exam setup...
+                </p>
+                <button
+                  onClick={() => router.push(`/student/exam/${examId}/device`)}
+                  className="st-btn st-btn-primary"
+                  style={{ marginTop: "10px" }}
+                >
+                  Proceed to Setup <ArrowRight style={{ width: "14px", height: "14px" }} />
+                </button>
               </div>
             )}
 

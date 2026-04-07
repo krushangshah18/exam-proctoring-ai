@@ -96,7 +96,7 @@ jobs:
         run: |
           sleep 10
           HTTP=$(curl -sf -o /dev/null -w "%{http_code}" \
-            https://3-6-8-253.sslip.io/health || echo "000")
+            https://api.personalproject.site/health || echo "000")
           echo "Health check HTTP status: $HTTP"
           if [ "$HTTP" != "200" ]; then
             echo "Health check failed — deployment may be broken."

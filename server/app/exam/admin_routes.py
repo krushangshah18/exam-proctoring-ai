@@ -116,7 +116,7 @@ def _send_exam_invites(
 
     for inv in invite_data:
         email = inv["email"]
-        link = f"{settings.FRONTEND_URL}/exam/{inv['token']}/wait"
+        link = f"{settings.FRONTEND_URL}/student/exam/{inv['token']}/info"
         full_name = user_map.get(email.lower())
 
         schedule_lines = ""
