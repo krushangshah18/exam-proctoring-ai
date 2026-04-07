@@ -169,7 +169,13 @@ function ExpandableAlertRow({ entry, index, engineUrl }: { entry: AlertEntry; in
   useEffect(() => {
     let active = true;
     const loadProof = async () => {
-      if (!expanded || !entry.proof_url || !engineUrl) return;
+      if (!expanded || !entry.proof_url) return;
+      // S3 presigned URLs are self-authenticated — use directly
+      if (entry.proof_url.includes('amazonaws.com')) {
+        setProofObjectUrl(entry.proof_url);
+        return;
+      }
+      if (!engineUrl) return;
       const rawPath = entry.proof_url.startsWith('http')
         ? new URL(entry.proof_url).pathname
         : entry.proof_url;

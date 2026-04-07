@@ -140,7 +140,11 @@ function FullReportModal({
   }, [examId, session.engine_url, session.report_id, session.session_id]);
 
   function proofUrl(raw: string): string {
-    if (!raw || !session.engine_url) return raw;
+    if (!raw) return raw;
+    // S3 presigned URLs are self-authenticated — use them directly
+    if (raw.includes('amazonaws.com')) return raw;
+    // Engine-hosted proofs need to be proxied through the backend
+    if (!session.engine_url) return raw;
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     if (raw.startsWith('http')) return `${base}/admin/proxy-proof?engine_url=${encodeURIComponent(session.engine_url)}&path=${encodeURIComponent(new URL(raw).pathname)}`;
     return `${base}/admin/proxy-proof?engine_url=${encodeURIComponent(session.engine_url)}&path=${encodeURIComponent(raw)}`;
@@ -241,10 +245,16 @@ function FullReportModal({
                                 type="button"
                                 onClick={async (e) => {
                                   e.preventDefault();
-                                  try {
-                                    const res = await api.get(proofUrl(ev.proof_url), { responseType: 'blob' });
-                                    const url = URL.createObjectURL(res.data);
+                                  const url = proofUrl(ev.proof_url);
+                                  // S3 presigned URLs are self-authenticated — open directly
+                                  if (url.includes('amazonaws.com')) {
                                     window.open(url, '_blank');
+                                    return;
+                                  }
+                                  try {
+                                    const res = await api.get(url, { responseType: 'blob' });
+                                    const blobUrl = URL.createObjectURL(res.data);
+                                    window.open(blobUrl, '_blank');
                                   } catch {
                                     toast.error('Failed to load proof image');
                                   }
