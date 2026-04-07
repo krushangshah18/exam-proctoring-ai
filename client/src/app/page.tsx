@@ -15,7 +15,7 @@ export default function LandingPage() {
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@300;400;500;600;700&display=swap');
 
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -38,7 +38,7 @@ export default function LandingPage() {
         body {
           background: var(--bg);
           color: var(--text);
-          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-family: 'DM Sans', sans-serif;
           -webkit-font-smoothing: antialiased;
           overflow-x: hidden;
         }
@@ -60,7 +60,7 @@ export default function LandingPage() {
         }
         .lp-logo {
           display: flex; align-items: center; gap: 10px;
-          font-family: 'Syne', sans-serif; font-weight: 700; font-size: 18px;
+          font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 18px;
           color: var(--text); text-decoration: none; letter-spacing: -0.3px;
         }
         .lp-logo-mark {
@@ -80,13 +80,13 @@ export default function LandingPage() {
           padding: 8px 16px; border-radius: 8px; font-size: 14px; font-weight: 500;
           color: var(--muted2); background: transparent; border: none;
           cursor: pointer; text-decoration: none; transition: color 0.2s;
-          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-family: 'DM Sans', sans-serif;
         }
         .lp-btn-ghost:hover { color: var(--text); }
         .lp-btn-primary {
           padding: 9px 18px; border-radius: 8px; font-size: 13.5px; font-weight: 600;
           color: #fff; background: var(--blue); border: none; cursor: pointer;
-          text-decoration: none; font-family: 'Plus Jakarta Sans', sans-serif;
+          text-decoration: none; font-family: 'DM Sans', sans-serif;
           display: inline-flex; align-items: center; gap: 6px;
           transition: opacity 0.2s, transform 0.15s;
         }
@@ -125,9 +125,9 @@ export default function LandingPage() {
           background: var(--blue); animation: lpPulse 2s ease infinite;
         }
         .lp-h1 {
-          font-family: 'Syne', sans-serif;
-          font-size: clamp(44px, 6.8vw, 88px);
-          font-weight: 800; line-height: 1.03; letter-spacing: -0.03em;
+          font-family: 'Space Grotesk', sans-serif;
+          font-size: clamp(40px, 6vw, 80px);
+          font-weight: 700; line-height: 1.1; letter-spacing: -0.02em;
           color: var(--text); max-width: 880px; margin-bottom: 22px;
           animation: lpFadeUp 0.65s 0.1s ease both;
         }
@@ -149,7 +149,7 @@ export default function LandingPage() {
           padding: 14px 28px; border-radius: 10px; font-size: 15px; font-weight: 700;
           color: #fff; background: var(--blue); border: none; cursor: pointer;
           text-decoration: none; display: inline-flex; align-items: center; gap: 8px;
-          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-family: 'DM Sans', sans-serif;
           transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
         }
         .lp-btn-hero-p:hover { opacity: 0.88; transform: translateY(-2px); box-shadow: 0 8px 30px rgba(79,114,255,0.32); }
@@ -158,7 +158,7 @@ export default function LandingPage() {
           color: var(--text); background: transparent;
           border: 1.5px solid rgba(99,139,255,0.3); cursor: pointer;
           text-decoration: none; display: inline-flex; align-items: center; gap: 8px;
-          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-family: 'DM Sans', sans-serif;
           transition: background 0.2s, border-color 0.2s, transform 0.15s;
         }
         .lp-btn-hero-o:hover { background: var(--blue-dim); border-color: var(--blue); transform: translateY(-2px); }
@@ -234,7 +234,7 @@ export default function LandingPage() {
           background: rgba(255,255,255,0.025); border-radius: 7px;
           padding: 8px 10px; border: 1px solid var(--border);
         }
-        .lp-stat-val { font-family: 'Syne', sans-serif; font-size: 19px; font-weight: 700; color: var(--text); line-height: 1; }
+        .lp-stat-val { font-family: 'Space Grotesk', sans-serif; font-size: 19px; font-weight: 700; color: var(--text); line-height: 1; }
         .lp-stat-lbl { font-size: 9.5px; color: var(--muted); margin-top: 2px; }
         .lp-risk-rows { display: flex; flex-direction: column; gap: 5px; margin-top: 2px; }
         .lp-risk-row { display: flex; align-items: center; gap: 7px; }
@@ -254,7 +254,7 @@ export default function LandingPage() {
           content: ''; position: absolute; left: 0; top: 10%; height: 80%; width: 1px; background: var(--border);
         }
         .lp-trust-val {
-          font-family: 'Syne', sans-serif; font-size: 27px; font-weight: 800;
+          font-family: 'Space Grotesk', sans-serif; font-size: 27px; font-weight: 800;
           color: var(--text); letter-spacing: -0.02em;
         }
         .lp-trust-val .u { font-size: 17px; color: var(--blue); }
@@ -269,8 +269,8 @@ export default function LandingPage() {
         }
         .lp-s-eyebrow::before { content: ''; width: 22px; height: 1.5px; background: var(--blue); border-radius: 1px; }
         .lp-s-h2 {
-          font-family: 'Syne', sans-serif; font-size: clamp(30px, 3.8vw, 50px);
-          font-weight: 800; letter-spacing: -0.025em; line-height: 1.1; color: var(--text); margin-bottom: 14px;
+          font-family: 'Space Grotesk', sans-serif; font-size: clamp(28px, 3.5vw, 46px);
+          font-weight: 700; letter-spacing: -0.015em; line-height: 1.15; color: var(--text); margin-bottom: 14px;
         }
         .lp-s-sub { font-size: 16.5px; color: var(--muted2); line-height: 1.72; max-width: 500px; }
 
@@ -299,7 +299,7 @@ export default function LandingPage() {
           position: relative; z-index: 1;
         }
         .lp-feat-h3 {
-          font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700;
+          font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 700;
           color: var(--text); margin-bottom: 9px; position: relative; z-index: 1;
         }
         .lp-feat-p { font-size: 13.5px; color: var(--muted2); line-height: 1.7; position: relative; z-index: 1; }
@@ -324,9 +324,9 @@ export default function LandingPage() {
           width: 54px; height: 54px; border-radius: 50%;
           background: var(--blue-dim); border: 1.5px solid rgba(79,114,255,0.28);
           display: flex; align-items: center; justify-content: center;
-          font-family: 'Syne', sans-serif; font-size: 19px; font-weight: 800; color: var(--blue);
+          font-family: 'Space Grotesk', sans-serif; font-size: 19px; font-weight: 800; color: var(--blue);
         }
-        .lp-step-h3 { font-family: 'Syne', sans-serif; font-size: 15.5px; font-weight: 700; color: var(--text); }
+        .lp-step-h3 { font-family: 'Space Grotesk', sans-serif; font-size: 15.5px; font-weight: 700; color: var(--text); }
         .lp-step-p { font-size: 13px; color: var(--muted2); line-height: 1.65; }
 
         /* SPLIT CTA */
@@ -357,7 +357,7 @@ export default function LandingPage() {
         .lp-chip-b { background: var(--blue-dim); color: #8BA4FF; border: 1px solid rgba(79,114,255,0.2); }
         .lp-chip-c { background: rgba(34,211,238,0.08); color: var(--cyan); border: 1px solid rgba(34,211,238,0.2); }
         .lp-cta-h3 {
-          font-family: 'Syne', sans-serif; font-size: 25px; font-weight: 800;
+          font-family: 'Space Grotesk', sans-serif; font-size: 25px; font-weight: 800;
           color: var(--text); letter-spacing: -0.02em; line-height: 1.2;
         }
         .lp-cta-p { font-size: 13.5px; color: var(--muted2); line-height: 1.72; }
@@ -370,7 +370,7 @@ export default function LandingPage() {
           padding: 13px 26px; border-radius: 10px; font-size: 14px; font-weight: 700;
           color: #07070E; background: var(--cyan); border: none; cursor: pointer;
           text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
-          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-family: 'DM Sans', sans-serif;
           transition: opacity 0.2s, transform 0.15s;
         }
         .lp-btn-cyan:hover { opacity: 0.88; transform: translateY(-2px); }
@@ -378,7 +378,7 @@ export default function LandingPage() {
           padding: 13px 26px; border-radius: 10px; font-size: 14px; font-weight: 700;
           color: #fff; background: var(--blue); border: none; cursor: pointer;
           text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
-          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-family: 'DM Sans', sans-serif;
           transition: opacity 0.2s, transform 0.15s;
         }
         .lp-btn-blue:hover { opacity: 0.88; transform: translateY(-2px); }
@@ -387,7 +387,7 @@ export default function LandingPage() {
           color: var(--text); background: transparent;
           border: 1.5px solid rgba(99,139,255,0.28); cursor: pointer;
           text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
-          font-family: 'Plus Jakarta Sans', sans-serif;
+          font-family: 'DM Sans', sans-serif;
           transition: background 0.2s, border-color 0.2s;
         }
         .lp-btn-ol:hover { background: var(--blue-dim); border-color: var(--blue); }
@@ -576,7 +576,6 @@ export default function LandingPage() {
       {/* TRUST BAR */}
       <div className="lp-trust">
         {[
-          {val: '99', unit: '%', label: 'Detection Accuracy'},
           {val: '<200', unit: 'ms', label: 'Alert Latency'},
           {val: '6', unit: '+', label: 'AI Detection Modules'},
           {val: 'E2E', unit: '', label: 'Encrypted Streams'},

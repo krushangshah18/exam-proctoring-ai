@@ -487,7 +487,7 @@ export default function CreateExamPage() {
           >
             Create New Exam
           </h1>
-          <p className="text-sm mt-0.5" style={{ color: "#646e7a" }}>
+          <p className="text-sm mt-0.5" style={{ color: "#64748B" }}>
             Configure timing, AI proctoring rules, and student invitations.
           </p>
         </div>
@@ -515,7 +515,7 @@ export default function CreateExamPage() {
                   <FormItem className="col-span-1 md:col-span-2">
                     <FormLabel
                       className="text-xs font-semibold uppercase tracking-wider"
-                      style={{ color: "#94A3B8" }}
+                      style={{ color: "#64748B" }}
                     >
                       Exam Title
                     </FormLabel>
@@ -544,7 +544,7 @@ export default function CreateExamPage() {
                   <FormItem>
                     <FormLabel
                       className="text-xs font-semibold uppercase tracking-wider"
-                      style={{ color: "#94A3B8" }}
+                      style={{ color: "#64748B" }}
                     >
                       Exam Mode
                     </FormLabel>
@@ -577,7 +577,7 @@ export default function CreateExamPage() {
                   <FormItem>
                     <FormLabel
                       className="text-xs font-semibold uppercase tracking-wider"
-                      style={{ color: "#94A3B8" }}
+                      style={{ color: "#64748B" }}
                     >
                       Duration (Minutes)
                     </FormLabel>
@@ -634,7 +634,7 @@ export default function CreateExamPage() {
                   <FormItem>
                     <FormLabel
                       className="text-xs font-semibold uppercase tracking-wider"
-                      style={{ color: "#94A3B8" }}
+                      style={{ color: "#64748B" }}
                     >
                       Start Window
                     </FormLabel>
@@ -653,7 +653,7 @@ export default function CreateExamPage() {
                       />
                     </FormControl>
                     {field.value && (
-                      <p className="text-xs mt-1" style={{ color: "#94A3B8" }}>
+                      <p className="text-xs mt-1" style={{ color: "#64748B" }}>
                         {formatDatePreview(field.value)}
                       </p>
                     )}
@@ -669,7 +669,7 @@ export default function CreateExamPage() {
                   <FormItem>
                     <FormLabel
                       className="text-xs font-semibold uppercase tracking-wider"
-                      style={{ color: "#94A3B8" }}
+                      style={{ color: "#64748B" }}
                     >
                       End Window
                     </FormLabel>
@@ -694,7 +694,7 @@ export default function CreateExamPage() {
                       />
                     </FormControl>
                     {field.value && (
-                      <p className="text-xs mt-1" style={{ color: "#94A3B8" }}>
+                      <p className="text-xs mt-1" style={{ color: "#64748B" }}>
                         {formatDatePreview(field.value)}
                       </p>
                     )}
@@ -715,7 +715,7 @@ export default function CreateExamPage() {
                   <FormItem>
                     <FormLabel
                       className="text-xs font-semibold uppercase tracking-wider"
-                      style={{ color: "#94A3B8" }}
+                      style={{ color: "#64748B" }}
                     >
                       Hard Join Deadline
                     </FormLabel>
@@ -745,7 +745,7 @@ export default function CreateExamPage() {
                       />
                     </FormControl>
                     {field.value && (
-                      <p className="text-xs mt-1" style={{ color: "#94A3B8" }}>
+                      <p className="text-xs mt-1" style={{ color: "#64748B" }}>
                         {formatDatePreview(field.value)}
                       </p>
                     )}
@@ -799,7 +799,7 @@ export default function CreateExamPage() {
                   <FormItem>
                     <FormLabel
                       className="text-xs font-semibold uppercase tracking-wider"
-                      style={{ color: "#94A3B8" }}
+                      style={{ color: "#64748B" }}
                     >
                       Late Join Policy
                     </FormLabel>
@@ -853,7 +853,7 @@ export default function CreateExamPage() {
                         {examMode === "FIXED" && (
                           <span
                             className="text-xs font-normal mt-0.5"
-                            style={{ color: "#94A3B8" }}
+                            style={{ color: "#64748B" }}
                           >
                             Disabled in FIXED mode
                           </span>
@@ -872,7 +872,7 @@ export default function CreateExamPage() {
                     <FormItem>
                       <FormLabel
                         className="text-xs font-semibold uppercase tracking-wider"
-                        style={{ color: "#94A3B8" }}
+                        style={{ color: "#64748B" }}
                       >
                         Max Late Join (Mins past start)
                       </FormLabel>
@@ -922,7 +922,7 @@ export default function CreateExamPage() {
                   <FormItem>
                     <FormLabel
                       className="text-xs font-semibold uppercase tracking-wider block mb-3"
-                      style={{ color: "#94A3B8" }}
+                      style={{ color: "#64748B" }}
                     >
                       Detection Strictness
                     </FormLabel>
@@ -1049,7 +1049,7 @@ export default function CreateExamPage() {
                     <FormItem>
                       <FormLabel
                         className="text-xs font-semibold uppercase tracking-wider"
-                        style={{ color: "#94A3B8" }}
+                        style={{ color: "#64748B" }}
                       >
                         Flag Threshold (Warnings)
                       </FormLabel>
@@ -1130,7 +1130,7 @@ export default function CreateExamPage() {
                       <p className="text-sm font-semibold mb-2">
                         Accepted Formats
                       </p>
-                      <p className="text-xs mb-2" style={{ color: "#94A3B8" }}>
+                      <p className="text-xs mb-2" style={{ color: "#64748B" }}>
                         Paste anything — comma-separated, newline-separated,
                         JSON arrays, or even a block of text. We extract all
                         valid emails.
@@ -1267,7 +1267,7 @@ Just raw text with email@uni.edu inside`}
               disabled={isSubmitting}
               className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold text-white transition-all duration-150"
               style={{
-                background: isSubmitting ? "#94A3B8" : "#22577A",
+                background: isSubmitting ? "#64748B" : "#22577A",
                 cursor: isSubmitting ? "not-allowed" : "pointer",
               }}
               onMouseEnter={(e) => {

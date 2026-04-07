@@ -140,11 +140,12 @@ export default function ExamInfoPage() {
     }
   }, [examId]);
 
-  const pollInterval = appealPending || appealApproved
-    ? 5000
-    : sessionStatus === "DISCONNECTED"
-      ? 10000
-      : 60000;
+  const pollInterval =
+    appealPending || appealApproved
+      ? 5000
+      : sessionStatus === "DISCONNECTED"
+        ? 10000
+        : 60000;
 
   useEffect(() => {
     if (!examId) return;
@@ -153,12 +154,14 @@ export default function ExamInfoPage() {
 
     // Immediately re-fetch when the student returns to this tab — browsers throttle
     // setInterval in background tabs so approval could be missed without this.
-    const onVisible = () => { if (!document.hidden) fetchStatus(); };
-    document.addEventListener('visibilitychange', onVisible);
+    const onVisible = () => {
+      if (!document.hidden) fetchStatus();
+    };
+    document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       clearInterval(id);
-      document.removeEventListener('visibilitychange', onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
       if (gatewayTidRef.current) clearTimeout(gatewayTidRef.current);
     };
   }, [examId, fetchStatus, pollInterval]);
@@ -532,12 +535,27 @@ export default function ExamInfoPage() {
             gap: "12px",
           }}
         >
-          <XCircle style={{ width: "20px", height: "20px", color: "#64748B", flexShrink: 0, marginTop: "1px" }} />
+          <XCircle
+            style={{
+              width: "20px",
+              height: "20px",
+              color: "#64748B",
+              flexShrink: 0,
+              marginTop: "1px",
+            }}
+          />
           <div>
             <h4 style={{ fontSize: "15px", fontWeight: 700, color: "#334155" }}>
               Exam Has Ended
             </h4>
-            <p style={{ fontSize: "13px", color: "#64748B", marginTop: "3px", lineHeight: 1.55 }}>
+            <p
+              style={{
+                fontSize: "13px",
+                color: "#64748B",
+                marginTop: "3px",
+                lineHeight: 1.55,
+              }}
+            >
               This exam's window has closed. You are no longer able to enter.
             </p>
             <button
@@ -664,7 +682,7 @@ export default function ExamInfoPage() {
                 <p
                   style={{
                     fontSize: "11.5px",
-                    color: "#94A3B8",
+                    color: "#64748B",
                     marginTop: "6px",
                   }}
                 >
@@ -701,7 +719,8 @@ export default function ExamInfoPage() {
                   className="st-btn st-btn-primary"
                   style={{ marginTop: "10px" }}
                 >
-                  Proceed to Setup <ArrowRight style={{ width: "14px", height: "14px" }} />
+                  Proceed to Setup{" "}
+                  <ArrowRight style={{ width: "14px", height: "14px" }} />
                 </button>
               </div>
             )}

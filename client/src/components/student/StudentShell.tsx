@@ -1,14 +1,21 @@
-'use client';
+"use client";
 
-import React from 'react';
-import { GraduationCap, LogOut, ChevronDown, User, ChevronLeft, ShieldCheck } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import React from "react";
+import {
+  GraduationCap,
+  LogOut,
+  ChevronDown,
+  User,
+  ChevronLeft,
+  ShieldCheck,
+} from "lucide-react";
+import { useRouter } from "next/navigation";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from "@/components/ui/dropdown-menu";
 
 // ── Shared CSS injected once ─────────────────────────────────────────────────
 
@@ -31,7 +38,7 @@ export function StudentStyles() {
       }
       .st-btn:hover:not(:disabled) { background: #2C6A91; }
       .st-btn:active:not(:disabled) { background: #1B455F; transform: scale(0.99); }
-      .st-btn:disabled { background: #94A3B8 !important; cursor: not-allowed; }
+      .st-btn:disabled { background: #64748B !important; cursor: not-allowed; }
 
       .st-btn-lg {
         padding: 12px 24px; font-size: 14.5px; border-radius: 10px;
@@ -94,7 +101,7 @@ export function StudentStyles() {
         box-shadow: 0 0 0 3px rgba(56,163,165,0.12);
       }
       .st-input::placeholder { color: #CBD5E1; }
-      .st-input:disabled { background: #F8FAFC; color: #94A3B8; cursor: not-allowed; }
+      .st-input:disabled { background: #F8FAFC; color: #64748B; cursor: not-allowed; }
 
       .st-textarea {
         display: block; width: 100%;
@@ -157,7 +164,7 @@ export function StudentStyles() {
         outline: none; cursor: pointer;
         transition: border-color 150ms, box-shadow 150ms;
         appearance: none;
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
         background-repeat: no-repeat;
         background-position: right 12px center;
         padding-right: 36px;
@@ -187,87 +194,172 @@ export function StudentPageShell({
   user,
   onLogout,
   backHref,
-  backLabel = 'Back',
+  backLabel = "Back",
   title,
   loading,
 }: StudentPageShellProps) {
   const router = useRouter();
   const initials = user?.full_name
-    ? user.full_name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
-    : 'S';
+    ? user.full_name
+        .split(" ")
+        .map((n: string) => n[0])
+        .join("")
+        .slice(0, 2)
+        .toUpperCase()
+    : "S";
 
   return (
-    <div className="st-root" style={{ minHeight: '100vh', background: '#EEF4F8', fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+    <div
+      className="st-root"
+      style={{
+        minHeight: "100vh",
+        background: "#EEF4F8",
+        fontFamily: "'Plus Jakarta Sans', sans-serif",
+      }}
+    >
       <StudentStyles />
 
       {/* Header */}
-      <header style={{
-        background: '#fff',
-        borderBottom: '1px solid #E2E8F0',
-        position: 'sticky', top: 0, zIndex: 40,
-      }}>
+      <header
+        style={{
+          background: "#fff",
+          borderBottom: "1px solid #E2E8F0",
+          position: "sticky",
+          top: 0,
+          zIndex: 40,
+        }}
+      >
         {/* Gradient accent bar */}
-        <div style={{
-          height: '3px',
-          background: 'linear-gradient(90deg, #22577A 0%, #38A3A5 55%, #57CC99 100%)',
-        }} />
+        <div
+          style={{
+            height: "3px",
+            background:
+              "linear-gradient(90deg, #22577A 0%, #38A3A5 55%, #57CC99 100%)",
+          }}
+        />
 
-        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '0 24px' }}>
-          <div style={{ height: '60px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
+        <div
+          style={{ maxWidth: "1200px", margin: "0 auto", padding: "0 24px" }}
+        >
+          <div
+            style={{
+              height: "60px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "16px",
+            }}
+          >
             {/* Left: logo or back */}
             {backHref ? (
               <button
                 onClick={() => router.push(backHref)}
                 className="st-btn-ghost"
-                style={{ gap: '6px', padding: '7px 12px' }}
+                style={{ gap: "6px", padding: "7px 12px" }}
               >
-                <ChevronLeft style={{ width: '15px', height: '15px' }} />
+                <ChevronLeft style={{ width: "15px", height: "15px" }} />
                 {backLabel}
               </button>
             ) : (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
-                <div style={{
-                  width: '32px', height: '32px', borderRadius: '8px',
-                  background: '#22577A', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  <GraduationCap style={{ width: '16px', height: '16px', color: '#57CC99' }} />
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "9px" }}
+              >
+                <div
+                  style={{
+                    width: "32px",
+                    height: "32px",
+                    borderRadius: "8px",
+                    background: "#22577A",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <GraduationCap
+                    style={{ width: "16px", height: "16px", color: "#57CC99" }}
+                  />
                 </div>
-                <span style={{ fontWeight: 800, fontSize: '16px', color: '#0F172A', letterSpacing: '-0.01em' }}>ProctorAI</span>
+                <span
+                  style={{
+                    fontWeight: 800,
+                    fontSize: "16px",
+                    color: "#0F172A",
+                    letterSpacing: "-0.01em",
+                  }}
+                >
+                  ProctorAI
+                </span>
               </div>
             )}
 
             {/* Right: nav actions */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
               {onLogout && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
                       type="button"
                       style={{
-                        display: 'flex', alignItems: 'center', gap: '8px',
-                        padding: '6px 10px', borderRadius: '10px', cursor: 'pointer',
-                        background: 'transparent', border: 'none', transition: 'background 150ms',
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        padding: "6px 10px",
+                        borderRadius: "10px",
+                        cursor: "pointer",
+                        background: "transparent",
+                        border: "none",
+                        transition: "background 150ms",
                       }}
-                      onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#F1F5F9'}
-                      onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
+                      onMouseEnter={(e) =>
+                        ((e.currentTarget as HTMLElement).style.background =
+                          "#F1F5F9")
+                      }
+                      onMouseLeave={(e) =>
+                        ((e.currentTarget as HTMLElement).style.background =
+                          "transparent")
+                      }
                     >
-                      <div style={{
-                        width: '30px', height: '30px', borderRadius: '50%',
-                        background: '#22577A', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: '12px', fontWeight: 700, color: '#fff', flexShrink: 0,
-                      }}>
-                        {loading ? '·' : initials}
+                      <div
+                        style={{
+                          width: "30px",
+                          height: "30px",
+                          borderRadius: "50%",
+                          background: "#22577A",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: "12px",
+                          fontWeight: 700,
+                          color: "#fff",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {loading ? "·" : initials}
                       </div>
-                      <span style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>
-                        {loading ? '…' : user?.full_name?.split(' ')[0] || 'Student'}
+                      <span
+                        style={{
+                          fontSize: "13px",
+                          fontWeight: 600,
+                          color: "#475569",
+                        }}
+                      >
+                        {loading
+                          ? "…"
+                          : user?.full_name?.split(" ")[0] || "Student"}
                       </span>
-                      <ChevronDown style={{ width: '14px', height: '14px', color: '#94A3B8' }} />
+                      <ChevronDown
+                        style={{
+                          width: "14px",
+                          height: "14px",
+                          color: "#64748B",
+                        }}
+                      />
                     </button>
                   </DropdownMenuTrigger>
 
                   <DropdownMenuContent align="end" className="w-44">
                     <DropdownMenuItem
-                      onClick={() => router.push('/student/profile')}
+                      onClick={() => router.push("/student/profile")}
                       className="cursor-pointer"
                     >
                       <User />
@@ -289,10 +381,21 @@ export function StudentPageShell({
       </header>
 
       {/* Main content */}
-      <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '32px 24px' }}>
+      <main
+        style={{ maxWidth: "1200px", margin: "0 auto", padding: "32px 24px" }}
+      >
         {title && (
-          <div style={{ marginBottom: '28px' }}>
-            <h1 style={{ fontSize: '22px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.02em' }}>{title}</h1>
+          <div style={{ marginBottom: "28px" }}>
+            <h1
+              style={{
+                fontSize: "22px",
+                fontWeight: 800,
+                color: "#0F172A",
+                letterSpacing: "-0.02em",
+              }}
+            >
+              {title}
+            </h1>
           </div>
         )}
         {children}
@@ -305,50 +408,109 @@ export function StudentPageShell({
 
 export function ExamSecureShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="st-root" style={{ minHeight: '100vh', background: '#F8FAFC', display: 'flex', flexDirection: 'column', fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+    <div
+      className="st-root"
+      style={{
+        minHeight: "100vh",
+        background: "#F8FAFC",
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: "'Plus Jakarta Sans', sans-serif",
+      }}
+    >
       <StudentStyles />
 
       {/* Secure header */}
-      <header style={{
-        background: '#fff', borderBottom: '1px solid #E2E8F0',
-        padding: '0 24px', height: '56px',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        position: 'sticky', top: 0, zIndex: 50,
-        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{
-            width: '30px', height: '30px', borderRadius: '7px',
-            background: 'rgba(34,87,122,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <ShieldCheck style={{ width: '15px', height: '15px', color: '#22577A' }} />
+      <header
+        style={{
+          background: "#fff",
+          borderBottom: "1px solid #E2E8F0",
+          padding: "0 24px",
+          height: "56px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          position: "sticky",
+          top: 0,
+          zIndex: 50,
+          boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div
+            style={{
+              width: "30px",
+              height: "30px",
+              borderRadius: "7px",
+              background: "rgba(34,87,122,0.1)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <ShieldCheck
+              style={{ width: "15px", height: "15px", color: "#22577A" }}
+            />
           </div>
-          <span style={{ fontWeight: 800, fontSize: '14.5px', color: '#0F172A', letterSpacing: '-0.01em' }}>
+          <span
+            style={{
+              fontWeight: 800,
+              fontSize: "14.5px",
+              color: "#0F172A",
+              letterSpacing: "-0.01em",
+            }}
+          >
             ProctorAI Secure Environment
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-          <span style={{ position: 'relative', display: 'flex', width: '10px', height: '10px' }}>
-            <span style={{
-              position: 'absolute', inset: 0, borderRadius: '50%',
-              background: '#22C55E', opacity: 0.6,
-              animation: 'ping 1s cubic-bezier(0,0,.2,1) infinite',
-            }} />
+        <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+          <span
+            style={{
+              position: "relative",
+              display: "flex",
+              width: "10px",
+              height: "10px",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                inset: 0,
+                borderRadius: "50%",
+                background: "#22C55E",
+                opacity: 0.6,
+                animation: "ping 1s cubic-bezier(0,0,.2,1) infinite",
+              }}
+            />
             <style>{`@keyframes ping{75%,100%{transform:scale(2);opacity:0}}`}</style>
-            <span style={{ position: 'relative', borderRadius: '50%', background: '#22C55E', width: '10px', height: '10px' }} />
+            <span
+              style={{
+                position: "relative",
+                borderRadius: "50%",
+                background: "#22C55E",
+                width: "10px",
+                height: "10px",
+              }}
+            />
           </span>
-          <span style={{
-            fontSize: '12px', fontWeight: 700, color: '#16A34A',
-            background: 'rgba(34,197,94,0.08)', padding: '4px 10px',
-            borderRadius: '20px', border: '1px solid rgba(34,197,94,0.2)',
-          }}>
+          <span
+            style={{
+              fontSize: "12px",
+              fontWeight: 700,
+              color: "#16A34A",
+              background: "rgba(34,197,94,0.08)",
+              padding: "4px 10px",
+              borderRadius: "20px",
+              border: "1px solid rgba(34,197,94,0.2)",
+            }}
+          >
             Secure Connection
           </span>
         </div>
       </header>
 
-      <main style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      <main style={{ flex: 1, display: "flex", flexDirection: "column" }}>
         {children}
       </main>
     </div>
