@@ -307,27 +307,61 @@ export default function LandingPage() {
         /* STEPS */
         .lp-steps {
           display: grid; grid-template-columns: repeat(3, 1fr);
-          gap: 20px; margin-top: 52px; position: relative;
-        }
-        .lp-steps::before {
-          content: ''; position: absolute; top: 27px; left: calc(16.66% + 28px); right: calc(16.66% + 28px);
-          height: 1px; background: linear-gradient(90deg, var(--blue), var(--cyan)); opacity: 0.25; pointer-events: none;
+          gap: 0; margin-top: 56px; position: relative;
         }
         .lp-step {
-          display: flex; flex-direction: column; align-items: center;
-          text-align: center; gap: 14px; padding: 30px 22px;
-          border-radius: 14px; background: var(--surface); border: 1px solid var(--border);
-          transition: border-color 0.25s, background 0.25s;
+          position: relative;
+          padding: 36px 32px 36px;
+          border-radius: 0;
+          display: flex; flex-direction: column; gap: 0;
         }
-        .lp-step:hover { border-color: rgba(99,139,255,0.35); background: var(--surface2); }
-        .lp-step-num {
-          width: 54px; height: 54px; border-radius: 50%;
-          background: var(--blue-dim); border: 1.5px solid rgba(79,114,255,0.28);
-          display: flex; align-items: center; justify-content: center;
-          font-family: 'Space Grotesk', sans-serif; font-size: 19px; font-weight: 800; color: var(--blue);
+        /* Vertical dividers between cards */
+        .lp-step + .lp-step::before {
+          content: ''; position: absolute; left: 0; top: 36px; bottom: 36px;
+          width: 1px; background: var(--border);
         }
-        .lp-step-h3 { font-family: 'Space Grotesk', sans-serif; font-size: 15.5px; font-weight: 700; color: var(--text); }
-        .lp-step-p { font-size: 13px; color: var(--muted2); line-height: 1.65; }
+        /* Top accent bar per step */
+        .lp-step-bar {
+          height: 3px; border-radius: 2px; margin-bottom: 32px;
+          background: linear-gradient(90deg, var(--blue), rgba(79,114,255,0.2));
+        }
+        .lp-step:nth-child(2) .lp-step-bar {
+          background: linear-gradient(90deg, #638BFF, var(--cyan));
+        }
+        .lp-step:nth-child(3) .lp-step-bar {
+          background: linear-gradient(90deg, var(--cyan), rgba(34,211,238,0.2));
+        }
+        /* Ghost number watermark */
+        .lp-step-ghost {
+          position: absolute; top: 20px; right: 24px;
+          font-family: 'Space Grotesk', sans-serif; font-size: 72px; font-weight: 700;
+          color: rgba(255,255,255,0.025); line-height: 1; pointer-events: none; user-select: none;
+          letter-spacing: -0.04em;
+        }
+        /* Icon badge */
+        .lp-step-icon {
+          width: 44px; height: 44px; border-radius: 12px; margin-bottom: 20px;
+          background: var(--blue-dim); border: 1px solid rgba(79,114,255,0.2);
+          display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+        }
+        .lp-step:nth-child(2) .lp-step-icon {
+          background: rgba(99,139,255,0.08); border-color: rgba(99,139,255,0.2);
+        }
+        .lp-step:nth-child(3) .lp-step-icon {
+          background: rgba(34,211,238,0.07); border-color: rgba(34,211,238,0.18);
+        }
+        /* Step label */
+        .lp-step-tag {
+          font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+          color: var(--blue); margin-bottom: 10px;
+        }
+        .lp-step:nth-child(2) .lp-step-tag { color: #638BFF; }
+        .lp-step:nth-child(3) .lp-step-tag { color: var(--cyan); }
+        .lp-step-h3 {
+          font-family: 'Space Grotesk', sans-serif; font-size: 19px; font-weight: 700;
+          color: var(--text); margin-bottom: 12px; letter-spacing: -0.01em; line-height: 1.2;
+        }
+        .lp-step-p { font-size: 13.5px; color: var(--muted2); line-height: 1.7; }
 
         /* SPLIT CTA */
         .lp-split {
@@ -422,8 +456,8 @@ export default function LandingPage() {
           .lp-dash-grid { grid-template-columns: 1fr 1fr; }
           .lp-dash-grid .lp-cell:nth-child(3) { display: none; }
           .lp-trust-item { padding: 0 18px; }
-          .lp-steps { grid-template-columns: 1fr; }
-          .lp-steps::before { display: none; }
+          .lp-step + .lp-step::before { display: none; }
+          .lp-step { padding: 28px 22px; }
           .lp-split { grid-template-columns: 1fr; }
           .lp-footer { flex-direction: column; text-align: center; padding: 28px 24px; }
           .lp-feat-grid { grid-template-columns: 1fr; }
@@ -621,18 +655,64 @@ export default function LandingPage() {
           <h2 className="lp-s-h2">Up and running<br />in three steps.</h2>
           <p className="lp-s-sub">From invitation to submission, every step is guided and automated.</p>
 
-          <div className="lp-steps">
-            {[
-              { n: '01', title: 'Schedule & Invite', desc: 'Admins create an exam, configure detection sensitivity, and send secure invite tokens directly to enrolled students.' },
-              { n: '02', title: 'Verify & Connect', desc: 'Students complete a system check, verify their face against their enrolled photo, and join a secure proctored session.' },
-              { n: '03', title: 'Monitor & Report', desc: 'AI monitors in real time. Admins see live risk scores, intervene if needed, and receive a full violation report on completion.' },
-            ].map(s => (
-              <div key={s.n} className="lp-step">
-                <div className="lp-step-num">{s.n}</div>
-                <h3 className="lp-step-h3">{s.title}</h3>
-                <p className="lp-step-p">{s.desc}</p>
+          {/* Step cards — borderless grid with top accent bars */}
+          <div style={{
+            marginTop: '52px',
+            border: '1px solid var(--border)',
+            borderRadius: '18px',
+            overflow: 'hidden',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3,1fr)',
+            background: 'var(--surface2)',
+          }}>
+            {/* Step 1 */}
+            <div className="lp-step">
+              <div className="lp-step-ghost">01</div>
+              <div className="lp-step-bar" />
+              <div className="lp-step-icon">
+                {/* Calendar/schedule icon */}
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4F72FF" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>
+                  <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>
+                </svg>
               </div>
-            ))}
+              <div className="lp-step-tag">Step 01</div>
+              <h3 className="lp-step-h3">Schedule & Invite</h3>
+              <p className="lp-step-p">Admins create an exam, configure detection sensitivity, and send secure invite tokens directly to enrolled students via email.</p>
+            </div>
+
+            {/* Step 2 */}
+            <div className="lp-step">
+              <div className="lp-step-ghost">02</div>
+              <div className="lp-step-bar" />
+              <div className="lp-step-icon">
+                {/* Face/verify icon */}
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#638BFF" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="8" r="4"/>
+                  <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+                  <path d="M16 3.5A4 4 0 0 1 19 7" /><path d="M19 3l2 2-2 2"/>
+                </svg>
+              </div>
+              <div className="lp-step-tag">Step 02</div>
+              <h3 className="lp-step-h3">Verify & Connect</h3>
+              <p className="lp-step-p">Students complete a system check, verify their face against their enrolled photo, and join a secure proctored session with a single click.</p>
+            </div>
+
+            {/* Step 3 */}
+            <div className="lp-step">
+              <div className="lp-step-ghost">03</div>
+              <div className="lp-step-bar" />
+              <div className="lp-step-icon">
+                {/* Chart/report icon */}
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#22D3EE" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 3v18h18"/>
+                  <path d="M7 16l4-4 4 4 4-6"/>
+                </svg>
+              </div>
+              <div className="lp-step-tag">Step 03</div>
+              <h3 className="lp-step-h3">Monitor & Report</h3>
+              <p className="lp-step-p">AI monitors in real time. Admins see live risk scores, intervene if needed, and receive a full violation report on exam completion.</p>
+            </div>
           </div>
         </div>
       </div>
