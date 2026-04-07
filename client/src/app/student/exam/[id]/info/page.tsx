@@ -163,11 +163,11 @@ export default function ExamInfoPage() {
     try {
       await api.post(`/exam/${examId}/appeal`, { reason });
       toast.success("Appeal submitted successfully.");
-      await fetchStatus();
     } catch (err: any) {
       toast.error(err.response?.data?.detail || "Failed to submit appeal");
     } finally {
       setSubmittingAppeal(false);
+      await fetchStatus(); // Always refresh — catches "already approved" state too
     }
   };
 

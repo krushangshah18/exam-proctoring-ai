@@ -373,6 +373,10 @@ def create_exam(
         if data.hard_join_deadline is None:
             raise HTTPException(status_code=400, detail="FIXED exam: hard_join_deadline is required.")
         hard_join_deadline_val = _utc(data.hard_join_deadline)
+        if (hard_join_deadline_val - start_utc_val).total_seconds() < 60:
+            raise HTTPException(status_code=400, detail="Hard join deadline must be at least 1 minute after the exam start time.")
+        if hard_join_deadline_val >= end_utc:
+            raise HTTPException(status_code=400, detail="Hard join deadline must be before the exam end time.")
         allow_late_ext = False
         max_late = 0
 
@@ -599,6 +603,10 @@ def update_exam(
         if data.hard_join_deadline is None:
             raise HTTPException(status_code=400, detail="FIXED exam: hard_join_deadline is required.")
         new_deadline = _utc(data.hard_join_deadline)
+        if (new_deadline - new_start).total_seconds() < 60:
+            raise HTTPException(status_code=400, detail="Hard join deadline must be at least 1 minute after the exam start time.")
+        if new_deadline >= new_end:
+            raise HTTPException(status_code=400, detail="Hard join deadline must be before the exam end time.")
         new_allow_late_ext = False
         new_max_late = 0
 

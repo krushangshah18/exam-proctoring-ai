@@ -81,6 +81,18 @@ export default function SystemCheckPage() {
         const res = await api.get(`/exam/${examId}/status`);
         const data = res.data;
         if (data.session_status === 'TERMINATED') { router.replace(`/student/exam/${examId}/terminated`); return; }
+
+        // If hard deadline has already passed and student isn't reconnecting,
+        // send them back to info page where they can see appeal options.
+        if (!isReconnect && data.hard_join_deadline && data.session_status !== 'ACTIVE') {
+          const deadlineMs = parseUTC(data.hard_join_deadline).getTime();
+          if (Date.now() > deadlineMs) {
+            toast.error('The join deadline has passed. Please submit an appeal.');
+            router.replace(`/student/exam/${examId}/info`);
+            return;
+          }
+        }
+
         setExam(data);
         setIsExamReady(data.allowed_to_start);
         if (!data.allowed_to_start && data.start_window) {
@@ -147,7 +159,16 @@ export default function SystemCheckPage() {
       await api.post(`/exam/start/${examId}`);
       router.push(`/student/exam/${examId}/active`);
     } catch (err: any) {
-      toast.error(err?.response?.data?.detail || 'Could not launch exam. Ensure browser allows Fullscreen.');
+      const detail = err?.response?.data?.detail || '';
+      const isLateJoinError = err?.response?.status === 403 && (
+        detail.includes('Late join') || detail.includes('appeal') || detail.includes('deadline')
+      );
+      if (isLateJoinError) {
+        toast.error(detail || 'Join deadline has passed.');
+        router.replace(`/student/exam/${examId}/info`);
+      } else {
+        toast.error(detail || 'Could not launch exam. Ensure browser allows Fullscreen.');
+      }
     }
   };
 

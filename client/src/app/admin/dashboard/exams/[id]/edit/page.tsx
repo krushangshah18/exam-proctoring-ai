@@ -85,8 +85,9 @@ const examSchema = baseExamSchema.refine(data => {
 }, { message: 'End window must allow for the full exam duration', path: ['end_window'] })
 .refine(data => {
   const d = new Date(data.hard_join_deadline);
-  return d >= new Date(data.start_window) && d <= new Date(data.end_window);
-}, { message: 'Join deadline must be between the start and end windows', path: ['hard_join_deadline'] });
+  const start = new Date(data.start_window);
+  return (d.getTime() - start.getTime()) >= 60000 && d <= new Date(data.end_window);
+}, { message: 'Join deadline must be at least 1 minute after start time and before the end window', path: ['hard_join_deadline'] });
 type InviteRow = { student_email: string };
 type ApiError = { response?: { data?: { detail?: string } } };
 type DetectionFieldKey =
