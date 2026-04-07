@@ -56,6 +56,10 @@ jobs:
               "docker pull 687159379171.dkr.ecr.ap-south-1.amazonaws.com/proctorapi:latest",
               "echo === Restarting server ===",
               "cd /srv/proctorapi && docker compose up -d --remove-orphans",
+              "echo === Waiting for container to be healthy ===",
+              "sleep 5",
+              "docker compose ps",
+              "docker compose logs --tail=50",
               "echo === Cleaning up old images ===",
               "docker image prune -f",
               "echo === Deploy complete ==="
@@ -76,10 +80,9 @@ jobs:
 
             if [ "$STATUS" = "Success" ]; then
               echo "Deploy succeeded."
-              exit 0
+              break
             elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
               echo "Deploy FAILED with status: $STATUS"
-              # Print output for debugging
               aws ssm get-command-invocation \
                 --command-id "$COMMAND_ID" \
                 --instance-id "${{ secrets.SERVER_INSTANCE_ID }}" \
@@ -89,17 +92,19 @@ jobs:
             sleep 5
           done
 
-          echo "Deploy timed out waiting for SSM command."
-          exit 1
-
       - name: Smoke test
         run: |
-          sleep 10
-          HTTP=$(curl -sf -o /dev/null -w "%{http_code}" \
-            https://api.personalproject.site/health || echo "000")
-          echo "Health check HTTP status: $HTTP"
-          if [ "$HTTP" != "200" ]; then
-            echo "Health check failed — deployment may be broken."
-            exit 1
-          fi
-          echo "Server is healthy."
+          sleep 15
+          for attempt in {1..5}; do
+            echo "Health check attempt $attempt/5..."
+            HTTP=$(curl -sf -o /dev/null -w "%{http_code}" \
+              https://api.personalproject.site/health || echo "000")
+            echo "Health check HTTP status: $HTTP"
+            if [ "$HTTP" = "200" ]; then
+              echo "Server is healthy."
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Health check failed after 5 attempts — deployment may be broken."
+          exit 1
