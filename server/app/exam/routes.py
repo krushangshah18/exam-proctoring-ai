@@ -698,6 +698,7 @@ def submit_appeal(
         models.ExamSession.exam_id == exam_id
     ).order_by(models.ExamSession.created_at.desc()).first()
 
+    just_created_placeholder = False
     if not session:
         # Create a placeholder session for late-join scenario
         session = models.ExamSession(
@@ -710,6 +711,7 @@ def submit_appeal(
         db.add(session)
         db.commit()
         db.refresh(session)
+        just_created_placeholder = True
     else:
         if session.status == SessionStatus.ACTIVE.value:
             raise HTTPException(status_code=400, detail="Cannot appeal while session is active")
@@ -734,9 +736,9 @@ def submit_appeal(
             raise HTTPException(status_code=400, detail="Your appeal has already been approved. Proceed to rejoin.")
         # NOT_APPLIED means they previously dismissed — allow re-appeal as long as they can still appeal
 
-    # CREATED with no direct RR: either Fix B new-session (cross-session approved) or
-    # unexpected state. Block re-appeal in both sub-cases.
-    if not any_rr and session.status == SessionStatus.CREATED.value:
+    # CREATED with no direct RR and NOT a brand-new placeholder: this is Fix B
+    # (admin-created session for terminated rejoin). Block since already approved.
+    if not just_created_placeholder and not any_rr and session.status == SessionStatus.CREATED.value:
         cross_approved = (
             db.query(models.ResumeRequest)
             .join(models.ExamSession, models.ExamSession.id == models.ResumeRequest.session_id)
