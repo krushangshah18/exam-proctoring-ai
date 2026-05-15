@@ -1,7 +1,7 @@
 # Exam Proctoring AI — Deployment Documentation
 
 **Last updated:** April 2026  
-**Stack:** FastAPI · Next.js 16 · PostgreSQL (RDS) · Redis · Docker · Nginx · Netlify · AWS EC2 · AWS ECR · AWS S3
+**Stack:** FastAPI · Next.js · PostgreSQL (RDS) · Redis · Docker · Nginx · Netlify · AWS EC2 · AWS ECR · AWS S3
 
 ---
 
@@ -35,7 +35,7 @@ Netlify CDN ──── Next.js 16 App (proctor-it.netlify.app)
     │
     │  HTTPS API calls (axios)
     ▼
-Nginx (3-6-8-253.sslip.io:443)
+Nginx (api.personalproject.site:443)
     │
     │  HTTP proxy (127.0.0.1:8000)
     ▼
@@ -64,14 +64,14 @@ FastAPI Server (Docker, single uvicorn worker)
 | Component | Service | Details |
 |-----------|---------|---------|
 | Frontend | Netlify | `https://proctor-it.netlify.app` |
-| API Server | AWS EC2 (t-series) | `https://3-6-8-253.sslip.io` (IP: 3.6.8.253) |
+| API Server | AWS EC2 (t-series) | `https://api.personalproject.site` |
 | Proctor Engine | AWS EC2 (GPU) | Private IP: `172.31.44.157`, Ports 8000 & 8001 |
 | Database | AWS RDS PostgreSQL | `database-1.cpcayiqmocey.ap-south-1.rds.amazonaws.com:5432` |
 | Cache | Redis 7 (Docker) | `127.0.0.1:6379` on server EC2 |
 | Container Registry | AWS ECR (ap-south-1) | `687159379171.dkr.ecr.ap-south-1.amazonaws.com` |
 | File Storage | AWS S3 | Profile images + exam evidence proofs |
 | Region | ap-south-1 (Mumbai) | All AWS resources |
-| SSL | Let's Encrypt (certbot) | Auto-renews, expires 2026-07-05 |
+| SSL | Let's Encrypt (certbot) | Auto-renews every 90 days |
 
 ---
 
@@ -361,9 +361,9 @@ SAVE_REPORT=false       # writes to DB instead of local files
 
 | Variable | Value |
 |----------|-------|
-| `NEXT_PUBLIC_API_URL` | `https://3-6-8-253.sslip.io` |
+| `NEXT_PUBLIC_API_URL` | `https://api.personalproject.site` |
 
-> **Important:** `NEXT_PUBLIC_*` variables are **baked into the JS bundle at build time**. Changing the value in Netlify requires a new build to take effect. Simply redeploying with "Clear cache and deploy" will not help — the variable must be set before the build runs.
+> **Important:** `NEXT_PUBLIC_*` variables are **baked into the JS bundle at build time**. Changing the value in Netlify requires a new build — not just a redeploy. The variable must be set before the build runs.
 
 ### 5.3 Next.js Configuration
 
@@ -560,9 +560,9 @@ Strict-Transport-Security: max-age=31536000
    - docker compose up -d --remove-orphans
    - docker image prune -f
 7. Poll SSM command status (every 5s, max 3 min)
-8. Smoke test: curl https://3-6-8-253.sslip.io/health
-   - Expects HTTP 200
-   - Wait 10s after deploy before testing
+8. Smoke test: `curl https://api.personalproject.site/health`
+   - Waits 15s after deploy, then retries up to 5× with 3s gaps
+   - Expects HTTP 200 — fails the workflow if not reached
 ```
 
 ### 9.3 SSM vs SSH
@@ -625,7 +625,7 @@ PROCTOR_ENGINE_MAX_SESSIONS=3
 AWS_DEFAULT_REGION=ap-south-1
 
 # ── S3 (profile images)
-S3_BUCKET_NAME=<bucket-name>
+S3_BUCKET=<bucket-name>                      # Must be S3_BUCKET — not S3_BUCKET_NAME
 
 # ── Security settings
 MAX_LOGIN_ATTEMPTS=5
@@ -655,7 +655,7 @@ Set in Netlify dashboard → Site configuration → Environment variables:
 
 | Variable | Value |
 |----------|-------|
-| `NEXT_PUBLIC_API_URL` | `https://3-6-8-253.sslip.io` |
+| `NEXT_PUBLIC_API_URL` | `https://api.personalproject.site` |
 
 ---
 
@@ -692,7 +692,7 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 
 # 8. Get SSL certificate
-sudo certbot --nginx -d 3-6-8-253.sslip.io
+sudo certbot --nginx -d api.personalproject.site
 
 # 9. Login to ECR and pull image
 aws ecr get-login-password --region ap-south-1 | \
@@ -706,7 +706,7 @@ cd /srv/proctorapi && docker compose up -d
 docker exec -it proctorapi alembic upgrade head
 
 # 12. Verify
-curl https://3-6-8-253.sslip.io/health   # should return {"status":"ok"}
+curl https://api.personalproject.site/health   # should return {"status":"ok"}
 ```
 
 ### 11.2 Manual Server Redeploy (without CI/CD)
@@ -728,7 +728,7 @@ docker compose down && docker compose up -d
 docker image prune -f
 
 # Verify
-curl https://3-6-8-253.sslip.io/health
+curl https://api.personalproject.site/health
 ```
 
 ### 11.3 Update Environment Variable
@@ -789,7 +789,7 @@ docker compose logs -f server --tail=50
 docker compose logs redis --tail=20
 
 # Health check
-curl https://3-6-8-253.sslip.io/health
+curl https://api.personalproject.site/health
 
 # Disk usage
 df -h /
@@ -890,9 +890,9 @@ tail -f /srv/proctorapi/logs/app.log
 
 The server only allows requests from `FRONTEND_URL` (configured per-environment). The nginx layer also enforces this via `Access-Control-Allow-Origin`. The CORS `Access-Control-Allow-Origin` header must be a specific origin (not `*`) because `credentials: true` is used.
 
-### 13.4 Corporate Firewall Note
+### 13.4 Domain
 
-`sslip.io` is a free Dynamic DNS service. Corporate firewalls (e.g., FortiGuard) categorize it as "Dynamic DNS" and may block it. If users are on a corporate network that blocks `sslip.io`, they will receive CORS errors (actually a 403 from the firewall). **This is a network-level block, not a server bug.** To resolve: purchase a proper domain and point it to the EC2 elastic IP.
+The backend is served at `api.personalproject.site` — a proper subdomain with a Let's Encrypt certificate. The old `sslip.io` hostname is no longer used. The subdomain DNS A record must point to the EC2 elastic IP for SSL and routing to work.
 
 ---
 
@@ -906,7 +906,7 @@ The server only allows requests from `FRONTEND_URL` (configured per-environment)
 | `NEXT_PUBLIC_API_URL` baked at build time | Next.js design | Changing the API URL requires a full Netlify rebuild |
 | `docker compose down && up` required for env changes | Docker container recreation | Cannot use `restart` alone when changing `.env` |
 | 20 GB EC2 disk | Default EBS volume | Large Docker images (13 GB uncompressed) leave ~4 GB free; pull requires removing old image first |
-| sslip.io blocked by corporate firewalls | Dynamic DNS categorization | Users on restricted networks cannot reach the API |
+| EC2 elastic IP must stay static | `api.personalproject.site` DNS A record points to it | Releasing or changing the elastic IP breaks the domain and SSL cert |
 
 ---
 

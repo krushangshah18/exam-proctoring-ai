@@ -1,10 +1,17 @@
 import os
 import boto3
 from botocore.exceptions import ClientError
+from pathlib import Path
 
 from app.core.logger import log
 
 _s3_client = None
+
+_LOCAL_PROFILES_DIR = Path("storage/profiles/users")
+
+
+def _s3_bucket() -> str:
+    return os.getenv("S3_BUCKET", "")
 
 
 def _get_s3():
@@ -20,21 +27,35 @@ def _get_s3():
 
 
 def save_profile_image(user_id: str, data: bytes) -> str:
-    """Upload profile image to S3. Returns the S3 key stored in DB."""
-    bucket = os.getenv("S3_BUCKET", "")
-    s3_key = f"profiles/{user_id}.jpg"
-    try:
-        _get_s3().put_object(
-            Bucket=bucket,
-            Key=s3_key,
-            Body=data,
-            ContentType="image/jpeg",
-        )
-        log.info("Profile image uploaded to S3: %s", s3_key)
-        return s3_key
-    except ClientError as e:
-        log.error("S3 upload failed for profile image user=%s: %s", user_id, e)
-        raise RuntimeError(f"Failed to upload profile image: {e}") from e
+    """Upload profile image. Returns the key/path stored in DB.
+
+    - S3_BUCKET set   → uploads to S3, returns S3 key  (e.g. "profiles/{user_id}.jpg")
+    - S3_BUCKET empty → saves to local filesystem, returns local path
+                        (e.g. "storage/profiles/users/{user_id}.jpg")
+    """
+    bucket = _s3_bucket()
+    if bucket:
+        s3_key = f"profiles/{user_id}.jpg"
+        try:
+            _get_s3().put_object(
+                Bucket=bucket,
+                Key=s3_key,
+                Body=data,
+                ContentType="image/jpeg",
+            )
+            log.info("Profile image uploaded to S3: %s", s3_key)
+            return s3_key
+        except ClientError as e:
+            log.error("S3 upload failed for profile image user=%s: %s", user_id, e)
+            raise RuntimeError(f"Failed to upload profile image: {e}") from e
+
+    # Local filesystem fallback
+    _LOCAL_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+    local_path = _LOCAL_PROFILES_DIR / f"{user_id}.jpg"
+    local_path.write_bytes(data)
+    stored_path = str(local_path)
+    log.info("Profile image saved locally: %s", stored_path)
+    return stored_path
 
 
 def is_s3_key(path: str) -> bool:
@@ -58,7 +79,7 @@ def get_profile_image_url(path: str, expires_in: int = 3600) -> str | None:
         return None
 
     if is_s3_key(path):
-        bucket = os.getenv("S3_BUCKET", "")
+        bucket = _s3_bucket()
         try:
             return _get_s3().generate_presigned_url(
                 "get_object",
@@ -77,16 +98,30 @@ def get_profile_image_url(path: str, expires_in: int = 3600) -> str | None:
 
 def delete_s3_objects(keys: list[str]) -> tuple[int, list[dict]]:
     """
-    Delete S3 objects by key.
+    Delete stored objects by key/path.
+    - S3_BUCKET set   → deletes from S3
+    - S3_BUCKET empty → deletes local files
     Returns (deleted_count, errors).
     """
     valid_keys = [k for k in keys if k]
     if not valid_keys:
         return 0, []
 
-    bucket = os.getenv("S3_BUCKET", "")
+    bucket = _s3_bucket()
+
     if not bucket:
-        return 0, [{"key": "", "error": "S3_BUCKET is not configured"}]
+        # Local filesystem deletion
+        deleted = 0
+        errors: list[dict] = []
+        for key in valid_keys:
+            try:
+                p = Path(key)
+                if p.exists():
+                    p.unlink()
+                deleted += 1
+            except Exception as e:
+                errors.append({"key": key, "error": str(e)})
+        return deleted, errors
 
     deleted = 0
     errors: list[dict] = []
@@ -113,13 +148,18 @@ def delete_s3_objects(keys: list[str]) -> tuple[int, list[dict]]:
 
 
 def get_s3_object_size(key: str) -> int | None:
-    """Return object size in bytes for an S3 key, or None if unavailable."""
+    """Return object size in bytes for an S3 key or local path, or None if unavailable."""
     if not key:
         return None
 
-    bucket = os.getenv("S3_BUCKET", "")
+    bucket = _s3_bucket()
+
     if not bucket:
-        return None
+        # Local filesystem size
+        try:
+            return Path(key).stat().st_size
+        except OSError:
+            return None
 
     try:
         resp = _get_s3().head_object(Bucket=bucket, Key=key)

@@ -123,7 +123,7 @@ SAVE_PROOF        = _b("SAVE_PROOF", True)
 PROOF_AUDIO_PRE_S = 5.0
 
 # ── Inference device ──────────────────────────────────────────────────────────
-YOLO_DEVICE = "cuda"
+YOLO_DEVICE = os.environ.get("YOLO_DEVICE", "cuda")
 
 # ── GPU performance ───────────────────────────────────────────────────────────
 YOLO_HALF          = True
